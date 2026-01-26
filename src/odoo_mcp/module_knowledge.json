@@ -1,0 +1,242 @@
+{
+  "_description": "Module-specific methods and patterns for Odoo 19+",
+  "_version": "1.0.0",
+
+  "modules": {
+    "knowledge": {
+      "model": "knowledge.article",
+      "special_methods": {
+        "article_create": {
+          "instead_of": "create",
+          "params": {"title": "string", "body": "html", "parent_id": "integer|false"},
+          "description": "Create a new knowledge article"
+        },
+        "article_duplicate": {
+          "params": {},
+          "description": "Duplicate an existing article"
+        }
+      },
+      "field_mappings": {
+        "name": "title"
+      },
+      "notes": "Do NOT use create() directly - use article_create(title=...)"
+    },
+
+    "sale": {
+      "model": "sale.order",
+      "special_methods": {
+        "action_confirm": {
+          "params": {},
+          "description": "Confirm quotation to sales order",
+          "requires_ids": true
+        },
+        "action_cancel": {
+          "params": {},
+          "description": "Cancel the sales order",
+          "requires_ids": true
+        },
+        "action_draft": {
+          "params": {},
+          "description": "Reset to draft state",
+          "requires_ids": true
+        },
+        "action_quotation_send": {
+          "params": {},
+          "description": "Open wizard to send quotation by email"
+        },
+        "_create_invoices": {
+          "params": {"grouped": "boolean", "final": "boolean"},
+          "description": "Create invoices from confirmed orders"
+        }
+      },
+      "workflows": {
+        "quotation_to_invoice": ["action_confirm", "_create_invoices"]
+      }
+    },
+
+    "account": {
+      "model": "account.move",
+      "special_methods": {
+        "action_post": {
+          "params": {},
+          "description": "Post/validate the invoice or journal entry",
+          "requires_ids": true
+        },
+        "button_draft": {
+          "params": {},
+          "description": "Reset posted entry to draft",
+          "requires_ids": true
+        },
+        "button_cancel": {
+          "params": {},
+          "description": "Cancel the entry",
+          "requires_ids": true
+        },
+        "action_register_payment": {
+          "params": {},
+          "description": "Open payment registration wizard"
+        }
+      },
+      "notes": "move_type: 'out_invoice' (customer), 'in_invoice' (vendor), 'entry' (journal)"
+    },
+
+    "crm": {
+      "model": "crm.lead",
+      "special_methods": {
+        "action_set_won": {
+          "params": {},
+          "description": "Mark opportunity as won",
+          "requires_ids": true
+        },
+        "action_set_lost": {
+          "params": {"lost_reason_id": "integer", "lost_feedback": "string"},
+          "description": "Mark opportunity as lost"
+        },
+        "convert_opportunity": {
+          "params": {"partner_id": "integer"},
+          "description": "Convert lead to opportunity"
+        },
+        "action_schedule_meeting": {
+          "params": {},
+          "description": "Open meeting scheduler"
+        }
+      }
+    },
+
+    "stock": {
+      "model": "stock.picking",
+      "special_methods": {
+        "button_validate": {
+          "params": {},
+          "description": "Validate the transfer",
+          "requires_ids": true
+        },
+        "action_confirm": {
+          "params": {},
+          "description": "Confirm the picking",
+          "requires_ids": true
+        },
+        "action_assign": {
+          "params": {},
+          "description": "Check availability / reserve stock",
+          "requires_ids": true
+        },
+        "action_cancel": {
+          "params": {},
+          "description": "Cancel the picking"
+        }
+      }
+    },
+
+    "purchase": {
+      "model": "purchase.order",
+      "special_methods": {
+        "button_confirm": {
+          "params": {},
+          "description": "Confirm purchase order",
+          "requires_ids": true
+        },
+        "button_cancel": {
+          "params": {},
+          "description": "Cancel purchase order"
+        },
+        "button_draft": {
+          "params": {},
+          "description": "Reset to draft"
+        },
+        "action_create_invoice": {
+          "params": {},
+          "description": "Create vendor bill from PO"
+        }
+      }
+    },
+
+    "hr_expense": {
+      "model": "hr.expense",
+      "special_methods": {
+        "action_submit_expenses": {
+          "params": {},
+          "description": "Submit expense for approval"
+        },
+        "action_approve_expense_sheets": {
+          "params": {},
+          "description": "Approve expense report"
+        },
+        "action_refuse_expense": {
+          "params": {"reason": "string"},
+          "description": "Refuse expense with reason"
+        }
+      }
+    },
+
+    "hr_leave": {
+      "model": "hr.leave",
+      "special_methods": {
+        "action_approve": {
+          "params": {},
+          "description": "Approve leave request",
+          "requires_ids": true
+        },
+        "action_refuse": {
+          "params": {},
+          "description": "Refuse leave request"
+        },
+        "action_confirm": {
+          "params": {},
+          "description": "Confirm leave request (employee)"
+        }
+      }
+    },
+
+    "project": {
+      "model": "project.task",
+      "special_methods": {
+        "action_assign_to_me": {
+          "params": {},
+          "description": "Assign task to current user"
+        },
+        "action_open_parent_task": {
+          "params": {},
+          "description": "Navigate to parent task"
+        }
+      }
+    },
+
+    "documents": {
+      "model": "documents.document",
+      "special_methods": {
+        "document_create": {
+          "instead_of": "create",
+          "params": {"name": "string", "folder_id": "integer", "datas": "base64"},
+          "description": "Create a new document"
+        }
+      },
+      "notes": "Some document operations require specific folder permissions"
+    }
+  },
+
+  "error_patterns": {
+    "422": {
+      "patterns": [
+        {
+          "match": "article_create",
+          "suggestion": "Use article_create(title='...') instead of create() for knowledge.article"
+        },
+        {
+          "match": "Missing required fields",
+          "suggestion": "Check odoo://model/{model}/schema for required fields"
+        },
+        {
+          "match": "Access Denied",
+          "suggestion": "Check user permissions with odoo://model/{model}/access"
+        }
+      ]
+    },
+    "403": {
+      "suggestion": "Permission denied. Verify API key permissions and record-level access rules."
+    },
+    "404": {
+      "suggestion": "Record or endpoint not found. Verify the model name and record ID exist."
+    }
+  }
+}

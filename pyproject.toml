@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odoo-mcp-19"
+version = "1.0.0"
+description = "MCP Server for Odoo 19+ with v2 JSON-2 API Support"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
+keywords = ["odoo", "odoo 19", "mcp", "mcp server", "v2 api", "json-2", "claude"]
+authors = [
+    {name = "Alan Ogic", email = "info@alanogic.com"}
+]
+
+dependencies = [
+    "fastmcp>=2.13.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/AlanOgic/odoo-mcp-19"
+Issues = "https://github.com/AlanOgic/odoo-mcp-19/issues"
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "isort",
+    "mypy",
+    "ruff",
+    "build",
+    "twine",
+]
+
+[project.scripts]
+odoo-mcp-19 = "odoo_mcp.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["odoo_mcp"]
+
+[tool.setuptools.package-data]
+odoo_mcp = ["*.json"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310", "py311", "py312", "py313"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
