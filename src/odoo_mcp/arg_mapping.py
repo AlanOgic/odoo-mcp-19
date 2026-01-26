@@ -33,8 +33,9 @@ V2_ARG_MAPPING: Dict[str, List[Tuple[int, str]]] = {
     ],
 
     # Write methods
+    # v2 API uses vals_list (array of dicts) for create
     "create": [
-        (0, "vals"),
+        (0, "vals_list"),
     ],
     "write": [
         (0, "ids"),

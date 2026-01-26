@@ -5,11 +5,14 @@ A Model Context Protocol (MCP) server for interacting with Odoo 19+ via the JSON
 ## Features
 
 - **v2 JSON-2 API only** - Optimized for Odoo 19+
-- **3 universal tools** - `execute_method`, `batch_execute`, and `get_model_methods`
-- **Discovery resources** - Models, schemas, workflows, module knowledge
+- **8 powerful tools** - Core tools + Code-First Pattern for 98% token reduction
+- **12+ discovery resources** - Models, schemas, workflows, docs, concepts
 - **Smart limits** - Automatic pagination to prevent massive data returns
-- **Module knowledge base** - Special methods for 10+ Odoo modules (sale, account, crm, stock, etc.)
+- **Module knowledge base** - Special methods for 12+ Odoo modules
 - **Smart error suggestions** - Contextual help for common errors
+- **Natural language model discovery** - "invoice" → `account.move`
+- **Multi-step workflows** - Execute complex operations in single calls
+- **Aggregation support** - Efficient `read_group` for reporting
 
 ## Quick Start
 
@@ -96,23 +99,94 @@ model: sale.order
 
 Returns standard ORM methods plus special methods like `action_confirm`, `_create_invoices`, etc.
 
+### `find_model`
+
+Find Odoo model from natural language:
+
+```
+concept: invoice  →  account.move
+concept: customer →  res.partner
+concept: quote    →  sale.order
+```
+
+### `search_tools` (Code-First Pattern)
+
+Search available operations by keyword - loads tools on-demand for 98% token reduction:
+
+```
+query: invoice
+→ Returns: create_invoice, post_invoice, get_overdue_invoices, get_ar_aging
+```
+
+### `discover_model_actions`
+
+Discover ALL available actions for a model from registry, knowledge base, and server actions:
+
+```
+model: sale.order
+→ Returns: workflows, special_methods, server_actions, usage_examples
+```
+
+### `execute_workflow`
+
+Execute multi-step workflows in a single call:
+
+```
+workflow: quote_to_cash
+params_json: {"order_id": 123}
+→ Executes: Confirm order → Create invoice → Post invoice
+```
+
+Available workflows: `quote_to_cash`, `lead_to_won`, `create_and_post_invoice`
+
+### `aggregate_data`
+
+Efficient database-level aggregation using `read_group`:
+
+```
+model: sale.order
+groupby: partner_id
+fields: amount_total:sum
+→ Returns: Total sales by customer
+```
+
 ## Resources
 
 | Resource | Description |
 |----------|-------------|
 | `odoo://models` | List all models |
 | `odoo://model/{name}` | Model info with fields |
-| `odoo://model/{name}/schema` | Complete schema |
+| `odoo://model/{name}/schema` | Complete schema with relationships |
+| `odoo://model/{name}/docs` | Rich docs: labels, help text, selections |
 | `odoo://record/{model}/{id}` | Get specific record |
 | `odoo://methods/{model}` | Available methods |
+| `odoo://docs/{model}` | Documentation URLs (Odoo docs, GitHub) |
 | `odoo://workflows` | Business workflows |
 | `odoo://server/info` | Server information |
+| `odoo://concepts` | Business term → model mappings |
+| `odoo://tool-registry` | Pre-built workflows (Code-First) |
 | `odoo://module-knowledge` | All module-specific knowledge |
 | `odoo://module-knowledge/{name}` | Knowledge for specific module |
 
+## Prompts
+
+Pre-built workflow templates:
+
+| Prompt | Description |
+|--------|-------------|
+| `odoo-exploration` | Discover Odoo instance capabilities |
+| `search-records` | Search records in any model |
+| `odoo-api-reference` | Quick API reference |
+| `quote-to-cash` | Complete sales workflow |
+| `ar-aging-report` | Accounts receivable aging |
+| `inventory-check` | Stock levels analysis |
+| `crm-pipeline` | Pipeline analysis |
+| `customer-360` | Complete customer view |
+| `daily-operations` | Operations dashboard |
+
 ## Module Knowledge
 
-The server includes built-in knowledge for 10 Odoo modules with their special methods:
+The server includes built-in knowledge for 12 Odoo modules with their special methods:
 
 | Module | Model | Special Methods |
 |--------|-------|-----------------|
@@ -126,6 +200,8 @@ The server includes built-in knowledge for 10 Odoo modules with their special me
 | `hr_leave` | hr.leave | `action_approve`, `action_refuse` |
 | `project` | project.task | `action_assign_to_me` |
 | `documents` | documents.document | `document_create` |
+| `discuss` | discuss.channel | `channel_create`, `add_members` |
+| `mail` | mail.message | Direct create (message_type required) |
 
 ## Configuration Options
 

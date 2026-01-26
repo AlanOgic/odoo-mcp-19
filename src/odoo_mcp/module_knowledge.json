@@ -1,6 +1,108 @@
 {
   "_description": "Module-specific methods and patterns for Odoo 19+",
-  "_version": "1.0.0",
+  "_version": "1.1.0",
+
+  "module_documentation": {
+    "_note": "Maps module names to documentation and GitHub paths for Odoo 19.0",
+    "sale": {"docs": "/applications/sales/sales", "github": "/sale/models/"},
+    "purchase": {"docs": "/applications/inventory_and_mrp/purchase", "github": "/purchase/models/"},
+    "stock": {"docs": "/applications/inventory_and_mrp/inventory", "github": "/stock/models/"},
+    "account": {"docs": "/applications/finance/accounting", "github": "/account/models/"},
+    "crm": {"docs": "/applications/sales/crm", "github": "/crm/models/"},
+    "project": {"docs": "/applications/services/project", "github": "/project/models/"},
+    "hr": {"docs": "/applications/hr/employees", "github": "/hr/models/"},
+    "website": {"docs": "/applications/websites/website", "github": "/website/views/", "snippets": "/website/views/snippets"},
+    "website_sale": {"docs": "/applications/websites/ecommerce", "github": "/website_sale/models/"},
+    "mrp": {"docs": "/applications/inventory_and_mrp/manufacturing", "github": "/mrp/models/"},
+    "product": {"docs": "/applications/inventory_and_mrp/inventory/products", "github": "/product/models/"},
+    "helpdesk": {"docs": "/applications/services/helpdesk", "github": "/helpdesk/models/"},
+    "event": {"docs": "/applications/marketing/events", "github": "/event/models/"},
+    "knowledge": {"docs": "/applications/productivity/knowledge", "github": "/knowledge/models/"},
+    "mail": {"docs": "/applications/productivity/discuss", "github": "/mail/models/"},
+    "discuss": {"docs": "/applications/productivity/discuss", "github": "/mail/models/"},
+    "base": {"docs": null, "github": "/base/models/"}
+  },
+
+  "model_to_module": {
+    "_note": "Maps model names to their parent module",
+    "sale.order": "sale",
+    "sale.order.line": "sale",
+    "purchase.order": "purchase",
+    "purchase.order.line": "purchase",
+    "stock.picking": "stock",
+    "stock.move": "stock",
+    "stock.move.line": "stock",
+    "stock.quant": "stock",
+    "stock.warehouse": "stock",
+    "stock.location": "stock",
+    "account.move": "account",
+    "account.move.line": "account",
+    "account.payment": "account",
+    "account.account": "account",
+    "account.journal": "account",
+    "crm.lead": "crm",
+    "crm.stage": "crm",
+    "crm.team": "crm",
+    "project.project": "project",
+    "project.task": "project",
+    "hr.employee": "hr",
+    "hr.department": "hr",
+    "hr.contract": "hr",
+    "product.template": "product",
+    "product.product": "product",
+    "product.category": "product",
+    "product.pricelist": "product",
+    "website.page": "website",
+    "website.menu": "website",
+    "res.partner": "base",
+    "res.users": "base",
+    "res.company": "base",
+    "res.country": "base",
+    "ir.ui.view": "base",
+    "ir.model": "base",
+    "knowledge.article": "knowledge",
+    "discuss.channel": "mail",
+    "discuss.channel.member": "mail",
+    "mail.message": "mail",
+    "mail.followers": "mail",
+    "mail.activity": "mail"
+  },
+
+  "api_patterns": {
+    "_note": "Common API patterns for Odoo v2 JSON-2 API",
+    "domain_operators": {
+      "comparison": ["=", "!=", ">", ">=", "<", "<="],
+      "list": ["in", "not in"],
+      "text": ["like", "ilike", "=like", "=ilike"],
+      "logic": ["&", "|", "!"]
+    },
+    "one2many_commands": {
+      "0": {"syntax": "(0, 0, {values})", "description": "Create new linked record"},
+      "1": {"syntax": "(1, id, {values})", "description": "Update existing record"},
+      "2": {"syntax": "(2, id, 0)", "description": "Delete record"},
+      "3": {"syntax": "(3, id, 0)", "description": "Unlink without delete (M2M only)"},
+      "4": {"syntax": "(4, id, 0)", "description": "Link existing record (M2M only)"},
+      "5": {"syntax": "(5, 0, 0)", "description": "Unlink all (M2M only)"},
+      "6": {"syntax": "(6, 0, [ids])", "description": "Replace all with list (M2M only)"}
+    },
+    "field_types": {
+      "Many2one": "Always use numeric ID, never string name",
+      "One2many": "Use command tuples: (0,0,{}), (1,id,{}), (2,id,0)",
+      "Many2many": "Use command tuples: (4,id,0), (6,0,[ids])",
+      "Date": "String format: YYYY-MM-DD",
+      "Datetime": "String format: YYYY-MM-DD HH:MM:SS",
+      "Selection": "Use the key string, not the label"
+    },
+    "message_types": {
+      "_note": "mail.message.message_type - REQUIRED field for creating messages",
+      "comment": "User comment (chatter, discuss) - USE THIS FOR POSTING MESSAGES",
+      "email": "Incoming email (mailgateway)",
+      "email_outgoing": "Outgoing email (mailing)",
+      "notification": "System notification (tracking)",
+      "auto_comment": "Automated notification (acknowledgment)",
+      "user_notification": "Notification for specific recipient"
+    }
+  },
 
   "modules": {
     "knowledge": {
@@ -212,6 +314,61 @@
         }
       },
       "notes": "Some document operations require specific folder permissions"
+    },
+
+    "discuss": {
+      "model": "discuss.channel",
+      "special_methods": {
+        "channel_create": {
+          "params": {"name": "string", "group_id": "integer|false"},
+          "description": "Create a new channel"
+        },
+        "add_members": {
+          "params": {"partner_ids": "list[integer]"},
+          "description": "Add members to channel",
+          "requires_ids": true
+        }
+      },
+      "notes": "Use create() with kwargs_json={'vals_list': [{...}]}. For posting messages, create mail.message directly instead of message_post (which fails via JSON-2 API)."
+    },
+
+    "mail": {
+      "model": "mail.message",
+      "special_methods": {},
+      "required_fields": ["message_type"],
+      "field_values": {
+        "message_type": {
+          "_note": "REQUIRED field - categorizes how the message was generated",
+          "email": "Incoming Email (via mailgateway)",
+          "comment": "Comment (user input via discuss/composer) - USE THIS FOR CHATTER",
+          "email_outgoing": "Outgoing Email (via mailing)",
+          "notification": "System notification (tracking messages)",
+          "auto_comment": "Automated notification (acknowledgment)",
+          "user_notification": "Generated for a specific recipient"
+        },
+        "subtype_id": {
+          "_note": "Controls visibility and notification behavior",
+          "1": "Discussions (mail.mt_comment) - visible to followers",
+          "2": "Note (mail.mt_note) - internal note, less visible"
+        }
+      },
+      "create_example": {
+        "chatter_comment": {
+          "model": "res.partner",
+          "res_id": 123,
+          "body": "<p>Hello!</p>",
+          "message_type": "comment",
+          "subtype_id": 1
+        },
+        "internal_note": {
+          "model": "sale.order",
+          "res_id": 456,
+          "body": "<p>Internal note</p>",
+          "message_type": "comment",
+          "subtype_id": 2
+        }
+      },
+      "notes": "message_post() does not work via JSON-2 API. Create mail.message directly. REQUIRED: message_type field. Use 'comment' for user messages, 'notification' for system messages."
     }
   },
 
