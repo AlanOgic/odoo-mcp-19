@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **Odoo MCP Server 19** - A standalone MCP server for Odoo 19+ using the v2 JSON-2 API.
 
-- **Version**: 1.6.0
+- **Version**: 1.7.0
 - **MCP Spec**: MCP 0.2 (FastMCP 3.0.0+)
 - **Odoo Support**: v19+ only (v2 JSON-2 API)
 
@@ -34,9 +34,11 @@ odoo-mcp-19/
 
 **1. MCP Server** (`server.py`)
 - **3 tools only**: execute_method, batch_execute, execute_workflow
-- **17 resources** for discovery (models, schema, methods, actions, tools, domain-syntax, etc.)
+- **18 resources** for discovery (models, schema, methods, actions, tools, domain-syntax, model-limitations, etc.)
 - **14 prompts** for guided workflows
 - Module knowledge loading and error suggestions
+- **Automatic fallback**: search_read → search+read on 500 errors with error categorization
+- **Runtime issue tracking**: Detects and tracks problematic model/method combinations
 - Smart limits: DEFAULT_LIMIT=100, MAX_LIMIT=1000
 
 **2. Odoo Client** (`odoo_client.py`)
@@ -138,6 +140,51 @@ The server provides smart error suggestions based on:
 
 Example: A 422 error on `knowledge.article.create` suggests using `article_create(title='...')` instead.
 
+## Automatic Fallback System (v1.7.0+)
+
+When `search_read` fails with a 500 error, the server automatically:
+
+1. **Falls back to `search` + `read`** - Executes them separately
+2. **Categorizes the error** - timeout, relational_filter, computed_field, access_rights, memory, data_integrity
+3. **Detects problematic patterns** - dot notation, negative operators on computed fields, deep related fields
+4. **Tracks issues at runtime** - Builds a knowledge base of problematic model/method combinations
+5. **Provides actionable solutions** - Based on error category and detected patterns
+
+### Response with Fallback
+
+```json
+{
+  "success": true,
+  "result": [...],
+  "fallback_used": true,
+  "issue_analysis": {
+    "category": "relational_filter",
+    "cause": "Relational/dot notation filter issue",
+    "domain_patterns": ["dot_notation"],
+    "problematic_fields": ["lots_visible (non_stored_computed)"],
+    "suggested_solutions": ["Avoid dot notation in domain", "Query related model separately"],
+    "model_specific_advice": ["Safe fields: id, product_id, lot_id, quantity..."]
+  }
+}
+```
+
+### Model Limitations Resource
+
+Read `odoo://model-limitations` to see:
+- **Static limitations** - Verified issues from source code analysis (e.g., `stock.move.line`)
+- **Runtime detected** - Issues discovered during operation
+- **Pattern summary** - Aggregated problematic patterns across all models
+- **Recommendations** - Global suggestions based on detected patterns
+
+### Known Limitations: `stock.move.line`
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| `picking_type_id` with `!=` | Computed field returns `NotImplemented` | Use `picking_id.picking_type_id` instead |
+| `lots_visible` in fields | Non-stored computed field | Exclude from fields, fetch separately |
+| `product_category_name` | 3-level deep related field | Exclude from fields/domain |
+| Dot notation filters | Complex JOINs may fail | Query related models separately |
+
 ## Notes for Claude Code
 
 - This is a v2-only server - no v1 fallback code
@@ -174,6 +221,7 @@ Example: A 422 error on `knowledge.article.create` suggests using `article_creat
 | `odoo://pagination` | **Pagination guide (offset/limit/count)** |
 | `odoo://hierarchical` | **Parent/child tree query patterns** |
 | `odoo://aggregation` | **read_group aggregation reference** |
+| `odoo://model-limitations` | **Known model issues + runtime-detected problems** |
 
 ### Common Errors and Fixes
 | Error | Cause | Fix |

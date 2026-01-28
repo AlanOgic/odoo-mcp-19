@@ -4,6 +4,38 @@
   "_updated": "2026-01-28",
   "_validated_against": "Odoo 19.0 source code and official documentation",
 
+  "model_limitations": {
+    "_note": "Known model-specific limitations and workarounds for the JSON-2 API. This list is enriched automatically when 500 errors trigger the fallback mechanism.",
+    "stock.move.line": {
+      "search_read": {
+        "status": "unstable",
+        "error": "500 Internal Server Error",
+        "workaround": "Use search() + read() separately (automatic fallback enabled)",
+        "verified": true,
+        "root_causes": {
+          "picking_type_id_search": {
+            "description": "picking_type_id is a computed field with custom search that returns NotImplemented for negative operators",
+            "affected_operators": ["!=", "not in", "not like"],
+            "solution": "Avoid filtering on picking_type_id with negative operators. Use picking_id.picking_type_id instead."
+          },
+          "deep_related_fields": {
+            "description": "Several related fields create 3+ level JOINs that may timeout or fail",
+            "problematic_fields": ["product_category_name", "picking_code", "picking_partner_id", "move_partner_id"],
+            "solution": "Exclude these fields from 'fields' parameter, fetch separately if needed"
+          },
+          "non_stored_computed": {
+            "description": "Fields like lots_visible and allowed_uom_ids are computed but not stored",
+            "problematic_fields": ["lots_visible", "allowed_uom_ids"],
+            "solution": "Exclude from 'fields' parameter - they must be computed per-record"
+          }
+        },
+        "safe_fields": ["id", "product_id", "lot_id", "quantity", "location_id", "location_dest_id", "picking_id", "move_id", "state", "date"],
+        "avoid_in_domain": ["picking_type_id with !=", "product_category_name", "any 3+ level dot notation"],
+        "avoid_in_fields": ["lots_visible", "allowed_uom_ids", "picking_code", "product_category_name"]
+      }
+    }
+  },
+
   "json2_api": {
     "_note": "Official Odoo 19 JSON-2 API specification (from odoo.com/documentation/19.0)",
     "endpoint": "/json/2/{model}/{method}",

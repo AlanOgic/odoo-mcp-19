@@ -10,6 +10,7 @@ import re
 import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -34,6 +35,240 @@ def load_module_knowledge() -> Dict[str, Any]:
 
 
 MODULE_KNOWLEDGE = load_module_knowledge()
+
+# Runtime tracking of models that triggered fallback mechanisms
+# Structure: {"model.name": {"method": {error_category: {...}}}}
+RUNTIME_MODEL_ISSUES: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+# Error categorization patterns and their solutions
+ERROR_CATEGORIES = {
+    "timeout": {
+        "patterns": ["timeout", "statement timeout", "canceling statement", "took too long"],
+        "cause": "Query too complex or slow",
+        "solutions": [
+            "Reduce limit parameter",
+            "Simplify domain (remove complex joins)",
+            "Use read_group for aggregation instead",
+            "Add database indexes on filtered fields"
+        ]
+    },
+    "relational_filter": {
+        "patterns": ["relation", "join", "does not exist", "invalid field"],
+        "cause": "Relational/dot notation filter issue",
+        "solutions": [
+            "Avoid dot notation in domain (e.g., partner_id.name)",
+            "Query related model separately and use 'in' operator",
+            "Use search+read fallback (automatic)"
+        ]
+    },
+    "computed_field": {
+        "patterns": ["compute", "depends", "_compute_", "stored=false"],
+        "cause": "Computed field error during search",
+        "solutions": [
+            "Exclude computed fields from 'fields' parameter",
+            "Use stored computed fields only",
+            "Fetch computed fields in separate read() call"
+        ]
+    },
+    "access_rights": {
+        "patterns": ["access", "permission", "denied", "not allowed", "security"],
+        "cause": "Insufficient permissions",
+        "solutions": [
+            "Check user access rights on model",
+            "Verify record rules allow access",
+            "Use fields the user has permission to read"
+        ]
+    },
+    "memory": {
+        "patterns": ["memory", "out of memory", "oom", "killed"],
+        "cause": "Query uses too much memory",
+        "solutions": [
+            "Reduce limit significantly",
+            "Paginate with smaller batches",
+            "Remove large fields (binary, text) from fields list"
+        ]
+    },
+    "data_integrity": {
+        "patterns": ["integrity", "constraint", "null", "foreign key", "duplicate"],
+        "cause": "Data integrity issue in database",
+        "solutions": [
+            "Check for orphaned records",
+            "Verify foreign key references exist",
+            "Contact database administrator"
+        ]
+    },
+    "unknown": {
+        "patterns": [],
+        "cause": "Unknown server error",
+        "solutions": [
+            "Check Odoo server logs for details",
+            "Try with simpler parameters",
+            "Use search+read fallback (automatic)"
+        ]
+    }
+}
+
+
+def _categorize_error(error_msg: str) -> str:
+    """Categorize an error message by its root cause."""
+    error_lower = error_msg.lower()
+    for category, info in ERROR_CATEGORIES.items():
+        if category == "unknown":
+            continue
+        for pattern in info["patterns"]:
+            if pattern in error_lower:
+                return category
+    return "unknown"
+
+
+def _detect_domain_pattern(domain: List, model: str = None) -> List[str]:
+    """Detect patterns in domain that might cause issues."""
+    patterns = []
+    if not domain:
+        return patterns
+
+    domain_str = str(domain)
+
+    # Detect dot notation (relational filters)
+    if "." in domain_str and any(f".{field}" in domain_str for field in ["id", "name", "code", "state", "type", "partner", "company", "user", "product", "location"]):
+        patterns.append("dot_notation")
+
+    # Detect complex OR conditions
+    if domain_str.count("'|'") > 2 or domain_str.count('"|"') > 2:
+        patterns.append("complex_or")
+
+    # Detect negation
+    if "'!'" in domain_str or '"!"' in domain_str:
+        patterns.append("negation")
+
+    # Detect 'any' operator (x2many search)
+    if "'any'" in domain_str or '"any"' in domain_str:
+        patterns.append("any_operator")
+
+    # Detect child_of/parent_of (hierarchical)
+    if "child_of" in domain_str or "parent_of" in domain_str:
+        patterns.append("hierarchical")
+
+    # Model-specific patterns
+    if model == "stock.move.line":
+        # picking_type_id with negative operators causes NotImplemented error
+        if "picking_type_id" in domain_str:
+            if any(op in domain_str for op in ["'!='", "'not in'", "'not like'", "\"!=\"", "\"not in\""]):
+                patterns.append("computed_field_negative_operator")
+        # Deep related fields that cause issues
+        if any(field in domain_str for field in ["product_category_name", "picking_code"]):
+            patterns.append("deep_related_field")
+
+    return patterns
+
+
+def _detect_problematic_fields(fields: List, model: str = None) -> List[str]:
+    """Detect fields that might cause issues when included in search_read."""
+    problematic = []
+    if not fields:
+        return problematic
+
+    # Model-specific problematic fields (from source code analysis)
+    model_problematic_fields = {
+        "stock.move.line": {
+            "non_stored_computed": ["lots_visible", "allowed_uom_ids"],
+            "deep_related": ["product_category_name", "picking_code"],
+            "computed_with_search": ["picking_type_id"]
+        }
+    }
+
+    if model in model_problematic_fields:
+        for category, field_list in model_problematic_fields[model].items():
+            for field in field_list:
+                if field in fields:
+                    problematic.append(f"{field} ({category})")
+
+    return problematic
+
+
+def _track_model_issue(model: str, method: str, error_msg: str, domain: List = None, fields: List = None) -> Dict[str, Any]:
+    """
+    Track a model/method issue with error categorization and pattern detection.
+    Returns analysis with suggested solutions.
+    """
+    now = datetime.now().isoformat()
+    category = _categorize_error(error_msg)
+    domain_patterns = _detect_domain_pattern(domain, model) if domain else []
+    problematic_fields = _detect_problematic_fields(fields, model) if fields else []
+
+    if model not in RUNTIME_MODEL_ISSUES:
+        RUNTIME_MODEL_ISSUES[model] = {}
+
+    if method not in RUNTIME_MODEL_ISSUES[model]:
+        RUNTIME_MODEL_ISSUES[model][method] = {
+            "categories": {},
+            "first_seen": now,
+            "total_count": 0
+        }
+
+    model_issues = RUNTIME_MODEL_ISSUES[model][method]
+    model_issues["total_count"] += 1
+    model_issues["last_seen"] = now
+
+    # Track by category
+    if category not in model_issues["categories"]:
+        model_issues["categories"][category] = {
+            "count": 0,
+            "domain_patterns": {},
+            "sample_errors": [],
+            "solutions": ERROR_CATEGORIES[category]["solutions"]
+        }
+
+    cat_info = model_issues["categories"][category]
+    cat_info["count"] += 1
+
+    # Track domain patterns for this category
+    for pattern in domain_patterns:
+        cat_info["domain_patterns"][pattern] = cat_info["domain_patterns"].get(pattern, 0) + 1
+
+    # Track problematic fields
+    if "problematic_fields" not in cat_info:
+        cat_info["problematic_fields"] = {}
+    for field_info in problematic_fields:
+        cat_info["problematic_fields"][field_info] = cat_info["problematic_fields"].get(field_info, 0) + 1
+
+    # Keep last 3 unique error samples
+    error_sample = error_msg[:300]
+    if error_sample not in cat_info["sample_errors"]:
+        cat_info["sample_errors"].append(error_sample)
+        if len(cat_info["sample_errors"]) > 3:
+            cat_info["sample_errors"].pop(0)
+
+    # Log detailed info
+    print(f"[MCP] Issue tracked: {model}.{method}", file=sys.stderr)
+    print(f"  Category: {category} ({ERROR_CATEGORIES[category]['cause']})", file=sys.stderr)
+    if domain_patterns:
+        print(f"  Domain patterns: {domain_patterns}", file=sys.stderr)
+    if problematic_fields:
+        print(f"  Problematic fields: {problematic_fields}", file=sys.stderr)
+    print(f"  Total occurrences: {model_issues['total_count']}", file=sys.stderr)
+
+    # Get model-specific recommendations from module_knowledge
+    model_specific_advice = []
+    if model in MODULE_KNOWLEDGE.get("model_limitations", {}):
+        model_info = MODULE_KNOWLEDGE["model_limitations"][model]
+        if method in model_info:
+            method_info = model_info[method]
+            if "safe_fields" in method_info:
+                model_specific_advice.append(f"Safe fields: {', '.join(method_info['safe_fields'][:5])}...")
+            if "avoid_in_domain" in method_info:
+                model_specific_advice.append(f"Avoid in domain: {', '.join(method_info['avoid_in_domain'][:3])}")
+
+    # Return analysis for immediate use
+    return {
+        "category": category,
+        "cause": ERROR_CATEGORIES[category]["cause"],
+        "domain_patterns": domain_patterns,
+        "problematic_fields": problematic_fields,
+        "solutions": ERROR_CATEGORIES[category]["solutions"],
+        "model_specific_advice": model_specific_advice,
+        "occurrences": cat_info["count"]
+    }
 
 
 def get_error_suggestion(error_msg: str, model: str = None, method: str = None) -> Optional[str]:
@@ -703,6 +938,114 @@ def get_domain_syntax() -> str:
 
 
 @mcp.resource(
+    "odoo://model-limitations",
+    description="Known model limitations and workarounds for problematic models (static + runtime-detected)",
+)
+def get_model_limitations() -> str:
+    """Get known model limitations and workarounds, including runtime-detected issues with categorization."""
+    # Static limitations from module_knowledge.json
+    static_limitations = MODULE_KNOWLEDGE.get("model_limitations", {})
+    static_limitations = {k: v for k, v in static_limitations.items() if not k.startswith("_")}
+
+    result = {
+        "title": "Known Model Limitations",
+        "description": "Models with known issues and recommended workarounds",
+        "note": "The MCP server automatically applies fallbacks, categorizes errors, and suggests solutions",
+        "error_categories": {cat: {"cause": info["cause"], "solutions": info["solutions"]}
+                           for cat, info in ERROR_CATEGORIES.items() if cat != "unknown"},
+        "static_models": {},
+        "runtime_detected": {},
+        "patterns_summary": {}
+    }
+
+    # Add static (verified) limitations
+    for model, issues in static_limitations.items():
+        result["static_models"][model] = {
+            "source": "module_knowledge.json (verified)",
+            "methods": {}
+        }
+        for method, info in issues.items():
+            result["static_models"][model]["methods"][method] = {
+                "status": info.get("status", "unknown"),
+                "workaround": info.get("workaround"),
+                "notes": info.get("notes"),
+                "verified": info.get("verified", False)
+            }
+
+    # Add runtime-detected limitations with full categorization
+    all_domain_patterns = {}
+    all_categories = {}
+
+    for model, methods in RUNTIME_MODEL_ISSUES.items():
+        result["runtime_detected"][model] = {
+            "source": "runtime detection",
+            "first_seen": None,
+            "total_occurrences": 0,
+            "methods": {}
+        }
+
+        for method, info in methods.items():
+            result["runtime_detected"][model]["first_seen"] = info.get("first_seen")
+            result["runtime_detected"][model]["total_occurrences"] += info.get("total_count", 0)
+
+            method_data = {
+                "total_count": info.get("total_count", 0),
+                "last_seen": info.get("last_seen"),
+                "by_category": {}
+            }
+
+            # Process each error category
+            for category, cat_info in info.get("categories", {}).items():
+                method_data["by_category"][category] = {
+                    "count": cat_info.get("count", 0),
+                    "cause": ERROR_CATEGORIES.get(category, {}).get("cause", "Unknown"),
+                    "domain_patterns_detected": cat_info.get("domain_patterns", {}),
+                    "solutions": cat_info.get("solutions", []),
+                    "sample_errors": cat_info.get("sample_errors", [])[:2]  # Only 2 samples
+                }
+
+                # Aggregate patterns for summary
+                all_categories[category] = all_categories.get(category, 0) + cat_info.get("count", 0)
+                for pattern, count in cat_info.get("domain_patterns", {}).items():
+                    all_domain_patterns[pattern] = all_domain_patterns.get(pattern, 0) + count
+
+            result["runtime_detected"][model]["methods"][method] = method_data
+
+    # Patterns summary - helps identify global issues
+    result["patterns_summary"] = {
+        "by_error_category": all_categories,
+        "by_domain_pattern": all_domain_patterns,
+        "recommendations": []
+    }
+
+    # Generate global recommendations based on patterns
+    if all_domain_patterns.get("dot_notation", 0) > 2:
+        result["patterns_summary"]["recommendations"].append(
+            "Multiple dot notation issues detected. Consider querying related models separately."
+        )
+    if all_categories.get("timeout", 0) > 2:
+        result["patterns_summary"]["recommendations"].append(
+            "Multiple timeout issues detected. Consider adding database indexes or reducing query complexity."
+        )
+    if all_categories.get("relational_filter", 0) > 2:
+        result["patterns_summary"]["recommendations"].append(
+            "Relational filter issues common. Use IDs from separate queries instead of dot notation."
+        )
+
+    # Summary counts
+    result["summary"] = {
+        "static_models_count": len(result["static_models"]),
+        "runtime_detected_count": len(result["runtime_detected"]),
+        "total_models_with_issues": len(set(result["static_models"].keys()) | set(result["runtime_detected"].keys())),
+        "total_runtime_occurrences": sum(
+            m.get("total_occurrences", 0) for m in result["runtime_detected"].values()
+        )
+    }
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.resource(
     "odoo://pagination",
     description="Guide for paginating large result sets with offset/limit",
 )
@@ -1114,6 +1457,61 @@ def execute_method(
 
     except Exception as e:
         error_msg = str(e)
+
+        # Fallback for search_read failures (500 errors): try search + read
+        if method == "search_read" and ("500" in error_msg or "Internal Server Error" in error_msg):
+            try:
+                # Extract parameters from kwargs
+                domain = kwargs.get("domain", [])
+                fields = kwargs.get("fields", [])
+                limit = kwargs.get("limit", 100)
+                offset = kwargs.get("offset", 0)
+                order = kwargs.get("order")
+
+                # Step 1: search for IDs
+                search_kwargs = {"domain": domain, "limit": limit, "offset": offset}
+                if order:
+                    search_kwargs["order"] = order
+                ids = odoo.execute_method(model, "search", **search_kwargs)
+
+                # Step 2: read the records
+                if ids:
+                    read_kwargs = {}
+                    if fields:
+                        read_kwargs["fields"] = fields
+                    result = odoo.execute_method(model, "read", ids, **read_kwargs)
+                else:
+                    result = []
+
+                # Track this model/method as problematic (runtime detection)
+                analysis = _track_model_issue(model, method, error_msg, domain=domain, fields=fields)
+
+                response = {
+                    "success": True,
+                    "result": result,
+                    "fallback_used": True,
+                    "issue_analysis": {
+                        "category": analysis["category"],
+                        "cause": analysis["cause"],
+                        "domain_patterns": analysis["domain_patterns"],
+                        "problematic_fields": analysis.get("problematic_fields", []),
+                        "suggested_solutions": analysis["solutions"][:2]  # Top 2 solutions
+                    },
+                    "note": f"Fallback search+read used. Cause: {analysis['cause']}"
+                }
+                # Add model-specific advice if available
+                if analysis.get("model_specific_advice"):
+                    response["issue_analysis"]["model_specific_advice"] = analysis["model_specific_advice"]
+                return response
+            except Exception as fallback_error:
+                # If fallback also fails, include both errors
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "fallback_error": str(fallback_error),
+                    "suggestion": "Both search_read and fallback search+read failed. Check odoo://model-limitations for known issues."
+                }
+
         suggestion = get_error_suggestion(error_msg, model, method)
 
         response = {"success": False, "error": error_msg}
