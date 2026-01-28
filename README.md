@@ -4,15 +4,13 @@ A Model Context Protocol (MCP) server for interacting with Odoo 19+ via the JSON
 
 ## Features
 
-- **v2 JSON-2 API only** - Optimized for Odoo 19+
-- **8 powerful tools** - Core tools + Code-First Pattern for 98% token reduction
-- **12+ discovery resources** - Models, schemas, workflows, docs, concepts
-- **Smart limits** - Automatic pagination to prevent massive data returns
+- **v2 JSON-2 API only** - Optimized for Odoo 19+ (XML-RPC deprecated in Odoo 20)
+- **Only 3 tools** - Minimal interface: `execute_method`, `batch_execute`, `execute_workflow`
+- **17+ discovery resources** - Models, schemas, methods, docs, workflows, domain syntax
+- **14 guided prompts** - Business workflows, reporting, domain building
+- **Comprehensive ORM documentation** - All methods with parameters and examples
 - **Module knowledge base** - Special methods for 12+ Odoo modules
 - **Smart error suggestions** - Contextual help for common errors
-- **Natural language model discovery** - "invoice" → `account.move`
-- **Multi-step workflows** - Execute complex operations in single calls
-- **Aggregation support** - Efficient `read_group` for reporting
 
 ## Quick Start
 
@@ -40,8 +38,6 @@ ODOO_USERNAME=your-username
 ODOO_API_KEY=your-api-key
 ```
 
-Or use environment variables directly.
-
 ### 3. Add to Claude Desktop
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -62,17 +58,34 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-## Tools
+## Tools (Only 3)
 
 ### `execute_method`
 
 Execute any Odoo method on any model:
 
-```
-model: res.partner
-method: search_read
-args_json: [[["is_company", "=", true]]]
-kwargs_json: {"fields": ["name", "email"], "limit": 10}
+```python
+# Search and read partners
+execute_method(
+    model="res.partner",
+    method="search_read",
+    kwargs_json='{"domain": [["is_company", "=", true]], "fields": ["name", "email"], "limit": 10}'
+)
+
+# Create a record
+execute_method(
+    model="res.partner",
+    method="create",
+    args_json='[{"name": "New Partner", "email": "test@example.com"}]'
+)
+
+# Aggregation with read_group
+execute_method(
+    model="sale.order",
+    method="read_group",
+    args_json='[[]]',
+    kwargs_json='{"fields": ["amount_total:sum"], "groupby": ["partner_id"], "lazy": false}'
+)
 ```
 
 ### `batch_execute`
@@ -83,127 +96,98 @@ Execute multiple operations atomically:
 {
   "operations": [
     {"model": "res.partner", "method": "create", "args_json": "[{\"name\": \"Test\"}]"},
-    {"model": "res.partner", "method": "search_read", "args_json": "[[]]", "kwargs_json": "{\"limit\": 5}"}
+    {"model": "res.partner", "method": "search_read", "kwargs_json": "{\"limit\": 5}"}
   ],
   "atomic": true
 }
-```
-
-### `get_model_methods`
-
-Discover available methods on a model, including special module-specific methods:
-
-```
-model: sale.order
-```
-
-Returns standard ORM methods plus special methods like `action_confirm`, `_create_invoices`, etc.
-
-### `find_model`
-
-Find Odoo model from natural language:
-
-```
-concept: invoice  →  account.move
-concept: customer →  res.partner
-concept: quote    →  sale.order
-```
-
-### `search_tools` (Code-First Pattern)
-
-Search available operations by keyword - loads tools on-demand for 98% token reduction:
-
-```
-query: invoice
-→ Returns: create_invoice, post_invoice, get_overdue_invoices, get_ar_aging
-```
-
-### `discover_model_actions`
-
-Discover ALL available actions for a model from registry, knowledge base, and server actions:
-
-```
-model: sale.order
-→ Returns: workflows, special_methods, server_actions, usage_examples
 ```
 
 ### `execute_workflow`
 
 Execute multi-step workflows in a single call:
 
-```
-workflow: quote_to_cash
-params_json: {"order_id": 123}
-→ Executes: Confirm order → Create invoice → Post invoice
-```
+```python
+# Quote to cash workflow
+execute_workflow("quote_to_cash", '{"order_id": 123}')
+# Executes: Confirm order → Create invoice → Post invoice
 
-Available workflows: `quote_to_cash`, `lead_to_won`, `create_and_post_invoice`
-
-### `aggregate_data`
-
-Efficient database-level aggregation using `read_group`:
-
-```
-model: sale.order
-groupby: partner_id
-fields: amount_total:sum
-→ Returns: Total sales by customer
+# Lead to won
+execute_workflow("lead_to_won", '{"lead_id": 456}')
 ```
 
-## Resources
+Available workflows: `quote_to_cash`, `lead_to_won`, `create_and_post_invoice`, `stock_transfer`
+
+## Resources (Discovery)
 
 | Resource | Description |
 |----------|-------------|
 | `odoo://models` | List all models |
-| `odoo://model/{name}` | Model info with fields |
-| `odoo://model/{name}/schema` | Complete schema with relationships |
+| `odoo://model/{name}/schema` | Complete schema with field types |
 | `odoo://model/{name}/docs` | Rich docs: labels, help text, selections |
-| `odoo://record/{model}/{id}` | Get specific record |
-| `odoo://methods/{model}` | Available methods |
-| `odoo://docs/{model}` | Documentation URLs (Odoo docs, GitHub) |
+| `odoo://methods/{model}` | Available methods (read, write, introspection, special) |
+| `odoo://find-model/{concept}` | Natural language → model ("invoice" → account.move) |
+| `odoo://actions/{model}` | Discover all actions for a model |
+| `odoo://tools/{query}` | Search available operations |
+| `odoo://domain-syntax` | Complete domain operator reference |
+| `odoo://aggregation` | read_group guide with lazy parameter |
+| `odoo://pagination` | Offset/limit patterns |
+| `odoo://hierarchical` | Parent/child tree queries |
 | `odoo://workflows` | Business workflows |
-| `odoo://server/info` | Server information |
 | `odoo://concepts` | Business term → model mappings |
-| `odoo://tool-registry` | Pre-built workflows (Code-First) |
 | `odoo://module-knowledge` | All module-specific knowledge |
-| `odoo://module-knowledge/{name}` | Knowledge for specific module |
 
 ## Prompts
-
-Pre-built workflow templates:
 
 | Prompt | Description |
 |--------|-------------|
 | `odoo-exploration` | Discover Odoo instance capabilities |
-| `search-records` | Search records in any model |
 | `odoo-api-reference` | Quick API reference |
 | `quote-to-cash` | Complete sales workflow |
 | `ar-aging-report` | Accounts receivable aging |
 | `inventory-check` | Stock levels analysis |
 | `crm-pipeline` | Pipeline analysis |
 | `customer-360` | Complete customer view |
-| `daily-operations` | Operations dashboard |
+| `domain-builder` | Build complex domain filters |
+| `hierarchical-query` | Query parent/child trees |
+| `paginated-search` | Pagination patterns |
+| `aggregation-report` | read_group reporting |
+
+## ORM Methods Documented
+
+The module knowledge includes comprehensive documentation for:
+
+| Method | Description |
+|--------|-------------|
+| `search` | Search for record IDs with domain filter |
+| `search_count` | Count matching records (lightweight) |
+| `search_read` | Search and read in one call (most efficient) |
+| `read` | Read specific records by ID |
+| `create` | Create new record(s) - supports batch |
+| `write` | Update existing record(s) |
+| `unlink` | Delete record(s) |
+| `read_group` | Aggregation with grouping |
+| `name_search` | Autocomplete search for Many2one |
+| `default_get` | Get default values for fields |
+| `fields_get` | Get field definitions |
+| `copy` | Duplicate a record |
+| `check_access_rights` | Check user permissions |
 
 ## Module Knowledge
 
-The server includes built-in knowledge for 12 Odoo modules with their special methods:
+Built-in knowledge for 12+ Odoo modules with special methods:
 
 | Module | Model | Special Methods |
 |--------|-------|-----------------|
-| `knowledge` | knowledge.article | `article_create`, `article_duplicate` |
 | `sale` | sale.order | `action_confirm`, `action_cancel`, `_create_invoices` |
 | `account` | account.move | `action_post`, `button_draft`, `action_register_payment` |
 | `crm` | crm.lead | `action_set_won`, `action_set_lost`, `convert_opportunity` |
 | `stock` | stock.picking | `button_validate`, `action_confirm`, `action_assign` |
 | `purchase` | purchase.order | `button_confirm`, `action_create_invoice` |
-| `hr_expense` | hr.expense | `action_submit_expenses`, `action_approve_expense_sheets` |
+| `knowledge` | knowledge.article | `article_create`, `article_duplicate` |
+| `hr_expense` | hr.expense | `action_submit_expenses` |
 | `hr_leave` | hr.leave | `action_approve`, `action_refuse` |
-| `project` | project.task | `action_assign_to_me` |
-| `documents` | documents.document | `document_create` |
-| `discuss` | discuss.channel | `channel_create`, `add_members` |
-| `mail` | mail.message | Direct create (message_type required) |
 
-## Configuration Options
+## Configuration
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -223,9 +207,7 @@ The server includes built-in knowledge for 12 Odoo modules with their special me
 docker build -t odoo-mcp-19 .
 ```
 
-### Use with Claude Desktop (Docker)
-
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+### Use with Claude Desktop
 
 ```json
 {
@@ -243,28 +225,11 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-### Test manually
-
-```bash
-# With .env file
-cp .env.example .env
-# Edit .env with your credentials
-docker compose run --rm odoo-mcp
-
-# Or with inline env vars
-docker run --rm -i \
-  -e ODOO_URL=https://your-instance.odoo.com \
-  -e ODOO_DB=your-db \
-  -e ODOO_USERNAME=your-user \
-  -e ODOO_API_KEY=your-key \
-  odoo-mcp-19
-```
-
 ## Requirements
 
-- Python 3.10+ (or Docker)
+- Python 3.10+
 - Odoo 19+
-- FastMCP 2.13.0+
+- FastMCP 3.0.0+
 
 ## License
 

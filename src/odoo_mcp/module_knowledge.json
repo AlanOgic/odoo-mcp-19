@@ -1,6 +1,666 @@
 {
   "_description": "Module-specific methods and patterns for Odoo 19+",
-  "_version": "1.1.0",
+  "_version": "1.3.0",
+
+  "json2_api": {
+    "_note": "Official Odoo 19 JSON-2 API specification (from odoo.com/documentation/19.0)",
+    "endpoint": "/json/2/{model}/{method}",
+    "method": "POST",
+    "headers": {
+      "Authorization": {
+        "format": "Bearer {api_key}",
+        "required": true,
+        "description": "API key generated per user in Odoo settings"
+      },
+      "Content-Type": {
+        "value": "application/json",
+        "required": true
+      },
+      "X-Odoo-Database": {
+        "required": "optional (required for multi-db)",
+        "description": "Target database name"
+      }
+    },
+    "request_format": {
+      "description": "JSON object with named parameters only (no positional args)",
+      "example": {
+        "domain": [["is_company", "=", true]],
+        "fields": ["name", "email"],
+        "limit": 10
+      }
+    },
+    "transaction": {
+      "description": "Each API call runs in its own SQL transaction",
+      "commit": "On success",
+      "rollback": "On error",
+      "note": "Cannot chain multiple calls in single transaction"
+    },
+    "deprecation_notice": {
+      "deprecated": ["/xmlrpc", "/xmlrpc/2", "/jsonrpc"],
+      "removal": "Odoo 20 (fall 2026)",
+      "replacement": "JSON-2 API at /json/2/"
+    },
+    "documentation_endpoint": {
+      "url": "/doc",
+      "description": "Built-in API documentation for every Odoo 19 instance",
+      "features": ["Browse all models", "View fields and methods", "Generate code snippets (Python, JSON, etc.)"]
+    }
+  },
+
+  "domain_syntax": {
+    "_note": "Complete domain operator reference for Odoo 19 JSON-2 API",
+    "operators": {
+      "comparison": {
+        "=": {"description": "Equals", "example": ["name", "=", "John"]},
+        "!=": {"description": "Not equals", "example": ["state", "!=", "draft"]},
+        ">": {"description": "Greater than", "example": ["amount", ">", 1000]},
+        ">=": {"description": "Greater than or equal", "example": ["date", ">=", "2024-01-01"]},
+        "<": {"description": "Less than", "example": ["quantity", "<", 10]},
+        "<=": {"description": "Less than or equal", "example": ["priority", "<=", 2]},
+        "=?": {"description": "Equals if value is set, otherwise True (conditional)", "example": ["partner_id", "=?", false], "note": "Useful for optional filters"}
+      },
+      "list": {
+        "in": {"description": "Value in list", "example": ["state", "in", ["draft", "sent"]]},
+        "not in": {"description": "Value not in list", "example": ["state", "not in", ["cancel", "done"]]}
+      },
+      "text": {
+        "like": {"description": "Pattern match (case-sensitive, auto-adds %wildcards%)", "example": ["name", "like", "test"]},
+        "ilike": {"description": "Pattern match (case-insensitive, auto-adds %wildcards%)", "example": ["email", "ilike", "@gmail"]},
+        "=like": {"description": "Exact pattern match (case-sensitive, manual wildcards)", "example": ["code", "=like", "SO%"]},
+        "=ilike": {"description": "Exact pattern match (case-insensitive, manual wildcards)", "example": ["name", "=ilike", "john%"]},
+        "not like": {"description": "Negated like", "example": ["name", "not like", "test"]},
+        "not ilike": {"description": "Negated ilike", "example": ["email", "not ilike", "spam"]},
+        "not =like": {"description": "Negated exact pattern (v17+)", "example": ["zip", "not =like", "75%"]},
+        "not =ilike": {"description": "Negated exact pattern case-insensitive (v17+)", "example": ["city", "not =ilike", "paris%"]}
+      },
+      "hierarchical": {
+        "child_of": {"description": "Record is child/grandchild of given ID (uses _parent_name)", "example": ["category_id", "child_of", 5], "note": "Works on models with parent_id or _parent_name field"},
+        "parent_of": {"description": "Record is parent/grandparent of given ID", "example": ["id", "parent_of", 10], "note": "Inverse of child_of"}
+      },
+      "relational": {
+        "any": {"description": "At least one related record matches (x2many)", "example": ["order_line", "any", [["product_id", "=", 1]]], "note": "v17+ for One2many/Many2many"},
+        "not any": {"description": "No related record matches", "example": ["invoice_ids", "not any", [["state", "=", "posted"]]]}
+      },
+      "logic": {
+        "&": {"description": "AND (default, implicit between terms)", "example": ["&", ["state", "=", "draft"], ["amount", ">", 100]]},
+        "|": {"description": "OR", "example": ["|", ["state", "=", "draft"], ["state", "=", "sent"]]},
+        "!": {"description": "NOT (negates following term)", "example": ["!", ["active", "=", false]]}
+      }
+    },
+    "dot_notation": {
+      "_note": "Access related fields with dot notation",
+      "examples": [
+        {"domain": ["partner_id.country_id.code", "=", "US"], "description": "Filter by related country code"},
+        {"domain": ["order_id.partner_id.is_company", "=", true], "description": "Filter by customer type via order"}
+      ]
+    },
+    "complex_examples": [
+      {
+        "description": "Active customers in US or Canada with orders > $1000",
+        "domain": ["&", "&", ["active", "=", true], ["is_company", "=", true], "|", ["country_id.code", "=", "US"], ["country_id.code", "=", "CA"]]
+      },
+      {
+        "description": "Invoices from last 30 days that are unpaid",
+        "domain": ["&", ["move_type", "=", "out_invoice"], "&", ["invoice_date", ">=", "2024-12-01"], ["payment_state", "in", ["not_paid", "partial"]]]
+      },
+      {
+        "description": "Products in category or any child category",
+        "domain": ["categ_id", "child_of", 1]
+      },
+      {
+        "description": "Orders with at least one line containing product X",
+        "domain": ["order_line", "any", [["product_id", "=", 42]]]
+      }
+    ]
+  },
+
+  "pagination": {
+    "_note": "How to paginate results with execute_method",
+    "parameters": {
+      "limit": {"type": "integer", "default": 100, "max": 1000, "description": "Maximum records to return"},
+      "offset": {"type": "integer", "default": 0, "description": "Number of records to skip"},
+      "order": {"type": "string", "example": "create_date desc, name asc", "description": "Sort order (field [asc|desc], ...)"}
+    },
+    "get_total_count": {
+      "description": "Use search_count before paginating to know total",
+      "example": {
+        "step1": "execute_method('res.partner', 'search_count', args_json='[[\"is_company\", \"=\", true]]')",
+        "step2": "execute_method('res.partner', 'search_read', kwargs_json='{\"domain\": [[\"is_company\", \"=\", true]], \"limit\": 50, \"offset\": 0}')"
+      }
+    },
+    "iterate_all": {
+      "description": "Pattern to fetch all records in batches",
+      "pattern": "Loop: offset=0, limit=100, then offset+=limit until result count < limit"
+    }
+  },
+
+  "hierarchical_models": {
+    "_note": "Models with parent/child tree structure",
+    "common_models": {
+      "product.category": {"parent_field": "parent_id", "has_parent_store": true},
+      "account.account": {"parent_field": "parent_id", "has_parent_store": true},
+      "hr.department": {"parent_field": "parent_id", "has_parent_store": true},
+      "stock.location": {"parent_field": "location_id", "has_parent_store": true},
+      "documents.folder": {"parent_field": "parent_folder_id", "has_parent_store": true},
+      "project.task": {"parent_field": "parent_id", "has_parent_store": false},
+      "knowledge.article": {"parent_field": "parent_id", "has_parent_store": true}
+    },
+    "query_patterns": {
+      "get_all_children": {
+        "description": "Get record and all descendants",
+        "example": "search_read with domain [['id', 'child_of', parent_id]]"
+      },
+      "get_all_parents": {
+        "description": "Get record and all ancestors",
+        "example": "search_read with domain [['id', 'parent_of', child_id]]"
+      },
+      "get_direct_children": {
+        "description": "Get only immediate children",
+        "example": "search_read with domain [['parent_id', '=', parent_id]]"
+      },
+      "get_root_records": {
+        "description": "Get records with no parent",
+        "example": "search_read with domain [['parent_id', '=', false]]"
+      },
+      "get_tree_path": {
+        "description": "Use parent_path field if _parent_store=True",
+        "example": "Read parent_path field, split by '/' to get ancestor IDs"
+      }
+    }
+  },
+
+  "aggregation": {
+    "_note": "read_group aggregation reference (Note: deprecated in v19, use formatted_read_group in web module)",
+    "method": "read_group",
+    "parameters": {
+      "domain": "Filter records before grouping",
+      "fields": "List of field:aggregator specs",
+      "groupby": "Fields to group by (supports :day, :week, :month, :quarter, :year for dates)",
+      "offset": "Skip N groups",
+      "limit": "Max groups to return",
+      "order": "Sort order (renamed from orderby in v19)",
+      "lazy": {
+        "type": "boolean",
+        "default": true,
+        "description": "If True (default), groups by first groupby field only; remaining fields are lazy-loaded in subsequent queries. If False, performs all groupings in a single query - more efficient for multiple groupby fields."
+      }
+    },
+    "aggregators": {
+      "__count": "Count records in group",
+      "sum": "Sum of field values",
+      "avg": "Average of field values",
+      "min": "Minimum value",
+      "max": "Maximum value",
+      "count_distinct": "Count distinct values",
+      "array_agg": "Collect values into array"
+    },
+    "examples": [
+      {
+        "description": "Total sales by customer",
+        "call": "read_group(domain=[], fields=['amount_total:sum'], groupby=['partner_id'])"
+      },
+      {
+        "description": "Invoice count by month",
+        "call": "read_group(domain=[['move_type','=','out_invoice']], fields=['__count'], groupby=['invoice_date:month'])"
+      },
+      {
+        "description": "Average order value by salesperson",
+        "call": "read_group(domain=[], fields=['amount_total:avg'], groupby=['user_id'])"
+      }
+    ],
+    "v19_note": "In Odoo 19, read_group is deprecated. For new code, use formatted_read_group (web module) or _read_group (backend). The MCP still uses read_group for compatibility."
+  },
+
+  "orm_methods": {
+    "_note": "Detailed ORM method reference for Odoo 19",
+    "search": {
+      "signature": "Model.search(domain, offset=0, limit=None, order=None, count=False)",
+      "description": "Search for record IDs matching domain criteria",
+      "parameters": {
+        "domain": {"type": "list", "description": "Filter conditions as list of tuples/operators"},
+        "offset": {"type": "int", "default": "0", "description": "Number of records to skip"},
+        "limit": {"type": "int | None", "default": "None", "description": "Maximum records to return (None = all)"},
+        "order": {"type": "str | None", "default": "None", "description": "Sort order (e.g., 'name asc, id desc')"},
+        "count": {"type": "bool", "default": "False", "description": "If True, return count instead of recordset"}
+      },
+      "returns": "Recordset of matching records (or int if count=True)",
+      "vs_search_read": "search() returns only IDs; use search_read() when you need field values too",
+      "examples": [
+        {
+          "description": "Search active partners",
+          "call": "execute_method('res.partner', 'search', kwargs_json='{\"domain\": [[\"active\", \"=\", true]], \"limit\": 100}')"
+        },
+        {
+          "description": "Search with OR condition",
+          "call": "execute_method('res.partner', 'search', kwargs_json='{\"domain\": [\"|\", [\"is_company\", \"=\", true], [\"customer_rank\", \">\", 0]]}')"
+        },
+        {
+          "description": "Get count only (lightweight)",
+          "call": "execute_method('res.partner', 'search', kwargs_json='{\"domain\": [[\"is_company\", \"=\", true]], \"count\": true}')"
+        }
+      ]
+    },
+    "search_count": {
+      "signature": "Model.search_count(domain)",
+      "description": "Count records matching domain without loading them",
+      "parameters": {
+        "domain": {"type": "list", "description": "Filter conditions"}
+      },
+      "returns": "Integer count of matching records",
+      "performance": "Lighter than search() - only runs COUNT query, doesn't load record data",
+      "use_case": "Pagination totals, dashboard metrics, conditional checks",
+      "example": {
+        "description": "Count open invoices",
+        "call": "execute_method('account.move', 'search_count', kwargs_json='{\"domain\": [[\"state\", \"=\", \"posted\"], [\"payment_state\", \"!=\", \"paid\"]]}')"
+      }
+    },
+    "search_read": {
+      "signature": "Model.search_read(domain=None, fields=None, offset=0, limit=None, order=None, load='_classic_read')",
+      "description": "Search and read in single database call - most efficient for filtered data retrieval",
+      "parameters": {
+        "domain": {"type": "list", "default": "[]", "description": "Filter conditions"},
+        "fields": {"type": "list[str] | None", "default": "None", "description": "Fields to return (None = all)"},
+        "offset": {"type": "int", "default": "0", "description": "Records to skip"},
+        "limit": {"type": "int | None", "default": "None", "description": "Max records"},
+        "order": {"type": "str | None", "default": "None", "description": "Sort order"},
+        "load": {"type": "str | None", "default": "'_classic_read'", "description": "Many2one format: '_classic_read' for (id, name), None for raw ID"}
+      },
+      "returns": "List of dictionaries with field values",
+      "performance": "Single query vs search() + read() = 2 queries. Always prefer search_read when you need field data.",
+      "example": {
+        "description": "Get customer names and emails",
+        "call": "execute_method('res.partner', 'search_read', kwargs_json='{\"domain\": [[\"customer_rank\", \">\", 0]], \"fields\": [\"name\", \"email\"], \"limit\": 50}')"
+      }
+    },
+    "read": {
+      "signature": "records.read(fields=None, load='_classic_read')",
+      "description": "Read field values from specific records by ID",
+      "parameters": {
+        "fields": {
+          "type": "list[str] | None",
+          "default": "None (all fields)",
+          "description": "List of field names to retrieve. If None, returns all fields."
+        },
+        "load": {
+          "type": "str | None",
+          "default": "'_classic_read'",
+          "description": "Controls Many2one field loading behavior",
+          "values": {
+            "_classic_read": "Many2one returns (id, display_name) tuple - default behavior",
+            "null": "Many2one returns raw ID only - better performance when display names not needed"
+          }
+        }
+      },
+      "returns": "List of dictionaries mapping field names to values. 'id' field always included.",
+      "relational_fields": {
+        "many2one_default": "(id, display_name) tuple",
+        "many2one_load_null": "integer ID only",
+        "one2many": "list of IDs (regardless of load param)",
+        "many2many": "list of IDs (regardless of load param)"
+      },
+      "exceptions": {
+        "AccessError": "User lacks permission to read requested fields",
+        "ValueError": "Requested non-existent field"
+      },
+      "decorator": "@api.readonly - cannot be overridden",
+      "examples": [
+        {
+          "description": "Read specific fields with display names",
+          "call": "execute_method('res.partner', 'read', args_json='[[1, 2, 3]]', kwargs_json='{\"fields\": [\"name\", \"partner_id\"]}')"
+        },
+        {
+          "description": "Read with raw IDs for performance",
+          "call": "execute_method('res.partner', 'read', args_json='[[1, 2, 3]]', kwargs_json='{\"fields\": [\"name\", \"partner_id\"], \"load\": null}')"
+        }
+      ],
+      "performance_tips": [
+        "Specify only required fields to reduce data transfer",
+        "Use load=null when you don't need Many2one display names",
+        "Batch-read multiple records in one call instead of looping"
+      ]
+    },
+    "create": {
+      "signature": "Model.create(vals_list)",
+      "description": "Create new record(s) in the database",
+      "parameters": {
+        "vals_list": {
+          "type": "dict | list[dict]",
+          "description": "Single dict for one record, or list of dicts for batch creation"
+        }
+      },
+      "returns": "Recordset containing the newly created record(s)",
+      "v19_recommendation": "Always use batch creation (list of dicts) for better performance. Odoo 19 uses @api.model_create_multi internally.",
+      "relational_field_commands": {
+        "_note": "Commands for One2many and Many2many fields during create",
+        "(0, 0, {values})": "Create and link a new related record",
+        "(4, id, 0)": "Link an existing record by ID (Many2many only)",
+        "(6, 0, [ids])": "Replace all links with the given list of IDs (Many2many)"
+      },
+      "exceptions": {
+        "AccessError": "User lacks create permission on the model",
+        "ValidationError": "Business rule validation failed (from @api.constrains)",
+        "UserError": "Operation would create invalid state (e.g., circular hierarchy)"
+      },
+      "examples": [
+        {
+          "description": "Create single record",
+          "call": "execute_method('res.partner', 'create', args_json='[{\"name\": \"John Doe\", \"email\": \"john@example.com\"}]')"
+        },
+        {
+          "description": "Batch create multiple records (recommended)",
+          "call": "execute_method('res.partner', 'create', args_json='[[{\"name\": \"Alice\"}, {\"name\": \"Bob\"}]]')"
+        },
+        {
+          "description": "Create with One2many lines",
+          "call": "execute_method('sale.order', 'create', args_json='[{\"partner_id\": 1, \"order_line\": [[0, 0, {\"product_id\": 1, \"product_uom_qty\": 5}]]}]')"
+        },
+        {
+          "description": "Create with Many2many tags",
+          "call": "execute_method('res.partner', 'create', args_json='[{\"name\": \"Test\", \"category_id\": [[6, 0, [1, 2, 3]]]}]')"
+        }
+      ],
+      "performance_tips": [
+        "Use batch creation (list of dicts) instead of looping single creates",
+        "Prepare all values before create() to minimize DB queries",
+        "Use (6, 0, [ids]) for Many2many instead of multiple (4, id, 0) commands"
+      ]
+    },
+    "write": {
+      "signature": "records.write(vals)",
+      "description": "Update existing record(s) with new values",
+      "parameters": {
+        "vals": {
+          "type": "dict",
+          "description": "Dictionary of field names to new values"
+        }
+      },
+      "returns": "True on success",
+      "note": "Operates on recordset - updates ALL records in self",
+      "relational_field_commands": {
+        "_note": "Commands for One2many and Many2many fields during write",
+        "(0, 0, {values})": "Create and link a new related record",
+        "(1, id, {values})": "Update an existing linked record",
+        "(2, id, 0)": "Delete the linked record from database",
+        "(3, id, 0)": "Unlink record without deleting (Many2many only)",
+        "(4, id, 0)": "Link an existing record (Many2many only)",
+        "(5, 0, 0)": "Unlink all records (Many2many only)",
+        "(6, 0, [ids])": "Replace all links with given IDs (Many2many)"
+      },
+      "exceptions": {
+        "AccessError": "User lacks write permission",
+        "ValidationError": "Business rule validation failed",
+        "MissingError": "Record was deleted during operation"
+      },
+      "examples": [
+        {
+          "description": "Update single field",
+          "call": "execute_method('res.partner', 'write', args_json='[[1], {\"name\": \"New Name\"}]')"
+        },
+        {
+          "description": "Update multiple records",
+          "call": "execute_method('res.partner', 'write', args_json='[[1, 2, 3], {\"active\": false}]')"
+        },
+        {
+          "description": "Add One2many line to existing record",
+          "call": "execute_method('sale.order', 'write', args_json='[[1], {\"order_line\": [[0, 0, {\"product_id\": 5, \"product_uom_qty\": 2}]]}]')"
+        },
+        {
+          "description": "Update existing One2many line",
+          "call": "execute_method('sale.order', 'write', args_json='[[1], {\"order_line\": [[1, 10, {\"product_uom_qty\": 10}]]}]')"
+        },
+        {
+          "description": "Replace all Many2many links",
+          "call": "execute_method('res.partner', 'write', args_json='[[1], {\"category_id\": [[6, 0, [1, 2]]]}]')"
+        }
+      ]
+    },
+    "unlink": {
+      "signature": "records.unlink()",
+      "description": "Delete record(s) from the database",
+      "parameters": {},
+      "returns": "True on success",
+      "note": "Operates on recordset - deletes ALL records in self. Cascades based on ondelete settings.",
+      "exceptions": {
+        "AccessError": "User lacks unlink permission",
+        "UserError": "Deletion blocked by business rule (e.g., @api.ondelete)"
+      },
+      "examples": [
+        {
+          "description": "Delete records by ID",
+          "call": "execute_method('res.partner', 'unlink', args_json='[[1, 2, 3]]')"
+        }
+      ],
+      "warning": "Deletion is permanent. Records with ondelete='restrict' on related fields will block deletion."
+    },
+    "name_search": {
+      "signature": "Model.name_search(name='', domain=None, operator='ilike', limit=100)",
+      "description": "Search for records matching name pattern, used for Many2one autocomplete",
+      "parameters": {
+        "name": {"type": "str", "default": "''", "description": "Search string to match"},
+        "domain": {"type": "list", "default": "None", "description": "Additional domain filter"},
+        "operator": {"type": "str", "default": "'ilike'", "description": "Comparison operator (ilike, like, =, etc.)"},
+        "limit": {"type": "int", "default": "100", "description": "Maximum results to return"}
+      },
+      "returns": "List of tuples: [(id, display_name), ...]",
+      "use_case": "Finding records by partial name match, like autocomplete in forms",
+      "example": {
+        "description": "Search partners by name",
+        "call": "execute_method('res.partner', 'name_search', kwargs_json='{\"name\": \"john\", \"limit\": 10}')"
+      }
+    },
+    "default_get": {
+      "signature": "Model.default_get(fields_list)",
+      "description": "Get default values for specified fields when creating new records",
+      "parameters": {
+        "fields_list": {"type": "list[str]", "description": "List of field names to get defaults for"}
+      },
+      "returns": "Dictionary of {field_name: default_value}",
+      "use_case": "Pre-populating form values, understanding what defaults will be applied",
+      "example": {
+        "description": "Get defaults for sale order",
+        "call": "execute_method('sale.order', 'default_get', args_json='[[\"partner_id\", \"date_order\", \"company_id\"]]')"
+      }
+    },
+    "fields_get": {
+      "signature": "Model.fields_get(allfields=None, attributes=None)",
+      "description": "Get field definitions and metadata for the model",
+      "parameters": {
+        "allfields": {"type": "list[str] | None", "default": "None", "description": "Specific fields to retrieve, or None for all"},
+        "attributes": {"type": "list[str] | None", "default": "None", "description": "Specific attributes to include (string, type, required, readonly, etc.)"}
+      },
+      "returns": "Dictionary of {field_name: {attribute: value, ...}}",
+      "use_case": "Schema introspection, dynamic form generation, field validation",
+      "common_attributes": ["string", "type", "required", "readonly", "relation", "selection", "help"],
+      "example": {
+        "description": "Get all fields for res.partner",
+        "call": "execute_method('res.partner', 'fields_get')"
+      }
+    },
+    "copy": {
+      "signature": "records.copy(default=None)",
+      "description": "Duplicate a record with optional field overrides",
+      "parameters": {
+        "default": {"type": "dict | None", "default": "None", "description": "Field values to override in the copy"}
+      },
+      "returns": "New duplicated record",
+      "note": "Fields with copy=False attribute are not copied. State fields typically reset to draft.",
+      "example": {
+        "description": "Duplicate a sale order with new date",
+        "call": "execute_method('sale.order', 'copy', args_json='[[1]]', kwargs_json='{\"default\": {\"date_order\": \"2025-01-15\"}}')"
+      }
+    },
+    "check_access_rights": {
+      "signature": "Model.check_access_rights(operation, raise_exception=True)",
+      "description": "Check if current user has permission for operation on model",
+      "parameters": {
+        "operation": {"type": "str", "description": "One of: 'read', 'write', 'create', 'unlink'"},
+        "raise_exception": {"type": "bool", "default": "True", "description": "Raise AccessError or return False"}
+      },
+      "returns": "True if permitted, False or raises AccessError if not",
+      "example": {
+        "description": "Check if user can create invoices",
+        "call": "execute_method('account.move', 'check_access_rights', args_json='[\"create\"]')"
+      }
+    }
+  },
+
+  "model_types": {
+    "_note": "Odoo 19 model types and their characteristics",
+    "models.Model": {
+      "description": "Regular persistent model with database table",
+      "table_created": true,
+      "auto_cleanup": false,
+      "use_case": "Standard business data (partners, orders, invoices)"
+    },
+    "models.TransientModel": {
+      "description": "Temporary model for wizard data, auto-cleaned after inactivity",
+      "table_created": true,
+      "auto_cleanup": true,
+      "use_case": "Wizards, temporary processing, user input dialogs",
+      "note": "Records deleted automatically by ir.autovacuum"
+    },
+    "models.AbstractModel": {
+      "description": "Abstract model for shared behavior, no database table",
+      "table_created": false,
+      "auto_cleanup": false,
+      "use_case": "Mixins, shared methods inherited by other models",
+      "note": "Cannot be queried directly via API"
+    }
+  },
+
+  "model_attributes": {
+    "_note": "Common model attributes for schema understanding",
+    "_name": "Unique technical identifier (e.g., 'sale.order')",
+    "_description": "Human-readable model name for UI",
+    "_order": "Default sort order (e.g., 'create_date desc, name')",
+    "_rec_name": "Field used as display name in dropdowns (default: 'name')",
+    "_inherit": "Model(s) to extend via classical inheritance",
+    "_inherits": "Delegation inheritance - links to parent record",
+    "_parent_name": "Field name for parent reference in hierarchy (default: 'parent_id')",
+    "_parent_store": "Enable materialized path for fast hierarchy queries",
+    "_sql_constraints": "Database-level unique/check constraints",
+    "_log_access": "Auto-create create_uid, create_date, write_uid, write_date fields"
+  },
+
+  "field_types": {
+    "_note": "Odoo 19 field type reference for schema interpretation",
+    "simple": {
+      "boolean": {"python": "bool", "json": "true/false", "default": "false"},
+      "char": {"python": "str", "json": "string", "params": ["size"], "note": "size limits max length"},
+      "text": {"python": "str", "json": "string", "note": "unlimited length, for large text"},
+      "integer": {"python": "int", "json": "number", "default": "0", "note": "no null, defaults to 0"},
+      "float": {"python": "float", "json": "number", "params": ["digits"], "note": "digits=(precision, scale)"},
+      "date": {"python": "date", "json": "string YYYY-MM-DD", "helpers": ["context_today", "today", "from_string", "to_string"]},
+      "datetime": {"python": "datetime", "json": "string YYYY-MM-DD HH:MM:SS", "helpers": ["now", "context_timestamp", "from_string", "to_string"]},
+      "binary": {"python": "bytes", "json": "base64 string", "note": "for files, images, attachments"},
+      "html": {"python": "str", "json": "string (HTML)", "note": "rich text with HTML formatting"},
+      "monetary": {"python": "float", "json": "number", "params": ["currency_field", "digits"], "note": "REQUIRES currency_field pointing to res.currency"}
+    },
+    "selection": {
+      "selection": {"python": "str", "json": "string (key)", "params": ["selection"], "note": "selection is list of (key, label) tuples or callable"},
+      "reference": {"python": "str", "json": "string 'model,id'", "params": ["selection"], "note": "dynamic link to multiple models"}
+    },
+    "relational": {
+      "many2one": {
+        "python": "int (record ID)",
+        "json_read": "(id, display_name) or id with load=null",
+        "json_write": "integer ID",
+        "params": ["comodel_name", "ondelete", "delegate"],
+        "ondelete_options": ["restrict", "cascade", "set null"],
+        "note": "ALWAYS pass integer ID when writing, never the name string"
+      },
+      "one2many": {
+        "python": "recordset",
+        "json_read": "[id, id, ...]",
+        "json_write": "commands: (0,0,{vals}), (1,id,{vals}), (2,id,0), etc.",
+        "params": ["comodel_name", "inverse_name"],
+        "note": "inverse_name is the Many2one field on the related model"
+      },
+      "many2many": {
+        "python": "recordset",
+        "json_read": "[id, id, ...]",
+        "json_write": "commands: (4,id,0) link, (3,id,0) unlink, (6,0,[ids]) replace",
+        "params": ["comodel_name", "relation", "column1", "column2"],
+        "note": "relation is the junction table name"
+      }
+    },
+    "common_attributes": {
+      "string": "Field label in UI",
+      "required": "Cannot be empty (default: false)",
+      "readonly": "Not user-editable (default: false)",
+      "default": "Default value (literal or callable)",
+      "help": "Tooltip text",
+      "compute": "Method name for computed fields",
+      "store": "Store computed field in DB (default: false for computed)",
+      "related": "Shortcut for related field access",
+      "translate": "Enable multi-language (default: false)",
+      "index": "Create DB index (default: false)",
+      "copy": "Include in record duplication (default: true)",
+      "groups": "Limit field access to security groups"
+    }
+  },
+
+  "method_decorators": {
+    "_note": "Odoo 19 method decorators and their RPC accessibility",
+    "rpc_accessible": {
+      "@api.model": {
+        "description": "Method works at model level, not on specific records",
+        "rpc_callable": true,
+        "example_use": "Utility methods, custom create logic, sequence generation",
+        "note": "No 'self' records, use self.env to access data"
+      },
+      "@api.model_create_multi": {
+        "description": "Optimized bulk record creation",
+        "rpc_callable": true,
+        "note": "Receives vals_list (list of dicts), returns recordset"
+      },
+      "@api.readonly": {
+        "description": "Method executes in read-only mode",
+        "rpc_callable": true,
+        "note": "Cannot modify database, used for reporting/queries"
+      }
+    },
+    "not_rpc_accessible": {
+      "@api.private": {
+        "description": "BLOCKED from external RPC access",
+        "rpc_callable": false,
+        "note": "MCP CANNOT call these methods - internal use only"
+      }
+    },
+    "validation_decorators": {
+      "@api.constrains(*fields)": {
+        "description": "Validate data before saving",
+        "triggered_by": "create/write on specified fields",
+        "raises": "ValidationError if invalid"
+      },
+      "@api.ondelete(at_uninstall=False)": {
+        "description": "Control deletion behavior",
+        "note": "at_uninstall=True allows deletion during module uninstall"
+      }
+    },
+    "computed_field_decorators": {
+      "@api.depends(*fields)": {
+        "description": "Recompute when dependent fields change",
+        "note": "Required for stored computed fields"
+      },
+      "@api.depends_context(*keys)": {
+        "description": "Recompute when context keys change",
+        "note": "For company/language-dependent computations"
+      }
+    },
+    "ui_only": {
+      "@api.onchange(*fields)": {
+        "description": "Real-time UI updates before save",
+        "rpc_callable": false,
+        "note": "NOT triggered by API calls - UI form changes only"
+      }
+    },
+    "mcp_implications": {
+      "callable_via_mcp": ["public methods", "@api.model", "@api.model_create_multi", "@api.readonly"],
+      "not_callable": ["@api.private methods", "@api.onchange (UI-only)"],
+      "tip": "If execute_method returns 'method not found' or access error, the method may be @api.private"
+    }
+  },
 
   "module_documentation": {
     "_note": "Maps module names to documentation and GitHub paths for Odoo 19.0",

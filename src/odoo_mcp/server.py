@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastmcp import Context, FastMCP
+from fastmcp.prompts import Message
 from pydantic import BaseModel, Field
 
 from .odoo_client import OdooClient, get_odoo_client
@@ -277,15 +278,22 @@ def get_methods(model_name: str) -> str:
     common_methods = {
         "read_methods": [
             {"name": "search", "description": "Search for record IDs", "params": ["domain", "offset", "limit", "order"]},
-            {"name": "search_read", "description": "Search and read in one call", "params": ["domain", "fields", "offset", "limit", "order"]},
-            {"name": "read", "description": "Read specific records", "params": ["ids", "fields"]},
+            {"name": "search_read", "description": "Search and read in one call", "params": ["domain", "fields", "offset", "limit", "order", "load"]},
+            {"name": "read", "description": "Read specific records by ID", "params": ["ids", "fields", "load"], "note": "load='_classic_read' (default) returns Many2one as (id, name); load=None returns raw ID for better performance"},
             {"name": "search_count", "description": "Count matching records", "params": ["domain"]},
-            {"name": "fields_get", "description": "Get field definitions", "params": ["attributes"]},
+            {"name": "read_group", "description": "Aggregation with grouping", "params": ["domain", "fields", "groupby", "offset", "limit", "orderby", "lazy"]},
         ],
         "write_methods": [
-            {"name": "create", "description": "Create new record(s)", "params": ["vals"]},
+            {"name": "create", "description": "Create new record(s)", "params": ["vals_list"], "note": "Pass list of dicts for batch creation"},
             {"name": "write", "description": "Update existing record(s)", "params": ["ids", "vals"]},
             {"name": "unlink", "description": "Delete record(s)", "params": ["ids"]},
+            {"name": "copy", "description": "Duplicate a record", "params": ["id", "default"]},
+        ],
+        "introspection_methods": [
+            {"name": "fields_get", "description": "Get field definitions and metadata", "params": ["allfields", "attributes"]},
+            {"name": "default_get", "description": "Get default values for fields", "params": ["fields_list"]},
+            {"name": "name_search", "description": "Search by name (autocomplete)", "params": ["name", "domain", "operator", "limit"]},
+            {"name": "check_access_rights", "description": "Check user permissions", "params": ["operation"]},
         ],
         "special_methods": [],
         "warnings": [],
@@ -522,7 +530,7 @@ def get_concept_mappings() -> str:
     """Get all known concept-to-model mappings for natural language model discovery."""
     return json.dumps({
         "description": "Business concept to Odoo model mappings",
-        "usage": "Use find_model tool to search, or look up concepts here",
+        "usage": "Use odoo://find-model/{concept} resource to search, or look up concepts here",
         "mappings": CONCEPT_ALIASES
     }, indent=2)
 
@@ -680,7 +688,321 @@ def get_server_info() -> str:
         return json.dumps({"error": str(e)}, indent=2)
 
 
-# ----- MCP Tools -----
+@mcp.resource(
+    "odoo://domain-syntax",
+    description="Complete domain operator reference with examples for building search filters",
+)
+def get_domain_syntax() -> str:
+    """Get comprehensive domain syntax documentation."""
+    domain_syntax = MODULE_KNOWLEDGE.get("domain_syntax", {})
+    return json.dumps({
+        "title": "Odoo Domain Syntax Reference",
+        "usage": "Use with execute_method search/search_read/search_count in the domain parameter",
+        **domain_syntax
+    }, indent=2)
+
+
+@mcp.resource(
+    "odoo://pagination",
+    description="Guide for paginating large result sets with offset/limit",
+)
+def get_pagination_guide() -> str:
+    """Get pagination patterns for execute_method."""
+    pagination = MODULE_KNOWLEDGE.get("pagination", {})
+    return json.dumps({
+        "title": "Pagination Guide for execute_method",
+        **pagination,
+        "example_with_total": {
+            "description": "Get page 2 of 50 records with total count",
+            "step1_count": {
+                "method": "search_count",
+                "kwargs_json": '{"domain": [["is_company", "=", true]]}'
+            },
+            "step2_fetch": {
+                "method": "search_read",
+                "kwargs_json": '{"domain": [["is_company", "=", true]], "fields": ["name"], "limit": 50, "offset": 50, "order": "name asc"}'
+            }
+        }
+    }, indent=2)
+
+
+@mcp.resource(
+    "odoo://hierarchical",
+    description="Guide for querying parent/child tree structures (categories, locations, etc.)",
+)
+def get_hierarchical_guide() -> str:
+    """Get hierarchical query patterns."""
+    hierarchical = MODULE_KNOWLEDGE.get("hierarchical_models", {})
+    return json.dumps({
+        "title": "Hierarchical Query Guide",
+        "description": "Patterns for working with parent/child tree structures in Odoo",
+        **hierarchical,
+        "execute_method_examples": {
+            "get_category_tree": {
+                "description": "Get a category and all its descendants",
+                "call": "execute_method('product.category', 'search_read', kwargs_json='{\"domain\": [[\"id\", \"child_of\", 1]], \"fields\": [\"name\", \"parent_id\", \"parent_path\"]}')"
+            },
+            "get_ancestors": {
+                "description": "Get all ancestors of a record",
+                "call": "execute_method('product.category', 'search_read', kwargs_json='{\"domain\": [[\"id\", \"parent_of\", 10]], \"fields\": [\"name\", \"parent_id\"]}')"
+            },
+            "get_root_categories": {
+                "description": "Get top-level categories only",
+                "call": "execute_method('product.category', 'search_read', kwargs_json='{\"domain\": [[\"parent_id\", \"=\", false]], \"fields\": [\"name\", \"child_id\"]}')"
+            },
+            "get_direct_children": {
+                "description": "Get immediate children of a parent",
+                "call": "execute_method('hr.department', 'search_read', kwargs_json='{\"domain\": [[\"parent_id\", \"=\", 5]], \"fields\": [\"name\", \"manager_id\"]}')"
+            }
+        }
+    }, indent=2)
+
+
+@mcp.resource(
+    "odoo://aggregation",
+    description="Guide for read_group aggregation (sum, avg, count, groupby)",
+)
+def get_aggregation_guide() -> str:
+    """Get read_group aggregation reference."""
+    aggregation = MODULE_KNOWLEDGE.get("aggregation", {})
+    return json.dumps({
+        "title": "Aggregation Guide (read_group)",
+        **aggregation,
+        "execute_method_examples": {
+            "sales_by_customer": {
+                "description": "Total sales amount by customer",
+                "call": "execute_method('sale.order', 'read_group', args_json='[[]]', kwargs_json='{\"fields\": [\"amount_total:sum\"], \"groupby\": [\"partner_id\"]}')"
+            },
+            "invoices_by_month": {
+                "description": "Invoice count grouped by month",
+                "call": "execute_method('account.move', 'read_group', args_json='[[[\"move_type\", \"=\", \"out_invoice\"]]]', kwargs_json='{\"fields\": [\"__count\"], \"groupby\": [\"invoice_date:month\"]}')"
+            },
+            "products_by_category": {
+                "description": "Product count and total value by category",
+                "call": "execute_method('product.product', 'read_group', args_json='[[]]', kwargs_json='{\"fields\": [\"__count\", \"list_price:sum\"], \"groupby\": [\"categ_id\"]}')"
+            },
+            "leads_by_stage": {
+                "description": "Expected revenue by CRM stage",
+                "call": "execute_method('crm.lead', 'read_group', args_json='[[[\"type\", \"=\", \"opportunity\"]]]', kwargs_json='{\"fields\": [\"expected_revenue:sum\", \"__count\"], \"groupby\": [\"stage_id\"]}')"
+            },
+            "multi_level_grouping": {
+                "description": "Sales by customer and state (use lazy=False for efficiency)",
+                "call": "execute_method('sale.order', 'read_group', args_json='[[]]', kwargs_json='{\"fields\": [\"amount_total:sum\"], \"groupby\": [\"partner_id\", \"state\"], \"lazy\": false}')"
+            }
+        },
+        "lazy_parameter": {
+            "description": "Controls grouping behavior for multiple groupby fields",
+            "default": True,
+            "lazy_true": "Groups by first field only; remaining fields lazy-loaded (multiple queries)",
+            "lazy_false": "All groupings in single query - more efficient for multi-level reports",
+            "recommendation": "Use lazy=False when grouping by 2+ fields for better performance"
+        }
+    }, indent=2)
+
+
+@mcp.resource(
+    "odoo://find-model/{concept}",
+    description="Find Odoo model from natural language concept (contact, invoice, quote, etc.)",
+)
+def find_model_resource(concept: str) -> str:
+    """Find model from business term - converts to odoo model name."""
+    odoo_client = get_odoo_client()
+    concept_lower = concept.lower().strip()
+
+    result = {
+        "concept": concept,
+        "best_match": None,
+        "all_matches": [],
+        "source": None,
+    }
+
+    # 1. Check built-in aliases first (instant)
+    if concept_lower in CONCEPT_ALIASES:
+        models = CONCEPT_ALIASES[concept_lower]
+        result["best_match"] = models[0]
+        result["all_matches"] = [{"model": m, "score": 100, "source": "alias"} for m in models]
+        result["source"] = "alias"
+        return json.dumps(result, indent=2)
+
+    # 2. Search ir.model by display name
+    try:
+        ir_models = odoo_client.search_read(
+            "ir.model",
+            [["name", "ilike", concept]],
+            fields=["model", "name"],
+            limit=10
+        )
+
+        if ir_models:
+            for m in ir_models:
+                score = 90 if concept_lower == m["name"].lower() else 70
+                result["all_matches"].append({
+                    "model": m["model"],
+                    "display_name": m["name"],
+                    "score": score,
+                    "source": "ir.model"
+                })
+            result["all_matches"].sort(key=lambda x: x["score"], reverse=True)
+            result["best_match"] = result["all_matches"][0]["model"]
+            result["source"] = "ir.model"
+            return json.dumps(result, indent=2)
+    except Exception:
+        pass
+
+    # 3. Fuzzy match
+    try:
+        all_models = odoo_client.search_read(
+            "ir.model", [], fields=["model", "name"], limit=500
+        )
+        for m in all_models:
+            model_name = m["model"].lower()
+            display_name = m["name"].lower()
+            if concept_lower in model_name or concept_lower in display_name:
+                score = 80 if concept_lower in model_name.split(".") else 60
+                result["all_matches"].append({
+                    "model": m["model"],
+                    "display_name": m["name"],
+                    "score": score,
+                    "source": "fuzzy"
+                })
+
+        if result["all_matches"]:
+            result["all_matches"].sort(key=lambda x: x["score"], reverse=True)
+            result["best_match"] = result["all_matches"][0]["model"]
+            result["source"] = "fuzzy"
+    except Exception as e:
+        result["error"] = str(e)
+
+    if not result["best_match"]:
+        result["suggestion"] = "Check odoo://models for available models"
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.resource(
+    "odoo://tools/{query}",
+    description="Search available operations by keyword (invoice, sales, stock, etc.)",
+)
+def search_tools_resource(query: str) -> str:
+    """Search tool registry and module knowledge for operations."""
+    query_lower = query.lower()
+    matches = []
+
+    # Search tool registry
+    for tool_name, tool_def in TOOL_REGISTRY.items():
+        searchable = f"{tool_name} {tool_def.get('description', '')} {tool_def.get('model', '')}".lower()
+        if query_lower in searchable:
+            matches.append({
+                "name": tool_name,
+                "type": "workflow",
+                **tool_def
+            })
+
+    # Search module knowledge for special methods
+    special_matches = []
+    for module_name, module_info in MODULE_KNOWLEDGE.get("modules", {}).items():
+        for method_name, method_info in module_info.get("special_methods", {}).items():
+            searchable = f"{method_name} {method_info.get('description', '')} {module_info.get('model', '')}".lower()
+            if query_lower in searchable:
+                special_matches.append({
+                    "name": method_name,
+                    "type": "special_method",
+                    "model": module_info.get("model"),
+                    "description": method_info.get("description"),
+                    "params": method_info.get("params", {}),
+                })
+
+    return json.dumps({
+        "query": query,
+        "tools_found": len(matches) + len(special_matches),
+        "workflows": matches,
+        "special_methods": special_matches,
+        "usage": "Use execute_workflow() for workflows or execute_method() for special methods"
+    }, indent=2)
+
+
+@mcp.resource(
+    "odoo://actions/{model}",
+    description="Discover all available actions for a specific model",
+)
+def discover_actions_resource(model: str) -> str:
+    """Discover all actions available for a model."""
+    odoo_client = get_odoo_client()
+
+    result = {
+        "model": model,
+        "workflows": [],
+        "special_methods": [],
+        "server_actions": [],
+        "orm_methods": ["search", "search_read", "search_count", "create", "write", "unlink", "read", "fields_get"],
+        "usage_examples": [],
+    }
+
+    # 1. Find workflows in registry for this model
+    for tool_name, tool_def in TOOL_REGISTRY.items():
+        if tool_def.get("model") == model:
+            result["workflows"].append({
+                "name": tool_name,
+                "description": tool_def.get("description"),
+                "params": tool_def.get("params", {}),
+                "method": tool_def.get("method"),
+            })
+
+    # 2. Check module knowledge
+    for module_name, module_info in MODULE_KNOWLEDGE.get("modules", {}).items():
+        if module_info.get("model") == model:
+            for method_name, method_info in module_info.get("special_methods", {}).items():
+                result["special_methods"].append({
+                    "name": method_name,
+                    "description": method_info.get("description"),
+                    "params": method_info.get("params", {}),
+                    "replaces": method_info.get("instead_of"),
+                })
+            if module_info.get("notes"):
+                result["notes"] = module_info["notes"]
+            if method_info.get("instead_of"):
+                result["warnings"] = result.get("warnings", [])
+                result["warnings"].append(f"Use {method_name}() instead of {method_info['instead_of']}()")
+
+    # 3. Get server actions from Odoo
+    try:
+        actions = odoo_client.search_read(
+            'ir.actions.server',
+            [('model_id.model', '=', model)],
+            fields=['name', 'state'],
+            limit=20
+        )
+        for action in actions:
+            result["server_actions"].append({
+                "name": action.get('name'),
+                "type": action.get('state'),
+            })
+    except Exception:
+        pass
+
+    # 4. Add usage examples
+    result["usage_examples"] = [
+        {
+            "description": "Search records",
+            "code": f'execute_method("{model}", "search_read", kwargs_json=\'{{"domain": [], "limit": 10}}\')'
+        },
+        {
+            "description": "Create record",
+            "code": f'execute_method("{model}", "create", args_json=\'[{{"field": "value"}}]\')'
+        }
+    ]
+
+    if result["special_methods"]:
+        method = result["special_methods"][0]
+        result["usage_examples"].insert(0, {
+            "description": f"Call {method['name']}",
+            "code": f'execute_method("{model}", "{method["name"]}", args_json="[[id]]")'
+        })
+
+    return json.dumps(result, indent=2)
+
+
+# ----- MCP Tools (Only 3: execute_method, batch_execute, execute_workflow) -----
 
 
 @mcp.tool(
@@ -688,7 +1010,16 @@ def get_server_info() -> str:
 
     This is the universal tool for full Odoo API access.
 
-    BEFORE USING on unfamiliar models: call get_model_methods() first!
+    BEFORE USING: Read these resources for guidance:
+    - odoo://actions/{model} - Discover available actions
+    - odoo://methods/{model} - Method signatures
+    - odoo://domain-syntax - Domain filter reference
+    - odoo://aggregation - read_group guide
+
+    MANDATORY WORKFLOW (no guessing!):
+    1. FIRST: Read odoo://model/{model}/schema to get exact field names/types
+    2. THEN: Build your query using schema field names
+    Never guess field names - introspect schema first to avoid failed requests.
 
     Common patterns:
     - search_read: kwargs_json='{"domain": [...], "fields": [...], "limit": 100}'
@@ -794,233 +1125,6 @@ def execute_method(
 
 
 @mcp.tool(
-    description="""Discover available methods on an Odoo model.
-
-    Returns:
-    - Standard ORM methods (search, create, write, etc.)
-    - Module-specific special methods (article_create, action_confirm, etc.)
-    - Method signatures and parameters
-    - Warnings about methods that shouldn't be used directly
-
-    Use this BEFORE calling execute_method on unfamiliar models!
-    """,
-    annotations={
-        "title": "Get Model Methods",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False
-    }
-)
-def get_model_methods(
-    ctx: Context,
-    model: str,
-    include_private: bool = False,
-) -> Dict[str, Any]:
-    """
-    Discover available methods on an Odoo model.
-
-    Parameters:
-        model: Model name (e.g., 'sale.order', 'knowledge.article')
-        include_private: Include methods starting with _ (default: False)
-
-    Returns dict with:
-        - orm_methods: Standard Odoo ORM methods
-        - special_methods: Module-specific methods from knowledge base
-        - action_methods: Discovered action_* and button_* methods
-        - warnings: Important notes about this model
-    """
-    odoo = ctx.request_context.lifespan_context.odoo
-
-    result = {
-        "model": model,
-        "orm_methods": {
-            "read": ["search", "search_read", "read", "search_count", "browse", "fields_get", "default_get", "name_get", "name_search"],
-            "write": ["create", "write", "unlink", "copy"],
-        },
-        "special_methods": [],
-        "action_methods": [],
-        "warnings": [],
-        "field_mappings": {},
-    }
-
-    # Get special methods from knowledge base
-    for module_name, module_info in MODULE_KNOWLEDGE.get("modules", {}).items():
-        if module_info.get("model") == model:
-            for method_name, method_info in module_info.get("special_methods", {}).items():
-                result["special_methods"].append({
-                    "name": method_name,
-                    "description": method_info.get("description", ""),
-                    "params": method_info.get("params", {}),
-                    "replaces": method_info.get("instead_of"),
-                })
-                # Add warning if this replaces a standard method
-                if method_info.get("instead_of"):
-                    result["warnings"].append(
-                        f"Use {method_name}() instead of {method_info['instead_of']}() for this model"
-                    )
-
-            if module_info.get("notes"):
-                result["warnings"].append(module_info["notes"])
-
-            if module_info.get("field_mappings"):
-                result["field_mappings"] = module_info["field_mappings"]
-
-    # Try to discover action methods from the model
-    try:
-        # Get server actions bound to this model
-        actions = odoo.search_read(
-            'ir.actions.server',
-            [('model_id.model', '=', model)],
-            fields=['name', 'state'],
-            limit=50
-        )
-        for action in actions:
-            result["action_methods"].append({
-                "name": action.get('name'),
-                "type": "server_action",
-                "state": action.get('state')
-            })
-    except Exception:
-        pass  # Model might not have ir.actions.server access
-
-    # Add common action patterns for this model type
-    common_actions = [
-        "action_confirm", "action_cancel", "action_done", "action_draft",
-        "action_post", "action_validate", "button_confirm", "button_cancel"
-    ]
-
-    if not result["special_methods"]:
-        result["note"] = f"No special methods known for {model}. Try common action methods or check Odoo source."
-        result["try_these"] = common_actions
-
-    return {"success": True, "result": result}
-
-
-@mcp.tool(
-    description="""Find Odoo model from natural language concept.
-
-    Translates business terms like "contact", "invoice", "quote" to
-    actual Odoo model names like "res.partner", "account.move", "sale.order".
-
-    Uses:
-    1. Built-in concept aliases (fast)
-    2. Search ir.model display names (comprehensive)
-    3. Fuzzy model name matching (fallback)
-
-    Examples:
-    - "contact" → res.partner
-    - "invoice" → account.move
-    - "sales order" → sale.order
-    """,
-    annotations={
-        "title": "Find Model",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False
-    }
-)
-def find_model(
-    ctx: Context,
-    concept: str,
-) -> Dict[str, Any]:
-    """
-    Find Odoo model from natural language concept.
-
-    Parameters:
-        concept: Business term like "contact", "invoice", "quote", "sales order"
-
-    Returns:
-        - best_match: Most likely model name
-        - all_matches: All matching models with scores
-        - source: How the match was found (alias/search/fuzzy)
-    """
-    odoo = ctx.request_context.lifespan_context.odoo
-
-    concept_lower = concept.lower().strip()
-    results = {
-        "concept": concept,
-        "best_match": None,
-        "all_matches": [],
-        "source": None,
-    }
-
-    # 1. Check built-in aliases first (instant)
-    if concept_lower in CONCEPT_ALIASES:
-        models = CONCEPT_ALIASES[concept_lower]
-        results["best_match"] = models[0]
-        results["all_matches"] = [{"model": m, "score": 100, "source": "alias"} for m in models]
-        results["source"] = "alias"
-        return {"success": True, "result": results}
-
-    # 2. Search ir.model by display name
-    try:
-        ir_models = odoo.search_read(
-            "ir.model",
-            [["name", "ilike", concept]],
-            fields=["model", "name", "info"],
-            limit=10
-        )
-
-        if ir_models:
-            for m in ir_models:
-                score = 90 if concept_lower == m["name"].lower() else 70
-                results["all_matches"].append({
-                    "model": m["model"],
-                    "display_name": m["name"],
-                    "score": score,
-                    "source": "ir.model"
-                })
-
-            # Sort by score
-            results["all_matches"].sort(key=lambda x: x["score"], reverse=True)
-            results["best_match"] = results["all_matches"][0]["model"]
-            results["source"] = "ir.model"
-            return {"success": True, "result": results}
-    except Exception as e:
-        # Continue to fuzzy matching if ir.model search fails
-        pass
-
-    # 3. Fuzzy match on model technical names
-    try:
-        all_models = odoo.search_read(
-            "ir.model",
-            [],
-            fields=["model", "name"],
-            limit=500
-        )
-
-        for m in all_models:
-            model_name = m["model"].lower()
-            display_name = m["name"].lower()
-
-            # Check if concept appears in model name or display name
-            if concept_lower in model_name or concept_lower in display_name:
-                score = 60
-                if concept_lower in model_name.split("."):
-                    score = 80
-                results["all_matches"].append({
-                    "model": m["model"],
-                    "display_name": m["name"],
-                    "score": score,
-                    "source": "fuzzy"
-                })
-
-        if results["all_matches"]:
-            results["all_matches"].sort(key=lambda x: x["score"], reverse=True)
-            results["best_match"] = results["all_matches"][0]["model"]
-            results["source"] = "fuzzy"
-            return {"success": True, "result": results}
-    except Exception as e:
-        results["error"] = f"Search failed: {e}"
-
-    # No matches found
-    results["suggestion"] = "Try a different term or check odoo://models for available models"
-    return {"success": True, "result": results}
-
-
-@mcp.tool(
     description="Execute multiple Odoo operations in a batch",
     annotations={
         "title": "Batch Execute",
@@ -1108,27 +1212,22 @@ def batch_execute(
 
 
 @mcp.prompt(name="odoo-exploration")
-def odoo_exploration_prompt() -> List[Dict[str, str]]:
+def odoo_exploration_prompt() -> list[Message]:
     """Discover capabilities of this Odoo instance"""
-    return [{
-        "role": "user",
-        "content": """Explore this Odoo instance:
+    return [Message("""Explore this Odoo instance:
 
 1. Read odoo://server/info for version and apps
 2. Read odoo://workflows for available workflows
 3. Read odoo://models for all models
 
 Provide a summary of what's available.
-"""
-    }]
+""")]
 
 
 @mcp.prompt(name="search-records")
-def search_records_prompt(model: str = "res.partner") -> List[Dict[str, str]]:
+def search_records_prompt(model: str = "res.partner") -> list[Message]:
     """Search for records in a model"""
-    return [{
-        "role": "user",
-        "content": f"""Search for records in {model}.
+    return [Message(f"""Search for records in {model}.
 
 First read odoo://model/{model}/schema to understand the fields.
 
@@ -1137,16 +1236,13 @@ Then use execute_method with:
 - method='search_read'
 - args_json='[[]]'  # empty domain for all records
 - kwargs_json='{{"fields": ["name", "id"], "limit": 10}}'
-"""
-    }]
+""")]
 
 
 @mcp.prompt(name="odoo-api-reference")
-def api_reference_prompt() -> List[Dict[str, str]]:
+def api_reference_prompt() -> list[Message]:
     """Quick reference for Odoo API patterns"""
-    return [{
-        "role": "user",
-        "content": """## Odoo API Quick Reference
+    return [Message("""## Odoo API Quick Reference
 
 **Method Patterns:**
 - search_read: `kwargs_json='{"domain": [...], "fields": [...], "limit": 100}'`
@@ -1183,16 +1279,212 @@ def api_reference_prompt() -> List[Dict[str, str]]:
 
 **CRITICAL WARNINGS:**
 - Many2one fields = ALWAYS use numeric ID, never the name string!
-- Use get_model_methods() BEFORE calling unfamiliar models
+- Read odoo://actions/{model} BEFORE calling unfamiliar models
 - Check odoo://docs/{model} for documentation URLs
 
 **Pre-execution Checklist:**
-1. Model verified? (use get_model_methods if unfamiliar)
-2. Method exists? (check special methods in module knowledge)
-3. Required fields known? (check schema resource)
+1. Model identified? (use odoo://find-model/{concept})
+2. Actions verified? (read odoo://actions/{model})
+3. Required fields known? (read odoo://model/{model}/schema)
 4. Types correct? (Many2one = ID, not name)
-"""
-    }]
+""")]
+
+
+@mcp.prompt(name="domain-builder")
+def domain_builder_prompt(description: str = "") -> list[Message]:
+    """Help construct complex domain filters"""
+    return [Message(f"""## Domain Builder
+
+Build a domain filter{' for: ' + description if description else ''}.
+
+**Read odoo://domain-syntax for complete operator reference.**
+
+**Key Operators:**
+| Operator | Purpose | Example |
+|----------|---------|---------|
+| `=`, `!=` | Equality | `["state", "=", "draft"]` |
+| `>`, `<`, `>=`, `<=` | Comparison | `["amount", ">", 1000]` |
+| `in`, `not in` | List membership | `["state", "in", ["draft", "sent"]]` |
+| `ilike` | Case-insensitive search | `["email", "ilike", "@gmail"]` |
+| `child_of` | Hierarchical children | `["category_id", "child_of", 5]` |
+| `parent_of` | Hierarchical parents | `["id", "parent_of", 10]` |
+| `any` | x2many contains match | `["order_line", "any", [["product_id", "=", 1]]]` |
+
+**Logic (Polish notation):**
+- AND: `["&", term1, term2]`
+- OR: `["|", term1, term2]`
+- NOT: `["!", term]`
+
+**Dot Notation for Related Fields:**
+- `["partner_id.country_id.code", "=", "US"]`
+
+**Example: Active US/CA companies with orders > $1000:**
+```python
+["&", "&", ["active", "=", true], ["is_company", "=", true],
+ "|", ["country_id.code", "=", "US"], ["country_id.code", "=", "CA"]]
+```
+
+Use with execute_method search_read kwargs_json.
+""")]
+
+
+@mcp.prompt(name="hierarchical-query")
+def hierarchical_query_prompt(model: str = "product.category") -> list[Message]:
+    """Guide for querying parent/child tree structures"""
+    return [Message(f"""## Hierarchical Query Guide for {model}
+
+**Read odoo://hierarchical for complete patterns.**
+
+**Query Patterns with execute_method:**
+
+1. **Get all descendants (children + grandchildren):**
+```
+execute_method('{model}', 'search_read',
+  kwargs_json='{{"domain": [["id", "child_of", PARENT_ID]], "fields": ["name", "parent_id"]}}')
+```
+
+2. **Get all ancestors (parents + grandparents):**
+```
+execute_method('{model}', 'search_read',
+  kwargs_json='{{"domain": [["id", "parent_of", CHILD_ID]], "fields": ["name", "parent_id"]}}')
+```
+
+3. **Get direct children only:**
+```
+execute_method('{model}', 'search_read',
+  kwargs_json='{{"domain": [["parent_id", "=", PARENT_ID]], "fields": ["name"]}}')
+```
+
+4. **Get root records (no parent):**
+```
+execute_method('{model}', 'search_read',
+  kwargs_json='{{"domain": [["parent_id", "=", false]], "fields": ["name", "child_id"]}}')
+```
+
+5. **Get tree path (if model has _parent_store):**
+```
+execute_method('{model}', 'search_read',
+  kwargs_json='{{"domain": [["id", "=", ID]], "fields": ["name", "parent_path"]}}')
+```
+The parent_path field contains ancestor IDs separated by '/'.
+
+**Common hierarchical models:**
+- product.category (parent_id)
+- account.account (parent_id)
+- hr.department (parent_id)
+- stock.location (location_id)
+- knowledge.article (parent_id)
+""")]
+
+
+@mcp.prompt(name="paginated-search")
+def paginated_search_prompt(model: str = "res.partner") -> list[Message]:
+    """Guide for paginating large result sets"""
+    return [Message(f"""## Paginated Search Guide for {model}
+
+**Read odoo://pagination for complete reference.**
+
+**Pattern: Get total count + paginated results**
+
+Step 1: Get total count
+```
+execute_method('{model}', 'search_count',
+  kwargs_json='{{"domain": YOUR_DOMAIN}}')
+```
+
+Step 2: Fetch page of results
+```
+execute_method('{model}', 'search_read',
+  kwargs_json='{{
+    "domain": YOUR_DOMAIN,
+    "fields": ["name", "..."],
+    "limit": 50,
+    "offset": 0,
+    "order": "name asc"
+  }}')
+```
+
+**Pagination formula:**
+- Page 1: offset=0, limit=50
+- Page 2: offset=50, limit=50
+- Page N: offset=(N-1)*limit, limit=50
+
+**Iterate all records:**
+```python
+offset = 0
+limit = 100
+while True:
+    results = execute_method('{model}', 'search_read',
+      kwargs_json=f'{{"domain": [], "limit": {{limit}}, "offset": {{offset}}}}')
+    if len(results) < limit:
+        break  # Last page
+    offset += limit
+```
+
+**Default limits:**
+- MCP default: 100 records
+- MCP maximum: 1000 records
+- Use search_count first to know total
+""")]
+
+
+@mcp.prompt(name="aggregation-report")
+def aggregation_report_prompt(model: str = "sale.order") -> list[Message]:
+    """Guide for creating aggregation reports"""
+    return [Message(f"""## Aggregation Report Guide for {model}
+
+**Read odoo://aggregation for complete reference.**
+
+**Using read_group with execute_method:**
+
+```
+execute_method('{model}', 'read_group',
+  args_json='[DOMAIN]',
+  kwargs_json='{{
+    "fields": ["field:aggregator", ...],
+    "groupby": ["field", ...]
+  }}')
+```
+
+**Aggregators:**
+| Aggregator | Purpose |
+|------------|---------|
+| `__count` | Count records |
+| `sum` | Sum values |
+| `avg` | Average |
+| `min` | Minimum |
+| `max` | Maximum |
+| `count_distinct` | Distinct count |
+
+**Date Grouping:**
+- `:day`, `:week`, `:month`, `:quarter`, `:year`
+- Example: `"groupby": ["create_date:month"]`
+
+**Examples for {model}:**
+
+1. Total by partner:
+```
+kwargs_json='{{"fields": ["amount_total:sum"], "groupby": ["partner_id"]}}'
+```
+
+2. Count by state:
+```
+kwargs_json='{{"fields": ["__count"], "groupby": ["state"]}}'
+```
+
+3. Monthly totals:
+```
+kwargs_json='{{"fields": ["amount_total:sum", "__count"], "groupby": ["date_order:month"]}}'
+```
+
+4. Multi-level grouping:
+```
+kwargs_json='{{"fields": ["amount_total:sum"], "groupby": ["partner_id", "state"]}}'
+```
+
+**Note:** read_group is deprecated in v19. Current MCP uses it for compatibility.
+New code should use formatted_read_group (web module).
+""")]
 
 
 # =====================================================
@@ -1315,192 +1607,6 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "params": {"name": "str", "channel_type": "channel|chat|group"},
     },
 }
-
-
-@mcp.tool(
-    description="""Search available Odoo operations by keyword.
-
-    This enables the CODE-FIRST PATTERN for 98% token reduction.
-    Instead of loading all tool definitions upfront, search for
-    what you need on-demand.
-
-    Examples:
-    - "invoice" → create_invoice, post_invoice, get_overdue_invoices
-    - "sales" → create_quotation, confirm_order
-    - "stock" → check_stock_levels, validate_delivery
-    """,
-    annotations={
-        "title": "Search Tools",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False
-    }
-)
-def search_tools(
-    ctx: Context,
-    query: str,
-    category: str = None,
-) -> Dict[str, Any]:
-    """
-    Search available Odoo operations by keyword.
-
-    Parameters:
-        query: Search term (e.g., "invoice", "sales", "stock")
-        category: Optional filter by category (sales, accounting, crm, stock, hr)
-
-    Returns:
-        Matching tools with their definitions and usage examples
-    """
-    query_lower = query.lower()
-    matches = []
-
-    for tool_name, tool_def in TOOL_REGISTRY.items():
-        # Search in name, description, and model
-        searchable = f"{tool_name} {tool_def.get('description', '')} {tool_def.get('model', '')}".lower()
-
-        if query_lower in searchable:
-            # Category filter
-            if category:
-                tool_model = tool_def.get("model", "")
-                category_match = {
-                    "sales": "sale.",
-                    "accounting": "account.",
-                    "crm": "crm.",
-                    "stock": "stock.",
-                    "hr": "hr.",
-                }.get(category.lower(), "")
-                if category_match and category_match not in tool_model:
-                    continue
-
-            matches.append({
-                "name": tool_name,
-                **tool_def
-            })
-
-    # Also search module knowledge for special methods
-    special_matches = []
-    for module_name, module_info in MODULE_KNOWLEDGE.get("modules", {}).items():
-        for method_name, method_info in module_info.get("special_methods", {}).items():
-            searchable = f"{method_name} {method_info.get('description', '')} {module_info.get('model', '')}".lower()
-            if query_lower in searchable:
-                special_matches.append({
-                    "name": method_name,
-                    "model": module_info.get("model"),
-                    "description": method_info.get("description"),
-                    "params": method_info.get("params", {}),
-                    "source": "module_knowledge"
-                })
-
-    return {
-        "success": True,
-        "result": {
-            "query": query,
-            "tools_found": len(matches) + len(special_matches),
-            "tools": matches,
-            "special_methods": special_matches,
-            "tip": "Use execute_workflow() for multi-step operations or execute_method() for single calls"
-        }
-    }
-
-
-@mcp.tool(
-    description="""Discover all available actions for a specific model.
-
-    Returns executable action definitions from:
-    1. Tool registry (pre-built workflows)
-    2. Module knowledge (special methods)
-    3. Server actions (ir.actions.server)
-    4. Standard ORM methods
-
-    This is DYNAMIC DISCOVERY - finds what's actually available
-    instead of assuming standard patterns.
-    """,
-    annotations={
-        "title": "Discover Model Actions",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False
-    }
-)
-def discover_model_actions(
-    ctx: Context,
-    model: str,
-) -> Dict[str, Any]:
-    """
-    Discover all available actions for a model.
-
-    Parameters:
-        model: Model name (e.g., "sale.order", "account.move")
-
-    Returns:
-        Comprehensive list of available actions with usage patterns
-    """
-    odoo = ctx.request_context.lifespan_context.odoo
-
-    result = {
-        "model": model,
-        "workflows": [],
-        "special_methods": [],
-        "server_actions": [],
-        "orm_methods": ["search", "search_read", "create", "write", "unlink", "read"],
-        "usage_examples": [],
-    }
-
-    # 1. Find tools in registry for this model
-    for tool_name, tool_def in TOOL_REGISTRY.items():
-        if tool_def.get("model") == model:
-            result["workflows"].append({
-                "name": tool_name,
-                "description": tool_def.get("description"),
-                "params": tool_def.get("params", {}),
-                "method": tool_def.get("method"),
-            })
-
-    # 2. Check module knowledge
-    for module_name, module_info in MODULE_KNOWLEDGE.get("modules", {}).items():
-        if module_info.get("model") == model:
-            for method_name, method_info in module_info.get("special_methods", {}).items():
-                result["special_methods"].append({
-                    "name": method_name,
-                    "description": method_info.get("description"),
-                    "params": method_info.get("params", {}),
-                    "replaces": method_info.get("instead_of"),
-                })
-            if module_info.get("notes"):
-                result["notes"] = module_info["notes"]
-
-    # 3. Get server actions from Odoo
-    try:
-        actions = odoo.search_read(
-            'ir.actions.server',
-            [('model_id.model', '=', model)],
-            fields=['name', 'state', 'code'],
-            limit=20
-        )
-        for action in actions:
-            result["server_actions"].append({
-                "name": action.get('name'),
-                "type": action.get('state'),
-            })
-    except Exception:
-        pass
-
-    # 4. Generate usage examples
-    if result["special_methods"]:
-        method = result["special_methods"][0]
-        result["usage_examples"].append({
-            "description": f"Call {method['name']}",
-            "code": f'execute_method("{model}", "{method["name"]}", args_json="[[id]]")'
-        })
-
-    result["usage_examples"].append({
-        "description": "Search records",
-        "code": f'execute_method("{model}", "search_read", kwargs_json=\'{{"domain": [], "limit": 10}}\')'
-    })
-
-    return {"success": True, "result": result}
 
 
 @mcp.tool(
@@ -1669,7 +1775,7 @@ def execute_workflow(
                     "lead_to_won - Convert lead and mark as won",
                     "create_and_post_invoice - Create and post a customer invoice",
                 ],
-                "tip": "Use search_tools() to find available operations"
+                "tip": "Read odoo://tools/{query} to find available operations"
             }
 
     except Exception as e:
@@ -1679,103 +1785,15 @@ def execute_workflow(
 
 
 # =====================================================
-# HIGH IMPACT: Aggregation Tool (read_group)
-# =====================================================
-
-
-@mcp.tool(
-    description="""Aggregate data using read_group for efficient reporting.
-
-    Instead of fetching all records and processing in Python,
-    use Odoo's read_group for database-level aggregation.
-
-    Examples:
-    - Total sales by customer: groupby=["partner_id"], fields=["amount_total:sum"]
-    - Count invoices by state: groupby=["state"], fields=["__count"]
-    - Average order value by month: groupby=["date_order:month"], fields=["amount_total:avg"]
-
-    Aggregation functions: sum, avg, min, max, count
-    Date grouping: :day, :week, :month, :quarter, :year
-    """,
-    annotations={
-        "title": "Aggregate Data",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False
-    }
-)
-def aggregate_data(
-    ctx: Context,
-    model: str,
-    groupby: str,
-    fields: str = None,
-    domain_json: str = "[]",
-) -> Dict[str, Any]:
-    """
-    Aggregate data using Odoo's read_group.
-
-    Parameters:
-        model: Model to aggregate (e.g., "sale.order", "account.move")
-        groupby: Comma-separated fields to group by (e.g., "partner_id,state")
-        fields: Comma-separated aggregation fields (e.g., "amount_total:sum,__count")
-        domain_json: JSON domain to filter records
-
-    Returns:
-        Aggregated data grouped by specified fields
-    """
-    odoo = ctx.request_context.lifespan_context.odoo
-
-    try:
-        domain = json.loads(domain_json) if domain_json else []
-    except json.JSONDecodeError as e:
-        return {"success": False, "error": f"Invalid domain_json: {e}"}
-
-    # Parse groupby
-    groupby_list = [g.strip() for g in groupby.split(",") if g.strip()]
-
-    # Parse fields (default to count)
-    if fields:
-        fields_list = [f.strip() for f in fields.split(",") if f.strip()]
-    else:
-        fields_list = ["__count"]
-
-    try:
-        result = odoo.execute_method(
-            model,
-            "read_group",
-            domain,
-            fields=fields_list,
-            groupby=groupby_list,
-        )
-
-        return {
-            "success": True,
-            "result": {
-                "model": model,
-                "domain": domain,
-                "groupby": groupby_list,
-                "fields": fields_list,
-                "data": result,
-                "count": len(result),
-            }
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-# =====================================================
-# HIGH IMPACT: Business Workflow Prompts
+# Business Workflow Prompts
 # =====================================================
 
 
 @mcp.prompt(name="quote-to-cash")
-def quote_to_cash_prompt(order_id: str = None) -> List[Dict[str, str]]:
+def quote_to_cash_prompt(order_id: str = None) -> list[Message]:
     """Complete quote-to-cash workflow"""
     if order_id:
-        return [{
-            "role": "user",
-            "content": f"""Execute the quote-to-cash workflow for order {order_id}:
+        return [Message(f"""Execute the quote-to-cash workflow for order {order_id}:
 
 Use execute_workflow("quote_to_cash", '{{"order_id": {order_id}}}')
 
@@ -1785,12 +1803,9 @@ This will:
 3. Post invoice (action_post)
 
 Report the result of each step.
-"""
-        }]
+""")]
     else:
-        return [{
-            "role": "user",
-            "content": """Guide me through creating a complete sales flow:
+        return [Message("""Guide me through creating a complete sales flow:
 
 1. First, find or create a customer (res.partner)
 2. Create a quotation (sale.order) with order lines
@@ -1798,23 +1813,19 @@ Report the result of each step.
 4. Create and post the invoice
 5. Optionally register payment
 
-Use search_tools("sales") to find available operations.
-"""
-        }]
+Read odoo://tools/sales for available operations.
+""")]
 
 
 @mcp.prompt(name="ar-aging-report")
-def ar_aging_report_prompt() -> List[Dict[str, str]]:
+def ar_aging_report_prompt() -> list[Message]:
     """Generate accounts receivable aging report"""
-    return [{
-        "role": "user",
-        "content": """Generate an AR aging report:
+    return [Message("""Generate an AR aging report:
 
-1. Use aggregate_data() to get totals by customer:
-   - model: "account.move"
-   - groupby: "partner_id"
-   - fields: "amount_residual:sum"
-   - domain_json: '[["move_type", "=", "out_invoice"], ["payment_state", "in", ["not_paid", "partial"]]]'
+1. Use execute_method with read_group (see odoo://aggregation):
+   execute_method("account.move", "read_group",
+     args_json='[[["move_type", "=", "out_invoice"], ["payment_state", "in", ["not_paid", "partial"]]]]',
+     kwargs_json='{"fields": ["amount_residual:sum"], "groupby": ["partner_id"]}')
 
 2. Then categorize by aging buckets:
    - Current (not yet due)
@@ -1824,54 +1835,44 @@ def ar_aging_report_prompt() -> List[Dict[str, str]]:
    - 90+ days overdue
 
 3. Present as a formatted table with customer totals and recommendations.
-"""
-    }]
+""")]
 
 
 @mcp.prompt(name="inventory-check")
-def inventory_check_prompt(product: str = None) -> List[Dict[str, str]]:
+def inventory_check_prompt(product: str = None) -> list[Message]:
     """Check inventory levels"""
     if product:
-        return [{
-            "role": "user",
-            "content": f"""Check inventory for "{product}":
+        return [Message(f"""Check inventory for "{product}":
 
-1. Find the product using find_model("product") then search
-2. Use aggregate_data on stock.quant:
-   - groupby: "location_id"
-   - fields: "quantity:sum"
-   - domain_json with the product_id filter
+1. Find the product: read odoo://find-model/product, then search product.product
+2. Use execute_method with read_group (see odoo://aggregation):
+   execute_method("stock.quant", "read_group",
+     args_json='[[["product_id", "=", PRODUCT_ID]]]',
+     kwargs_json='{{"fields": ["quantity:sum"], "groupby": ["location_id"]}}')
 
 3. Show available quantity by warehouse/location
-"""
-        }]
+""")]
     else:
-        return [{
-            "role": "user",
-            "content": """Check overall inventory status:
+        return [Message("""Check overall inventory status:
 
-1. Use aggregate_data on stock.quant:
-   - model: "stock.quant"
-   - groupby: "product_id"
-   - fields: "quantity:sum,value:sum"
+1. Use execute_method with read_group (see odoo://aggregation):
+   execute_method("stock.quant", "read_group", args_json='[[]]',
+     kwargs_json='{"fields": ["quantity:sum", "value:sum"], "groupby": ["product_id"]}')
 
 2. Identify low stock items (quantity < reorder point)
 3. Show top products by value
-"""
-        }]
+""")]
 
 
 @mcp.prompt(name="crm-pipeline")
-def crm_pipeline_prompt() -> List[Dict[str, str]]:
+def crm_pipeline_prompt() -> list[Message]:
     """Analyze CRM pipeline"""
-    return [{
-        "role": "user",
-        "content": """Analyze the CRM pipeline:
+    return [Message("""Analyze the CRM pipeline:
 
-1. Use aggregate_data on crm.lead:
-   - groupby: "stage_id"
-   - fields: "expected_revenue:sum,__count"
-   - domain_json: '[["type", "=", "opportunity"]]'
+1. Use execute_method with read_group (see odoo://aggregation):
+   execute_method("crm.lead", "read_group",
+     args_json='[[["type", "=", "opportunity"]]]',
+     kwargs_json='{"fields": ["expected_revenue:sum", "__count"], "groupby": ["stage_id"]}')
 
 2. Calculate conversion rates between stages
 3. Identify opportunities that need attention:
@@ -1880,28 +1881,29 @@ def crm_pipeline_prompt() -> List[Dict[str, str]]:
    - Upcoming activities
 
 4. Present a pipeline summary with recommendations.
-"""
-    }]
+""")]
 
 
 @mcp.prompt(name="customer-360")
-def customer_360_prompt(customer: str) -> List[Dict[str, str]]:
+def customer_360_prompt(customer: str) -> list[Message]:
     """Complete customer 360 view"""
-    return [{
-        "role": "user",
-        "content": f"""Get a 360-degree view of customer "{customer}":
+    return [Message(f"""Get a 360-degree view of customer "{customer}":
 
-1. Find the customer: find_model("customer"), then search res.partner
+1. Find the customer: read odoo://find-model/customer, then search res.partner
 
 2. Get their data:
    - Basic info (name, email, phone, address)
    - Credit limit and receivables
 
-3. Sales history:
-   - aggregate_data("sale.order", "state", "amount_total:sum", domain with partner_id)
+3. Sales history (see odoo://aggregation):
+   execute_method("sale.order", "read_group",
+     args_json='[[["partner_id", "=", CUSTOMER_ID]]]',
+     kwargs_json='{{"fields": ["amount_total:sum"], "groupby": ["state"]}}')
 
 4. Invoice status:
-   - aggregate_data("account.move", "payment_state", "amount_residual:sum", domain for invoices)
+   execute_method("account.move", "read_group",
+     args_json='[[["partner_id", "=", CUSTOMER_ID], ["move_type", "=", "out_invoice"]]]',
+     kwargs_json='{{"fields": ["amount_residual:sum"], "groupby": ["payment_state"]}}')
 
 5. Recent activities:
    - Messages and notes from mail.message
@@ -1910,19 +1912,16 @@ def customer_360_prompt(customer: str) -> List[Dict[str, str]]:
    - Open opportunities from crm.lead
 
 Present a comprehensive customer profile with key insights.
-"""
-    }]
+""")]
 
 
 @mcp.prompt(name="daily-operations")
-def daily_operations_prompt() -> List[Dict[str, str]]:
+def daily_operations_prompt() -> list[Message]:
     """Daily operations dashboard"""
-    return [{
-        "role": "user",
-        "content": """Generate a daily operations summary:
+    return [Message("""Generate a daily operations summary:
 
 **Sales:**
-- New orders today (aggregate sale.order by state where create_date = today)
+- New orders today (use read_group on sale.order, see odoo://aggregation)
 - Pending quotations needing follow-up
 
 **Inventory:**
@@ -1931,16 +1930,15 @@ def daily_operations_prompt() -> List[Dict[str, str]]:
 
 **Accounting:**
 - Invoices to send (draft invoices)
-- Overdue payments (use AR aging)
+- Overdue payments (use AR aging prompt)
 - Cash position
 
 **CRM:**
 - Activities due today
 - Hot opportunities (high probability, high value)
 
-Use aggregate_data for efficient queries. Present as a dashboard.
-"""
-    }]
+Use execute_method with read_group for efficient aggregation. Present as a dashboard.
+""")]
 
 
 # ----- Resource for listing available workflows -----
@@ -1954,7 +1952,7 @@ def get_tool_registry() -> str:
     """Get the complete tool registry for code-first pattern."""
     return json.dumps({
         "description": "Pre-built tools and workflows for common Odoo operations",
-        "usage": "Use search_tools(query) to find tools, execute_workflow(name, params) to run",
+        "usage": "Read odoo://tools/{query} to find tools, execute_workflow(name, params) to run",
         "tools": TOOL_REGISTRY,
         "categories": {
             "sales": [k for k, v in TOOL_REGISTRY.items() if "sale" in v.get("model", "")],

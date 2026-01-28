@@ -110,6 +110,7 @@ V2_KWARGS_MAPPING: Dict[str, str] = {
     "attributes": "attributes",
     "lazy": "lazy",
     "orderby": "order",  # v1 uses orderby, v2 uses order
+    "load": "load",  # read() param: '_classic_read' (default) or None for raw IDs
 }
 
 
