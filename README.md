@@ -119,9 +119,11 @@ Available workflows: `quote_to_cash`, `lead_to_won`, `create_and_post_invoice`, 
 
 ## Resources (Discovery)
 
+**Any Odoo model can be discovered dynamically** - the Module Knowledge section only documents special methods. Standard ORM methods (`create`, `write`, `search_read`, etc.) work on ALL models.
+
 | Resource | Description |
 |----------|-------------|
-| `odoo://models` | List all models |
+| `odoo://models` | List all models in your Odoo instance |
 | `odoo://model/{name}/schema` | Complete schema with field types |
 | `odoo://model/{name}/docs` | Rich docs: labels, help text, selections |
 | `odoo://methods/{model}` | Available methods (read, write, introspection, special) |
@@ -134,7 +136,22 @@ Available workflows: `quote_to_cash`, `lead_to_won`, `create_and_post_invoice`, 
 | `odoo://hierarchical` | Parent/child tree queries |
 | `odoo://workflows` | Business workflows |
 | `odoo://concepts` | Business term → model mappings |
-| `odoo://module-knowledge` | All module-specific knowledge |
+| `odoo://module-knowledge` | Module-specific special methods |
+
+### Dynamic Discovery Example
+
+For any module not in Module Knowledge (e.g., Fleet):
+```python
+# 1. Find the model
+odoo://find-model/fleet         # → fleet.vehicle
+
+# 2. Get schema
+odoo://model/fleet.vehicle/schema
+
+# 3. Query with standard ORM
+execute_method("fleet.vehicle", "search_read",
+    kwargs_json='{"fields": ["name", "driver_id"], "limit": 10}')
+```
 
 ## Prompts
 
