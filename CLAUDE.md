@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **Odoo MCP Server 19** - A standalone MCP server for Odoo 19+ using the v2 JSON-2 API.
 
-- **Version**: 1.5.0
+- **Version**: 1.6.0
 - **MCP Spec**: MCP 0.2 (FastMCP 3.0.0+)
 - **Odoo Support**: v19+ only (v2 JSON-2 API)
 
@@ -49,8 +49,16 @@ odoo-mcp-19/
 - Supports 17+ ORM methods (search, create, write, etc.)
 
 **4. Module Knowledge** (`module_knowledge.json`)
-- Special methods for 10 Odoo modules
+- Special methods for 13 Odoo modules (including AI module)
+- 30 ORM methods documented
 - Error patterns with suggestions
+- Validated against Odoo 19 source code
+
+**5. AI Module** (Enterprise only)
+- Models: ai.agent, ai.topic, ai.agent.source, ai.embedding
+- LLM support: OpenAI (gpt-4o, gpt-5), Google (gemini-2.5-pro/flash)
+- RAG system with pgvector embeddings
+- Special methods: get_direct_response, create_from_urls, create_from_attachments
 
 ## Development Commands
 

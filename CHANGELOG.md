@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-01-28
+
+### Added
+- **AI Module Documentation** (Enterprise) - Complete documentation for Odoo 19 AI module
+  - 6 models documented: `ai.agent`, `ai.topic`, `ai.agent.source`, `ai.embedding`, `ai.composer`, `ai.prompt.button`
+  - 5 special methods: `get_direct_response`, `open_agent_chat`, `create_from_attachments`, `create_from_binary_files`, `create_from_urls`
+  - LLM models reference: OpenAI (gpt-3.5-turbo through gpt-5), Google (gemini-2.5-pro/flash)
+  - Response styles: analytical (0.2), balanced (0.5), creative (0.8)
+  - Default topics: Natural Language Search, Information Retrieval, Create Leads
+  - RAG workflow documentation (source → process → embed → search)
+  - AI Tools system (ir.actions.server with use_in_ai=True)
+
+- **16 New ORM Methods** documented in `orm_methods` section
+  - Recordset operations: `browse`, `exists`, `ensure_one`
+  - Filtering/mapping: `filtered`, `filtered_domain`, `mapped`, `sorted`, `grouped`
+  - Environment modifiers: `with_context`, `with_user`, `with_company`, `sudo`
+  - Creation: `name_create`
+  - Fetching: `search_fetch`, `fetch`
+  - Archiving: `action_archive`, `action_unarchive`
+
+- **Enhanced Module Documentation** (validated against Odoo 19 source code)
+  - `sale.order`: +7 methods (action_lock, action_unlock, action_quotation_sent, action_preview_sale_order, action_update_taxes, action_update_prices, action_view_invoice)
+  - `account.move`: +8 methods (button_set_checked, action_force_register_payment, action_reverse, action_duplicate, action_send_and_print, action_invoice_sent, action_switch_move_type) + move_types reference
+  - `crm.lead`: +6 methods (action_set_won_rainbowman, action_set_automated_probability, action_reschedule_meeting, action_show_potential_duplicates, action_restore) + lead vs opportunity docs
+  - `stock.picking`: +9 methods (action_detailed_operations, action_split_transfer, action_toggle_is_locked, action_put_in_pack, button_scrap, action_see_move_scrap, action_see_packages, action_see_returns, action_view_reception_report)
+  - `purchase.order`: +6 methods (button_approve, button_lock, button_unlock, action_rfq_send, action_acknowledge, action_merge)
+
+- **Relational Commands Documentation** - Enhanced Command class reference with CREATE, UPDATE, DELETE, UNLINK, LINK, CLEAR, SET
+
+### Changed
+- **module_knowledge.json** upgraded to v1.4.0
+- Added `_validated_against` field for traceability
+- Total modules: 13 (was 12)
+- Total ORM methods: 30 (was 14)
+
+### Documentation
+- Validated against Odoo 19 Enterprise source code
+- Validated against official Odoo 19 documentation
+- Source paths: `/odoo-19.0+e.20260128/` (Enterprise), `/odoo-19.0.post20260128/` (Community)
+
 ## [1.5.0] - 2026-01-28
 
 ### Added
@@ -225,6 +265,7 @@ This reduces cognitive load and keeps the tool interface minimal:
   - Docker support with `Dockerfile` and `docker-compose.yml`
   - `run-docker.sh` wrapper for Claude Desktop
 
+[1.6.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.6.0
 [1.5.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.5.0
 [1.4.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.4.1
 [1.4.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.4.0

@@ -174,15 +174,16 @@ The module knowledge includes comprehensive documentation for:
 
 ## Module Knowledge
 
-Built-in knowledge for 12+ Odoo modules with special methods:
+Built-in knowledge for 13+ Odoo modules with special methods:
 
 | Module | Model | Special Methods |
 |--------|-------|-----------------|
-| `sale` | sale.order | `action_confirm`, `action_cancel`, `_create_invoices` |
-| `account` | account.move | `action_post`, `button_draft`, `action_register_payment` |
+| `ai` | ai.agent | `get_direct_response`, `open_agent_chat` (Enterprise) |
+| `sale` | sale.order | `action_confirm`, `action_cancel`, `action_lock`, `_create_invoices` |
+| `account` | account.move | `action_post`, `button_draft`, `action_reverse`, `action_register_payment` |
 | `crm` | crm.lead | `action_set_won`, `action_set_lost`, `convert_opportunity` |
-| `stock` | stock.picking | `button_validate`, `action_confirm`, `action_assign` |
-| `purchase` | purchase.order | `button_confirm`, `action_create_invoice` |
+| `stock` | stock.picking | `button_validate`, `action_confirm`, `action_assign`, `action_put_in_pack` |
+| `purchase` | purchase.order | `button_confirm`, `button_approve`, `action_create_invoice` |
 | `knowledge` | knowledge.article | `article_create`, `article_duplicate` |
 | `hr_expense` | hr.expense | `action_submit_expenses` |
 | `hr_leave` | hr.leave | `action_approve`, `action_refuse` |

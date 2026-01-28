@@ -1,6 +1,8 @@
 {
   "_description": "Module-specific methods and patterns for Odoo 19+",
-  "_version": "1.3.0",
+  "_version": "1.4.0",
+  "_updated": "2026-01-28",
+  "_validated_against": "Odoo 19.0 source code and official documentation",
 
   "json2_api": {
     "_note": "Official Odoo 19 JSON-2 API specification (from odoo.com/documentation/19.0)",
@@ -501,6 +503,203 @@
         "description": "Check if user can create invoices",
         "call": "execute_method('account.move', 'check_access_rights', args_json='[\"create\"]')"
       }
+    },
+    "browse": {
+      "signature": "Model.browse(ids)",
+      "description": "Return a recordset for the given IDs without fetching data from database",
+      "parameters": {
+        "ids": {"type": "int | list[int]", "description": "Single ID or list of IDs"}
+      },
+      "returns": "Recordset containing the specified records (may include deleted/non-existent)",
+      "note": "Does NOT verify records exist - use exists() to filter. Useful for building recordsets from known IDs.",
+      "example": {
+        "description": "Browse specific partner IDs",
+        "note": "Typically used internally; for API access use read() with IDs instead"
+      }
+    },
+    "exists": {
+      "signature": "records.exists()",
+      "description": "Return subset of records that actually exist in database",
+      "parameters": {},
+      "returns": "Recordset with only existing records (filters out deleted/invalid IDs)",
+      "use_case": "Validate records before operations, clean up stale recordsets",
+      "example": {
+        "description": "Filter out deleted records",
+        "note": "Useful after browse() or when working with potentially stale IDs"
+      }
+    },
+    "ensure_one": {
+      "signature": "records.ensure_one()",
+      "description": "Verify recordset contains exactly one record, raise error otherwise",
+      "parameters": {},
+      "returns": "self (the single-record recordset)",
+      "exceptions": {
+        "ValueError": "If recordset is empty or contains multiple records"
+      },
+      "use_case": "Validate single record before operations that expect exactly one"
+    },
+    "filtered": {
+      "signature": "records.filtered(func)",
+      "description": "Return records satisfying the filter function",
+      "parameters": {
+        "func": {"type": "callable | str", "description": "Function taking record returning bool, or field name (truthy filter)"}
+      },
+      "returns": "Recordset with matching records",
+      "examples": [
+        {"description": "Filter by lambda", "code": "partners.filtered(lambda p: p.is_company)"},
+        {"description": "Filter by field name", "code": "partners.filtered('is_company')"}
+      ],
+      "note": "Not directly callable via API - used internally in Odoo code"
+    },
+    "filtered_domain": {
+      "signature": "records.filtered_domain(domain)",
+      "description": "Filter records using a domain expression (in-memory, no SQL)",
+      "parameters": {
+        "domain": {"type": "list", "description": "Standard Odoo domain filter"}
+      },
+      "returns": "Recordset with matching records",
+      "use_case": "Apply domain filter to already-loaded recordset without new DB query",
+      "note": "Faster than search when records are already in cache"
+    },
+    "mapped": {
+      "signature": "records.mapped(func)",
+      "description": "Apply function to all records and return results",
+      "parameters": {
+        "func": {"type": "callable | str", "description": "Function or field name (dot notation supported)"}
+      },
+      "returns": "List of results, or recordset if mapping to relational field",
+      "examples": [
+        {"description": "Get all names", "code": "partners.mapped('name')"},
+        {"description": "Get related countries", "code": "partners.mapped('country_id')"},
+        {"description": "Traverse relations", "code": "orders.mapped('partner_id.country_id.name')"}
+      ],
+      "note": "Since v13, relational field access works like mapped: records.partner_id == records.mapped('partner_id')"
+    },
+    "sorted": {
+      "signature": "records.sorted(key=None, reverse=False)",
+      "description": "Return recordset sorted by key function",
+      "parameters": {
+        "key": {"type": "callable | str | None", "description": "Sort key function or field name"},
+        "reverse": {"type": "bool", "default": "False", "description": "Reverse sort order"}
+      },
+      "returns": "New sorted recordset",
+      "examples": [
+        {"description": "Sort by name", "code": "partners.sorted('name')"},
+        {"description": "Sort by date descending", "code": "orders.sorted('date_order', reverse=True)"}
+      ]
+    },
+    "grouped": {
+      "signature": "records.grouped(key)",
+      "description": "Group records by key, returning dict of recordsets",
+      "parameters": {
+        "key": {"type": "callable | str", "description": "Grouping function or field name"}
+      },
+      "returns": "Dictionary mapping keys to recordsets",
+      "example": {
+        "description": "Group orders by customer",
+        "code": "orders.grouped('partner_id')"
+      },
+      "note": "New in Odoo 17+"
+    },
+    "with_context": {
+      "signature": "records.with_context(*args, **kwargs)",
+      "description": "Return recordset with modified context",
+      "parameters": {
+        "args": {"type": "dict", "description": "Context dict to merge (replaces if single arg)"},
+        "kwargs": {"type": "any", "description": "Context key=value pairs to add"}
+      },
+      "returns": "New recordset with updated context",
+      "use_cases": ["Set language for translations", "Pass flags to methods", "Set default values"],
+      "example": {
+        "description": "Set language context",
+        "code": "partners.with_context(lang='fr_FR').read(['name'])"
+      }
+    },
+    "with_user": {
+      "signature": "records.with_user(user)",
+      "description": "Return recordset with different user (for access rights)",
+      "parameters": {
+        "user": {"type": "int | res.users", "description": "User ID or record"}
+      },
+      "returns": "New recordset operating as specified user",
+      "note": "Changes access rights context, not sudo"
+    },
+    "with_company": {
+      "signature": "records.with_company(company)",
+      "description": "Return recordset with different company context",
+      "parameters": {
+        "company": {"type": "int | res.company", "description": "Company ID or record"}
+      },
+      "returns": "New recordset in specified company context",
+      "use_case": "Multi-company operations, cross-company data access"
+    },
+    "sudo": {
+      "signature": "records.sudo(flag=True)",
+      "description": "Return recordset bypassing access rights (superuser mode)",
+      "parameters": {
+        "flag": {"type": "bool", "default": "True", "description": "Enable/disable sudo mode"}
+      },
+      "returns": "New recordset in superuser mode",
+      "warning": "Bypasses ALL security - use sparingly and carefully",
+      "note": "Cannot be called via external API - internal use only"
+    },
+    "name_create": {
+      "signature": "Model.name_create(name)",
+      "description": "Create record with only a name value (quick create)",
+      "parameters": {
+        "name": {"type": "str", "description": "Display name for new record"}
+      },
+      "returns": "Tuple (id, display_name) of created record",
+      "use_case": "Quick creation from autocomplete dropdowns",
+      "example": {
+        "description": "Quick create a partner",
+        "call": "execute_method('res.partner', 'name_create', args_json='[\"New Partner\"]')"
+      }
+    },
+    "search_fetch": {
+      "signature": "Model.search_fetch(domain, field_names, offset=0, limit=None, order=None)",
+      "description": "Search and prefetch fields in optimized way (new in v17)",
+      "parameters": {
+        "domain": {"type": "list", "description": "Search domain"},
+        "field_names": {"type": "list[str]", "description": "Fields to prefetch into cache"},
+        "offset": {"type": "int", "default": "0"},
+        "limit": {"type": "int | None", "default": "None"},
+        "order": {"type": "str | None", "default": "None"}
+      },
+      "returns": "Recordset with specified fields pre-loaded in cache",
+      "vs_search_read": "Returns recordset (not dicts), better for further ORM operations",
+      "note": "Preferred over search() when you need to access multiple fields"
+    },
+    "fetch": {
+      "signature": "records.fetch(field_names)",
+      "description": "Prefetch specified fields for recordset (populate cache)",
+      "parameters": {
+        "field_names": {"type": "list[str]", "description": "Fields to fetch into cache"}
+      },
+      "returns": "self (recordset unchanged, but cache populated)",
+      "use_case": "Optimize batch operations by pre-loading needed fields"
+    },
+    "action_archive": {
+      "signature": "records.action_archive()",
+      "description": "Archive records (set active=False)",
+      "parameters": {},
+      "returns": "True",
+      "note": "Only available on models with 'active' field",
+      "example": {
+        "description": "Archive partners",
+        "call": "execute_method('res.partner', 'action_archive', args_json='[[1, 2, 3]]')"
+      }
+    },
+    "action_unarchive": {
+      "signature": "records.action_unarchive()",
+      "description": "Unarchive records (set active=True)",
+      "parameters": {},
+      "returns": "True",
+      "note": "Only available on models with 'active' field",
+      "example": {
+        "description": "Unarchive partners",
+        "call": "execute_method('res.partner', 'action_unarchive', args_json='[[1, 2, 3]]')"
+      }
     }
   },
 
@@ -664,6 +863,7 @@
 
   "module_documentation": {
     "_note": "Maps module names to documentation and GitHub paths for Odoo 19.0",
+    "ai": {"docs": "/applications/productivity/ai", "github": null, "note": "Enterprise only"},
     "sale": {"docs": "/applications/sales/sales", "github": "/sale/models/"},
     "purchase": {"docs": "/applications/inventory_and_mrp/purchase", "github": "/purchase/models/"},
     "stock": {"docs": "/applications/inventory_and_mrp/inventory", "github": "/stock/models/"},
@@ -685,6 +885,12 @@
 
   "model_to_module": {
     "_note": "Maps model names to their parent module",
+    "ai.agent": "ai",
+    "ai.topic": "ai",
+    "ai.agent.source": "ai",
+    "ai.embedding": "ai",
+    "ai.composer": "ai",
+    "ai.prompt.button": "ai",
     "sale.order": "sale",
     "sale.order.line": "sale",
     "purchase.order": "purchase",
@@ -736,7 +942,46 @@
       "text": ["like", "ilike", "=like", "=ilike"],
       "logic": ["&", "|", "!"]
     },
+    "relational_commands": {
+      "_note": "Commands for One2many and Many2many fields (Command class in odoo.fields)",
+      "CREATE": {
+        "tuple": [0, 0, {"values": "..."}],
+        "description": "Create a new record and link it",
+        "applies_to": ["One2many", "Many2many"]
+      },
+      "UPDATE": {
+        "tuple": [1, "id", {"values": "..."}],
+        "description": "Update an existing linked record",
+        "applies_to": ["One2many"]
+      },
+      "DELETE": {
+        "tuple": [2, "id", 0],
+        "description": "Remove record from database (unlink + delete)",
+        "applies_to": ["One2many"]
+      },
+      "UNLINK": {
+        "tuple": [3, "id", 0],
+        "description": "Remove link without deleting record",
+        "applies_to": ["Many2many"]
+      },
+      "LINK": {
+        "tuple": [4, "id", 0],
+        "description": "Link an existing record",
+        "applies_to": ["Many2many"]
+      },
+      "CLEAR": {
+        "tuple": [5, 0, 0],
+        "description": "Remove all links (does not delete records)",
+        "applies_to": ["Many2many"]
+      },
+      "SET": {
+        "tuple": [6, 0, ["ids"]],
+        "description": "Replace all links with given IDs",
+        "applies_to": ["Many2many"]
+      }
+    },
     "one2many_commands": {
+      "_note": "Legacy format reference - use relational_commands above",
       "0": {"syntax": "(0, 0, {values})", "description": "Create new linked record"},
       "1": {"syntax": "(1, id, {values})", "description": "Update existing record"},
       "2": {"syntax": "(2, id, 0)", "description": "Delete record"},
@@ -806,8 +1051,39 @@
           "params": {},
           "description": "Open wizard to send quotation by email"
         },
+        "action_quotation_sent": {
+          "params": {},
+          "description": "Mark quotation as sent",
+          "requires_ids": true
+        },
+        "action_lock": {
+          "params": {},
+          "description": "Lock the sales order (prevent modifications)",
+          "requires_ids": true
+        },
+        "action_unlock": {
+          "params": {},
+          "description": "Unlock the sales order",
+          "requires_ids": true
+        },
+        "action_preview_sale_order": {
+          "params": {},
+          "description": "Open portal preview of the order"
+        },
+        "action_update_taxes": {
+          "params": {},
+          "description": "Recompute taxes on order lines"
+        },
+        "action_update_prices": {
+          "params": {},
+          "description": "Update prices based on current pricelist"
+        },
+        "action_view_invoice": {
+          "params": {"invoices": "recordset|false"},
+          "description": "Open linked invoices view"
+        },
         "_create_invoices": {
-          "params": {"grouped": "boolean", "final": "boolean"},
+          "params": {"grouped": "boolean", "final": "boolean", "date": "date|null"},
           "description": "Create invoices from confirmed orders"
         }
       },
@@ -834,12 +1110,55 @@
           "description": "Cancel the entry",
           "requires_ids": true
         },
+        "button_set_checked": {
+          "params": {},
+          "description": "Mark entry as checked/reviewed",
+          "requires_ids": true
+        },
         "action_register_payment": {
           "params": {},
           "description": "Open payment registration wizard"
+        },
+        "action_force_register_payment": {
+          "params": {},
+          "description": "Force register payment (bypass checks)"
+        },
+        "action_reverse": {
+          "params": {},
+          "description": "Create reversal/credit note entry"
+        },
+        "action_duplicate": {
+          "params": {},
+          "description": "Duplicate the invoice"
+        },
+        "action_send_and_print": {
+          "params": {},
+          "description": "Send invoice by email and/or print"
+        },
+        "action_invoice_sent": {
+          "params": {},
+          "description": "Mark invoice as sent",
+          "requires_ids": true
+        },
+        "action_switch_move_type": {
+          "params": {},
+          "description": "Switch between invoice types (customer/vendor)"
+        },
+        "action_view_invoice": {
+          "params": {"invoices": "recordset|false"},
+          "description": "Open invoice view"
         }
       },
-      "notes": "move_type: 'out_invoice' (customer), 'in_invoice' (vendor), 'entry' (journal)"
+      "move_types": {
+        "out_invoice": "Customer Invoice",
+        "in_invoice": "Vendor Bill",
+        "out_refund": "Customer Credit Note",
+        "in_refund": "Vendor Refund",
+        "entry": "Journal Entry",
+        "out_receipt": "Sales Receipt",
+        "in_receipt": "Purchase Receipt"
+      },
+      "notes": "move_type determines invoice direction. state: draft, posted, cancel"
     },
 
     "crm": {
@@ -850,18 +1169,47 @@
           "description": "Mark opportunity as won",
           "requires_ids": true
         },
+        "action_set_won_rainbowman": {
+          "params": {},
+          "description": "Mark as won with celebration animation",
+          "requires_ids": true
+        },
         "action_set_lost": {
           "params": {"lost_reason_id": "integer", "lost_feedback": "string"},
           "description": "Mark opportunity as lost"
         },
+        "action_set_automated_probability": {
+          "params": {},
+          "description": "Reset to AI-calculated probability"
+        },
         "convert_opportunity": {
-          "params": {"partner_id": "integer"},
+          "params": {"partner_id": "integer", "user_ids": "list|false", "team_id": "integer|false"},
           "description": "Convert lead to opportunity"
         },
         "action_schedule_meeting": {
-          "params": {},
+          "params": {"smart_calendar": "boolean"},
           "description": "Open meeting scheduler"
+        },
+        "action_reschedule_meeting": {
+          "params": {},
+          "description": "Reschedule existing meeting"
+        },
+        "action_show_potential_duplicates": {
+          "params": {},
+          "description": "Show potential duplicate leads"
+        },
+        "action_unarchive": {
+          "params": {},
+          "description": "Restore archived lead"
+        },
+        "action_restore": {
+          "params": {},
+          "description": "Restore from lost state"
         }
+      },
+      "lead_vs_opportunity": {
+        "type_lead": "Lead - unqualified prospect",
+        "type_opportunity": "Opportunity - qualified sales opportunity"
       }
     },
 
@@ -886,6 +1234,42 @@
         "action_cancel": {
           "params": {},
           "description": "Cancel the picking"
+        },
+        "action_detailed_operations": {
+          "params": {},
+          "description": "Open detailed operations wizard"
+        },
+        "action_split_transfer": {
+          "params": {},
+          "description": "Split transfer into multiple pickings"
+        },
+        "action_toggle_is_locked": {
+          "params": {},
+          "description": "Lock/unlock the picking"
+        },
+        "action_put_in_pack": {
+          "params": {"package_id": "integer|false", "package_type_id": "integer|false", "package_name": "string|false"},
+          "description": "Put selected items into a package"
+        },
+        "button_scrap": {
+          "params": {},
+          "description": "Open scrap wizard for the picking"
+        },
+        "action_see_move_scrap": {
+          "params": {},
+          "description": "View scrap moves for this picking"
+        },
+        "action_see_packages": {
+          "params": {},
+          "description": "View packages in this picking"
+        },
+        "action_see_returns": {
+          "params": {},
+          "description": "View return pickings"
+        },
+        "action_view_reception_report": {
+          "params": {},
+          "description": "View reception report"
         }
       }
     },
@@ -898,6 +1282,11 @@
           "description": "Confirm purchase order",
           "requires_ids": true
         },
+        "button_approve": {
+          "params": {"force": "boolean"},
+          "description": "Approve purchase order (with optional force)",
+          "requires_ids": true
+        },
         "button_cancel": {
           "params": {},
           "description": "Cancel purchase order"
@@ -906,9 +1295,33 @@
           "params": {},
           "description": "Reset to draft"
         },
-        "action_create_invoice": {
+        "button_lock": {
           "params": {},
+          "description": "Lock the purchase order"
+        },
+        "button_unlock": {
+          "params": {},
+          "description": "Unlock the purchase order"
+        },
+        "action_rfq_send": {
+          "params": {},
+          "description": "Send RFQ to vendor by email"
+        },
+        "action_acknowledge": {
+          "params": {},
+          "description": "Acknowledge receipt of RFQ"
+        },
+        "action_create_invoice": {
+          "params": {"attachment_ids": "list|false"},
           "description": "Create vendor bill from PO"
+        },
+        "action_view_invoice": {
+          "params": {"invoices": "recordset|false"},
+          "description": "View linked vendor bills"
+        },
+        "action_merge": {
+          "params": {},
+          "description": "Merge selected purchase orders"
         }
       }
     },
@@ -990,6 +1403,184 @@
         }
       },
       "notes": "Use create() with kwargs_json={'vals_list': [{...}]}. For posting messages, create mail.message directly instead of message_post (which fails via JSON-2 API)."
+    },
+
+    "ai": {
+      "_note": "Odoo 19 Enterprise AI module - Agents, Topics, RAG Sources",
+      "models": {
+        "ai.agent": {
+          "description": "AI Agent configuration with LLM model, topics, and knowledge sources",
+          "key_fields": {
+            "name": "Agent name",
+            "subtitle": "Short description",
+            "system_prompt": "System instructions for the agent",
+            "llm_model": "LLM model selection (gpt-4o, gemini-2.5-flash, etc.)",
+            "response_style": "analytical | balanced | creative",
+            "restrict_to_sources": "Limit responses to RAG sources only",
+            "topic_ids": "Many2many to ai.topic",
+            "sources_ids": "One2many to ai.agent.source",
+            "partner_id": "Avatar partner for the agent",
+            "is_system_agent": "System agent (cannot be deleted)"
+          }
+        },
+        "ai.topic": {
+          "description": "Topic containing instructions and AI tools",
+          "key_fields": {
+            "name": "Topic title",
+            "description": "Short description",
+            "instructions": "Detailed instructions for the agent",
+            "tool_ids": "Many2many to ir.actions.server (use_in_ai=True)"
+          }
+        },
+        "ai.agent.source": {
+          "description": "Knowledge source for RAG (URLs or files)",
+          "key_fields": {
+            "name": "Source name",
+            "type": "url | binary",
+            "status": "processing | indexed | failed",
+            "url": "URL (if type=url)",
+            "attachment_id": "Attachment (if type=binary)",
+            "agent_id": "Parent agent",
+            "is_active": "Active toggle"
+          }
+        },
+        "ai.embedding": {
+          "description": "Embedding chunks for semantic search",
+          "key_fields": {
+            "attachment_id": "Source attachment",
+            "sequence": "Chunk order",
+            "content": "Text content",
+            "embedding_model": "Model used (text-embedding-3-small)",
+            "embedding_vector": "Vector(1536) - pgvector type"
+          }
+        },
+        "ai.composer": {
+          "description": "AI composer interface (transient)",
+          "note": "Wizard for AI interactions in forms"
+        },
+        "ai.prompt.button": {
+          "description": "Quick action buttons in AI chat",
+          "key_fields": {
+            "name": "Button label",
+            "prompt": "Prompt to send",
+            "agent_id": "Parent agent"
+          }
+        }
+      },
+      "special_methods": {
+        "get_direct_response": {
+          "model": "ai.agent",
+          "params": {"prompt": "string", "context_message": "string", "enable_html_response": "boolean"},
+          "description": "Generate AI response directly without chat",
+          "requires_ids": true
+        },
+        "open_agent_chat": {
+          "model": "ai.agent",
+          "params": {},
+          "description": "Open chat window with the agent",
+          "requires_ids": true
+        },
+        "create_from_attachments": {
+          "model": "ai.agent.source",
+          "params": {"attachment_ids": "list[integer]", "agent_id": "integer"},
+          "description": "Create sources from existing attachments"
+        },
+        "create_from_binary_files": {
+          "model": "ai.agent.source",
+          "params": {"files_datas": "list[base64]", "agent_id": "integer"},
+          "description": "Create sources from uploaded binary files"
+        },
+        "create_from_urls": {
+          "model": "ai.agent.source",
+          "params": {"urls": "list[string]", "agent_id": "integer"},
+          "description": "Create sources from URLs (will be scraped)"
+        }
+      },
+      "llm_models": {
+        "openai": {
+          "gpt-3.5-turbo": "GPT-3.5 Turbo",
+          "gpt-4": "GPT-4",
+          "gpt-4o": "GPT-4o (default)",
+          "gpt-4.1": "GPT-4.1",
+          "gpt-4.1-mini": "GPT-4.1 Mini",
+          "gpt-5": "GPT-5",
+          "gpt-5-mini": "GPT-5 Mini"
+        },
+        "google": {
+          "gemini-2.5-pro": "Gemini 2.5 Pro",
+          "gemini-2.5-flash": "Gemini 2.5 Flash",
+          "gemini-1.5-pro": "Gemini 1.5 Pro (deprecated)",
+          "gemini-1.5-flash": "Gemini 1.5 Flash (deprecated)"
+        },
+        "embedding_models": {
+          "openai": "text-embedding-3-small (1536 dims)",
+          "google": "gemini-embedding-001"
+        }
+      },
+      "response_styles": {
+        "analytical": {"temperature": 0.2, "description": "Precise, factual, consistent"},
+        "balanced": {"temperature": 0.5, "description": "Mix of accuracy and creativity"},
+        "creative": {"temperature": 0.8, "description": "Varied, human-like responses"}
+      },
+      "ai_tools": {
+        "_note": "AI tools are ir.actions.server with use_in_ai=True",
+        "default_tools": [
+          "AI: Get Menu Details",
+          "AI: Get Fields",
+          "AI: Open Menu List/Kanban/Pivot/Graph",
+          "AI: Compute Report Measures",
+          "AI: Adjust Search",
+          "AI: Search",
+          "AI: Read group"
+        ],
+        "creating_custom_tools": {
+          "model": "ir.actions.server",
+          "required_fields": {
+            "state": "code (Execute Code) or ai (AI)",
+            "use_in_ai": true,
+            "ai_tool_description": "Description for AI to understand the tool",
+            "ai_tool_schema": "JSON schema defining parameters"
+          },
+          "example": {
+            "name": "AI: Update Task Description",
+            "state": "code",
+            "use_in_ai": true,
+            "code": "record.write({'description': content})",
+            "ai_tool_schema": [{"name": "content", "type": "string", "description": "New description"}]
+          }
+        }
+      },
+      "default_topics": {
+        "natural_language_search": {
+          "description": "Interpret queries and open appropriate views",
+          "tools": ["Get Menu Details", "Get Fields", "Open Menu *", "Adjust Search"]
+        },
+        "information_retrieval": {
+          "description": "Search and aggregate data",
+          "tools": ["Get Fields", "Search", "Read group"]
+        },
+        "create_leads": {
+          "description": "Automated lead creation (requires CRM)",
+          "module_dependency": "crm"
+        }
+      },
+      "rag_workflow": {
+        "1_create_source": "Create ai.agent.source (url or binary)",
+        "2_process": "Cron: ir_cron_process_sources scrapes URLs",
+        "3_embed": "Cron: ir_cron_generate_embedding creates chunks + vectors",
+        "4_indexed": "Status changes to 'indexed', is_active=True",
+        "5_search": "Semantic search via pgvector cosine similarity"
+      },
+      "api_config": {
+        "openai_key": "ir.config_parameter: ai.openai_key or env ODOO_AI_CHATGPT_TOKEN",
+        "google_key": "ir.config_parameter: ai.google_key or env ODOO_AI_GEMINI_TOKEN"
+      },
+      "notes": [
+        "AI module is Enterprise only",
+        "Requires pgvector PostgreSQL extension for embeddings",
+        "Default Ask AI agent cannot modify database - add Topics with tools to enable actions",
+        "Private methods (_generate_response, _ai_tool_*) not accessible via JSON-2 API"
+      ]
     },
 
     "mail": {
