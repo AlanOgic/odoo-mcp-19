@@ -4,7 +4,7 @@ Connect Claude and AI assistants to Odoo 19+ via the Model Context Protocol (MCP
 
 ## Features
 
-- **3 tools** - `execute_method`, `batch_execute`, `execute_workflow`
+- **3 tools, full power** - `execute_method` calls ANY method on ANY model. Combined with `batch_execute` and `execute_workflow`, you have complete Odoo API access
 - **17+ resources** - Dynamic model discovery and introspection
 - **30 ORM methods** - Complete documentation with examples
 - **13 modules** - Special methods including AI module (Enterprise)
@@ -82,7 +82,7 @@ execute_method(
 Full documentation available in the **[Wiki](https://github.com/AlanOgic/odoo-mcp-19/wiki)**:
 
 - [Getting Started](https://github.com/AlanOgic/odoo-mcp-19/wiki/Getting-Started) - Installation and configuration
-- [Tools](https://github.com/AlanOgic/odoo-mcp-19/wiki/Tools) - The 3 available tools
+- [Tools](https://github.com/AlanOgic/odoo-mcp-19/wiki/Tools) - 3 tools for full API access
 - [Resources](https://github.com/AlanOgic/odoo-mcp-19/wiki/Resources) - Discovery and introspection
 - [ORM Methods](https://github.com/AlanOgic/odoo-mcp-19/wiki/ORM-Methods) - 30 documented methods
 - [Module Knowledge](https://github.com/AlanOgic/odoo-mcp-19/wiki/Module-Knowledge) - Special methods
