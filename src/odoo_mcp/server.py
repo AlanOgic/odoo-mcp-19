@@ -386,10 +386,29 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
         pass
 
 
+# Configure authentication if MCP_API_KEY is set
+def _get_auth_provider():
+    """Get auth provider if MCP_API_KEY is configured."""
+    api_key = os.environ.get("MCP_API_KEY")
+    if api_key:
+        from fastmcp.server.auth import StaticTokenVerifier
+        return StaticTokenVerifier(
+            tokens={
+                api_key: {
+                    "client_id": "mcp-client",
+                    "scopes": ["read", "write"],
+                }
+            }
+        )
+    return None
+
+
 # Create MCP server
+_auth = _get_auth_provider()
 mcp = FastMCP(
     "Odoo 19+ MCP Server",
     lifespan=app_lifespan,
+    auth=_auth,
 )
 
 
@@ -768,6 +787,66 @@ def get_concept_mappings() -> str:
         "usage": "Use odoo://find-model/{concept} resource to search, or look up concepts here",
         "mappings": CONCEPT_ALIASES
     }, indent=2)
+
+
+@mcp.resource(
+    "odoo://templates",
+    description="List all available resource templates with their URI patterns (for clients that don't support resources/templates/list)",
+)
+def get_resource_templates() -> str:
+    """List all resource templates available in this MCP server.
+
+    This is a workaround for MCP clients that only call resources/list
+    and don't support resources/templates/list from the MCP spec.
+    """
+    templates = {
+        "description": "Available resource templates (parameterized URIs)",
+        "note": "Replace {param} with actual values when reading these resources",
+        "templates": {
+            "odoo://model/{model_name}": {
+                "description": "Get information about a specific model including fields",
+                "example": "odoo://model/res.partner"
+            },
+            "odoo://model/{model_name}/schema": {
+                "description": "Complete schema for a model including fields, relationships, required fields",
+                "example": "odoo://model/sale.order/schema"
+            },
+            "odoo://model/{model_name}/docs": {
+                "description": "Rich documentation: labels, field help, selection options, action help",
+                "example": "odoo://model/account.move/docs"
+            },
+            "odoo://methods/{model_name}": {
+                "description": "Available methods for a model including special methods from knowledge base",
+                "example": "odoo://methods/crm.lead"
+            },
+            "odoo://record/{model_name}/{record_id}": {
+                "description": "Get a specific record by ID",
+                "example": "odoo://record/res.partner/1"
+            },
+            "odoo://find-model/{concept}": {
+                "description": "Find Odoo model from natural language concept (customer, invoice, etc.)",
+                "example": "odoo://find-model/customer"
+            },
+            "odoo://actions/{model}": {
+                "description": "Discover all available actions, workflows, and methods for a model",
+                "example": "odoo://actions/sale.order"
+            },
+            "odoo://tools/{query}": {
+                "description": "Search available operations by keyword",
+                "example": "odoo://tools/invoice"
+            },
+            "odoo://docs/{target}": {
+                "description": "Documentation URLs and GitHub links for any model or module",
+                "example": "odoo://docs/sale"
+            },
+            "odoo://module-knowledge/{module_name}": {
+                "description": "Get knowledge for a specific module (special methods, patterns)",
+                "example": "odoo://module-knowledge/knowledge"
+            },
+        },
+        "usage": "Read any template by replacing {param} with your value using ReadMcpResourceTool"
+    }
+    return json.dumps(templates, indent=2)
 
 
 @mcp.resource(

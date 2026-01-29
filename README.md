@@ -90,6 +90,26 @@ Full documentation available in the **[Wiki](https://github.com/AlanOgic/odoo-mc
 - [Domain Syntax](https://github.com/AlanOgic/odoo-mcp-19/wiki/Domain-Syntax) - Search filters
 - [Prompts](https://github.com/AlanOgic/odoo-mcp-19/wiki/Prompts) - Guided workflows
 
+## HTTP Transport (Remote Access)
+
+Run as HTTP server with Bearer token authentication:
+
+```bash
+docker run -d -p 8080:8080 \
+  -e ODOO_URL=https://your.odoo.com \
+  -e ODOO_DB=mydb \
+  -e ODOO_USERNAME=admin \
+  -e ODOO_API_KEY=xxx \
+  -e MCP_TRANSPORT=streamable-http \
+  -e MCP_API_KEY=your-secret-token \
+  alanogik/odoo-mcp-19
+```
+
+Connect with Bearer token:
+```
+Authorization: Bearer your-secret-token
+```
+
 ## Configuration
 
 | Variable | Required | Description |
@@ -99,6 +119,10 @@ Full documentation available in the **[Wiki](https://github.com/AlanOgic/odoo-mc
 | `ODOO_USERNAME` | Yes | Username |
 | `ODOO_API_KEY` | Yes | API key |
 | `ODOO_TIMEOUT` | No | Timeout seconds (default: 30) |
+| `MCP_TRANSPORT` | No | Transport: `stdio` (default) or `streamable-http` |
+| `MCP_API_KEY` | No | Bearer token for HTTP auth (required for remote) |
+| `MCP_HOST` | No | HTTP bind address (default: 0.0.0.0) |
+| `MCP_PORT` | No | HTTP port (default: 8080) |
 
 ## Requirements
 

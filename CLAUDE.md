@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **Odoo MCP Server 19** - A standalone MCP server for Odoo 19+ using the v2 JSON-2 API.
 
-- **Version**: 1.7.0
+- **Version**: 1.8.0
 - **MCP Spec**: MCP 0.2 (FastMCP 3.0.0+)
 - **Odoo Support**: v19+ only (v2 JSON-2 API)
 
@@ -34,7 +34,7 @@ odoo-mcp-19/
 
 **1. MCP Server** (`server.py`)
 - **3 tools only**: execute_method, batch_execute, execute_workflow
-- **18 resources** for discovery (models, schema, methods, actions, tools, domain-syntax, model-limitations, etc.)
+- **19 resources** for discovery (models, schema, methods, actions, tools, domain-syntax, model-limitations, templates, etc.)
 - **14 prompts** for guided workflows
 - Module knowledge loading and error suggestions
 - **Automatic fallback**: search_read → search+read on 500 errors with error categorization
@@ -101,6 +101,12 @@ Optional:
 - `ODOO_PASSWORD` - Password (fallback)
 - `ODOO_TIMEOUT` - Request timeout (default: 30)
 - `ODOO_VERIFY_SSL` - SSL verification (default: true)
+
+HTTP Transport (v1.8.0+):
+- `MCP_TRANSPORT` - Transport mode: `stdio` (default) or `streamable-http`
+- `MCP_API_KEY` - Bearer token for HTTP authentication
+- `MCP_HOST` - HTTP bind address (default: 0.0.0.0)
+- `MCP_PORT` - HTTP port (default: 8080)
 
 ## v2 API Details
 
@@ -216,6 +222,7 @@ Read `odoo://model-limitations` to see:
 | `odoo://module-knowledge` | Special methods knowledge |
 | `odoo://workflows` | Business workflows |
 | `odoo://concepts` | Business term → model mappings |
+| `odoo://templates` | **List all resource templates (for clients without templates/list)** |
 | `odoo://tool-registry` | Pre-built workflows (Code-First) |
 | `odoo://domain-syntax` | **Complete domain operator reference** |
 | `odoo://pagination` | **Pagination guide (offset/limit/count)** |
