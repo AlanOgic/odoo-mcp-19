@@ -2,12 +2,21 @@
 MCP Server for Odoo 19+
 
 Provides MCP tools and resources for interacting with Odoo ERP via JSON-2 API.
+
+MCP 2025-11-25 Features:
+- Background Tasks (SEP-1686) - Async operations with progress tracking
+- Icons (SEP-973) - Visual icons for server and components
+- Structured Output Schemas - Typed Pydantic responses
+- User Elicitation - Interactive configuration
 """
 
+import asyncio
+import base64
 import json
 import os
 import re
 import sys
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,10 +24,32 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastmcp import Context, FastMCP
+from fastmcp.dependencies import Progress
 from fastmcp.prompts import Message
+from mcp.types import Icon
 from pydantic import BaseModel, Field
 
 from .odoo_client import OdooClient, get_odoo_client
+
+
+# ----- Icon Loading -----
+
+def _load_icon() -> Optional[Icon]:
+    """Load the Odoo icon from assets as a data URI."""
+    icon_path = Path(__file__).parent / "assets" / "odoo_icon.svg"
+    try:
+        if icon_path.exists():
+            icon_data = base64.standard_b64encode(icon_path.read_bytes()).decode()
+            return Icon(
+                src=f"data:image/svg+xml;base64,{icon_data}",
+                mimeType="image/svg+xml",
+            )
+    except Exception as e:
+        print(f"Warning: Could not load icon: {e}", file=sys.stderr)
+    return None
+
+
+ODOO_ICON = _load_icon()
 
 
 # ----- Module Knowledge Base -----
@@ -403,33 +434,86 @@ def _get_auth_provider():
     return None
 
 
-# Create MCP server
+# Create MCP server with icon and website URL
 _auth = _get_auth_provider()
+_icons = [ODOO_ICON] if ODOO_ICON else None
+
 mcp = FastMCP(
     "Odoo 19+ MCP Server",
     lifespan=app_lifespan,
     auth=_auth,
+    website_url="https://github.com/AlanOgic/odoo-mcp-19",
+    icons=_icons,
 )
 
 
-# ----- Response Models -----
+# ----- Response Models (Structured Output Schemas) -----
+
+
+class IssueAnalysis(BaseModel):
+    """Analysis of issues encountered during execution."""
+    category: str = Field(description="Error category: timeout, relational_filter, computed_field, access_rights, memory, data_integrity, unknown")
+    cause: str = Field(description="Human-readable cause description")
+    domain_patterns: List[str] = Field(default_factory=list, description="Detected patterns in domain that may cause issues")
+    problematic_fields: List[str] = Field(default_factory=list, description="Fields that may cause issues")
+    suggested_solutions: List[str] = Field(default_factory=list, description="Suggested solutions for the issue")
+    model_specific_advice: List[str] = Field(default_factory=list, description="Model-specific recommendations")
 
 
 class ExecuteMethodResponse(BaseModel):
-    """Response model for execute_method tool."""
+    """Response model for execute_method tool with structured output."""
     success: bool = Field(description="Whether the execution was successful")
-    result: Optional[Any] = Field(default=None, description="Result of the method")
+    result: Optional[Any] = Field(default=None, description="Result of the method call")
+    error: Optional[str] = Field(default=None, description="Error message if failed")
+    suggestion: Optional[str] = Field(default=None, description="Helpful suggestion for fixing the error")
+    hint: Optional[str] = Field(default=None, description="Additional hint for troubleshooting")
+    fallback_used: bool = Field(default=False, description="Whether automatic fallback was triggered")
+    issue_analysis: Optional[IssueAnalysis] = Field(default=None, description="Issue analysis when fallback was used")
+    note: Optional[str] = Field(default=None, description="Additional note about the execution")
+    execution_time_ms: Optional[float] = Field(default=None, description="Execution time in milliseconds")
+
+
+class BatchOperationResult(BaseModel):
+    """Result of a single batch operation."""
+    operation_index: int = Field(description="Index of the operation in the batch")
+    success: bool = Field(description="Whether this operation succeeded")
+    result: Optional[Any] = Field(default=None, description="Result if successful")
     error: Optional[str] = Field(default=None, description="Error message if failed")
 
 
 class BatchExecuteResponse(BaseModel):
-    """Response model for batch_execute tool."""
+    """Response model for batch_execute tool with structured output."""
     success: bool = Field(description="Whether all operations succeeded")
-    results: List[Dict[str, Any]] = Field(description="Results for each operation")
+    results: List[BatchOperationResult] = Field(description="Results for each operation")
     total_operations: int = Field(description="Total operations attempted")
     successful_operations: int = Field(description="Successful operations count")
     failed_operations: int = Field(description="Failed operations count")
-    error: Optional[str] = Field(default=None, description="Overall error message")
+    error: Optional[str] = Field(default=None, description="Overall error message if any operation failed")
+    execution_time_ms: Optional[float] = Field(default=None, description="Total execution time in milliseconds")
+
+
+class WorkflowStepResult(BaseModel):
+    """Result of a single workflow step."""
+    step: str = Field(description="Name of the workflow step")
+    success: bool = Field(description="Whether this step succeeded")
+    skipped: bool = Field(default=False, description="Whether this step was skipped")
+    reason: Optional[str] = Field(default=None, description="Reason for skipping or failure")
+    error: Optional[str] = Field(default=None, description="Error message if failed")
+    result: Optional[Any] = Field(default=None, description="Step result data")
+
+
+class ExecuteWorkflowResponse(BaseModel):
+    """Response model for execute_workflow tool with structured output."""
+    workflow: str = Field(description="Name of the executed workflow")
+    success: bool = Field(description="Whether the workflow completed successfully")
+    steps: List[WorkflowStepResult] = Field(default_factory=list, description="Results for each workflow step")
+    error: Optional[str] = Field(default=None, description="Error message if failed")
+    available_workflows: Optional[List[str]] = Field(default=None, description="Available workflows if unknown workflow requested")
+    tip: Optional[str] = Field(default=None, description="Helpful tip for using workflows")
+    # Additional result fields for specific workflows
+    invoice_id: Optional[int] = Field(default=None, description="Created invoice ID (for invoice workflows)")
+    invoice_ids: Optional[List[int]] = Field(default=None, description="Created invoice IDs (for order workflows)")
+    execution_time_ms: Optional[float] = Field(default=None, description="Total execution time in milliseconds")
 
 
 # ----- MCP Resources -----
@@ -1426,6 +1510,9 @@ def discover_actions_resource(model: str) -> str:
 
 # ----- MCP Tools (Only 3: execute_method, batch_execute, execute_workflow) -----
 
+# Icon list for tools (reusable)
+_tool_icons = [ODOO_ICON] if ODOO_ICON else None
+
 
 @mcp.tool(
     description="""Execute ANY Odoo method on ANY model.
@@ -1460,7 +1547,8 @@ def discover_actions_resource(model: str) -> str:
         "destructiveHint": False,
         "idempotentHint": False,
         "openWorldHint": True
-    }
+    },
+    icons=_tool_icons,
 )
 def execute_method(
     ctx: Context,
@@ -1468,7 +1556,7 @@ def execute_method(
     method: str,
     args_json: str = None,
     kwargs_json: str = None,
-) -> Dict[str, Any]:
+) -> ExecuteMethodResponse:
     """
     Execute any method on an Odoo model.
 
@@ -1490,6 +1578,7 @@ def execute_method(
             method='create'
             args_json='[{"name": "Test Company"}]'
     """
+    start_time = time.time()
     odoo = ctx.request_context.lifespan_context.odoo
 
     try:
@@ -1500,17 +1589,17 @@ def execute_method(
             try:
                 args = json.loads(args_json)
                 if not isinstance(args, list):
-                    return {"success": False, "error": "args_json must be a JSON array"}
+                    return ExecuteMethodResponse(success=False, error="args_json must be a JSON array")
             except json.JSONDecodeError as e:
-                return {"success": False, "error": f"Invalid args_json: {e}"}
+                return ExecuteMethodResponse(success=False, error=f"Invalid args_json: {e}")
 
         if kwargs_json:
             try:
                 kwargs = json.loads(kwargs_json)
                 if not isinstance(kwargs, dict):
-                    return {"success": False, "error": "kwargs_json must be a JSON object"}
+                    return ExecuteMethodResponse(success=False, error="kwargs_json must be a JSON object")
             except json.JSONDecodeError as e:
-                return {"success": False, "error": f"Invalid kwargs_json: {e}"}
+                return ExecuteMethodResponse(success=False, error=f"Invalid kwargs_json: {e}")
 
         # Apply smart limits for search methods
         DEFAULT_LIMIT = 100
@@ -1532,7 +1621,8 @@ def execute_method(
                     args[0] = domain[0]
 
         result = odoo.execute_method(model, method, *args, **kwargs)
-        return {"success": True, "result": result}
+        elapsed_ms = (time.time() - start_time) * 1000
+        return ExecuteMethodResponse(success=True, result=result, execution_time_ms=round(elapsed_ms, 2))
 
     except Exception as e:
         error_msg = str(e)
@@ -1565,59 +1655,63 @@ def execute_method(
                 # Track this model/method as problematic (runtime detection)
                 analysis = _track_model_issue(model, method, error_msg, domain=domain, fields=fields)
 
-                response = {
-                    "success": True,
-                    "result": result,
-                    "fallback_used": True,
-                    "issue_analysis": {
-                        "category": analysis["category"],
-                        "cause": analysis["cause"],
-                        "domain_patterns": analysis["domain_patterns"],
-                        "problematic_fields": analysis.get("problematic_fields", []),
-                        "suggested_solutions": analysis["solutions"][:2]  # Top 2 solutions
-                    },
-                    "note": f"Fallback search+read used. Cause: {analysis['cause']}"
-                }
-                # Add model-specific advice if available
-                if analysis.get("model_specific_advice"):
-                    response["issue_analysis"]["model_specific_advice"] = analysis["model_specific_advice"]
-                return response
+                elapsed_ms = (time.time() - start_time) * 1000
+                return ExecuteMethodResponse(
+                    success=True,
+                    result=result,
+                    fallback_used=True,
+                    issue_analysis=IssueAnalysis(
+                        category=analysis["category"],
+                        cause=analysis["cause"],
+                        domain_patterns=analysis["domain_patterns"],
+                        problematic_fields=analysis.get("problematic_fields", []),
+                        suggested_solutions=analysis["solutions"][:2],
+                        model_specific_advice=analysis.get("model_specific_advice", []),
+                    ),
+                    note=f"Fallback search+read used. Cause: {analysis['cause']}",
+                    execution_time_ms=round(elapsed_ms, 2),
+                )
             except Exception as fallback_error:
                 # If fallback also fails, include both errors
-                return {
-                    "success": False,
-                    "error": error_msg,
-                    "fallback_error": str(fallback_error),
-                    "suggestion": "Both search_read and fallback search+read failed. Check odoo://model-limitations for known issues."
-                }
+                elapsed_ms = (time.time() - start_time) * 1000
+                return ExecuteMethodResponse(
+                    success=False,
+                    error=f"{error_msg}; Fallback also failed: {fallback_error}",
+                    suggestion="Both search_read and fallback search+read failed. Check odoo://model-limitations for known issues.",
+                    execution_time_ms=round(elapsed_ms, 2),
+                )
 
         suggestion = get_error_suggestion(error_msg, model, method)
+        elapsed_ms = (time.time() - start_time) * 1000
 
-        response = {"success": False, "error": error_msg}
-        if suggestion:
-            response["suggestion"] = suggestion
-            response["hint"] = "Check odoo://methods/{model} or odoo://module-knowledge/{module} for special methods"
-
-        return response
+        return ExecuteMethodResponse(
+            success=False,
+            error=error_msg,
+            suggestion=suggestion,
+            hint="Check odoo://methods/{model} or odoo://module-knowledge/{module} for special methods" if suggestion else None,
+            execution_time_ms=round(elapsed_ms, 2),
+        )
 
 
 @mcp.tool(
-    description="Execute multiple Odoo operations in a batch",
+    description="Execute multiple Odoo operations in a batch with progress tracking",
     annotations={
         "title": "Batch Execute",
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": False,
         "openWorldHint": True
-    }
+    },
+    icons=_tool_icons,
+    task=True,  # Enable background task execution with progress
 )
-def batch_execute(
-    ctx: Context,
+async def batch_execute(
     operations: List[Dict[str, Any]],
-    atomic: bool = True
-) -> Dict[str, Any]:
+    atomic: bool = True,
+    progress: Progress = Progress(),
+) -> BatchExecuteResponse:
     """
-    Execute multiple operations efficiently.
+    Execute multiple operations efficiently with progress tracking.
 
     Parameters:
         operations: List of operations, each with:
@@ -1627,18 +1721,24 @@ def batch_execute(
             - kwargs_json: str (optional)
         atomic: If True, fail fast on first error
     """
-    odoo = ctx.request_context.lifespan_context.odoo
-    results = []
+    start_time = time.time()
+    # Get Odoo client directly (works in both sync and background task modes)
+    odoo = get_odoo_client()
+    results: List[BatchOperationResult] = []
     successful = 0
     failed = 0
 
+    # Set up progress tracking
+    await progress.set_total(len(operations))
+
     try:
         for idx, op in enumerate(operations):
-            try:
-                model = op.get('model')
-                method = op.get('method')
+            model = op.get('model', 'unknown')
+            method = op.get('method', 'unknown')
+            await progress.set_message(f"Operation {idx + 1}/{len(operations)}: {model}.{method}")
 
-                if not model or not method:
+            try:
+                if not op.get('model') or not op.get('method'):
                     raise ValueError(f"Operation {idx}: 'model' and 'method' required")
 
                 args_json = op.get('args_json')
@@ -1648,41 +1748,183 @@ def batch_execute(
                 kwargs = json.loads(kwargs_json) if kwargs_json else {}
 
                 result = odoo.execute_method(model, method, *args, **kwargs)
-                results.append({"operation_index": idx, "success": True, "result": result})
+                results.append(BatchOperationResult(operation_index=idx, success=True, result=result))
                 successful += 1
 
             except Exception as e:
-                results.append({"operation_index": idx, "success": False, "error": str(e)})
+                results.append(BatchOperationResult(operation_index=idx, success=False, error=str(e)))
                 failed += 1
 
                 if atomic:
-                    return {
-                        "success": False,
-                        "results": results,
-                        "total_operations": len(operations),
-                        "successful_operations": successful,
-                        "failed_operations": failed,
-                        "error": f"Failed at operation {idx}: {e}"
-                    }
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    return BatchExecuteResponse(
+                        success=False,
+                        results=results,
+                        total_operations=len(operations),
+                        successful_operations=successful,
+                        failed_operations=failed,
+                        error=f"Failed at operation {idx}: {e}",
+                        execution_time_ms=round(elapsed_ms, 2),
+                    )
 
-        return {
-            "success": failed == 0,
-            "results": results,
-            "total_operations": len(operations),
-            "successful_operations": successful,
-            "failed_operations": failed,
-            "error": None if failed == 0 else f"{failed} operations failed"
-        }
+            await progress.increment()
+            # Small delay to allow progress updates to propagate
+            await asyncio.sleep(0.01)
+
+        elapsed_ms = (time.time() - start_time) * 1000
+        return BatchExecuteResponse(
+            success=failed == 0,
+            results=results,
+            total_operations=len(operations),
+            successful_operations=successful,
+            failed_operations=failed,
+            error=None if failed == 0 else f"{failed} operations failed",
+            execution_time_ms=round(elapsed_ms, 2),
+        )
 
     except Exception as e:
-        return {
-            "success": False,
-            "results": results,
-            "total_operations": len(operations),
-            "successful_operations": successful,
-            "failed_operations": failed,
-            "error": str(e)
+        elapsed_ms = (time.time() - start_time) * 1000
+        return BatchExecuteResponse(
+            success=False,
+            results=results,
+            total_operations=len(operations),
+            successful_operations=successful,
+            failed_operations=failed,
+            error=str(e),
+            execution_time_ms=round(elapsed_ms, 2),
+        )
+
+
+# ----- User Elicitation Tool -----
+
+
+@dataclass
+class OdooConnectionConfig:
+    """Configuration collected from user elicitation."""
+    url: str
+    database: str
+    auth_method: str
+    username: str
+
+
+@mcp.tool(
+    description="""Interactive Odoo connection configuration using user elicitation.
+
+    This tool guides users through setting up Odoo connection parameters
+    interactively, collecting URL, database, and authentication details.
+
+    Note: This requires an MCP client that supports user elicitation.
+    The collected configuration is returned but not automatically applied -
+    users should set the corresponding environment variables.
+    """,
+    annotations={
+        "title": "Configure Odoo Connection",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False
+    },
+    icons=_tool_icons,
+)
+async def configure_odoo(ctx: Context) -> Dict[str, Any]:
+    """
+    Interactive Odoo connection configuration using MCP elicitation.
+
+    Returns:
+        Configuration summary with environment variable instructions
+    """
+    from fastmcp.server.elicitation import AcceptedElicitation, DeclinedElicitation, CancelledElicitation
+
+    results = {
+        "success": False,
+        "config": {},
+        "env_vars": {},
+    }
+
+    try:
+        # Step 1: Ask for Odoo URL
+        url_result = await ctx.elicit(
+            message="Enter your Odoo server URL (e.g., https://mycompany.odoo.com):",
+            response_type=str,
+        )
+
+        match url_result:
+            case AcceptedElicitation(data=url):
+                results["config"]["url"] = url
+            case DeclinedElicitation() | CancelledElicitation():
+                results["error"] = "Configuration cancelled by user"
+                return results
+
+        # Step 2: Ask for database name
+        db_result = await ctx.elicit(
+            message="Enter the database name:",
+            response_type=str,
+        )
+
+        match db_result:
+            case AcceptedElicitation(data=database):
+                results["config"]["database"] = database
+            case DeclinedElicitation() | CancelledElicitation():
+                results["error"] = "Configuration cancelled by user"
+                return results
+
+        # Step 3: Ask for authentication method
+        auth_result = await ctx.elicit(
+            message="Select authentication method:",
+            response_type=["API Key (Recommended)", "Password"],
+        )
+
+        match auth_result:
+            case AcceptedElicitation(data=auth_method):
+                results["config"]["auth_method"] = "api_key" if "API" in auth_method else "password"
+            case DeclinedElicitation() | CancelledElicitation():
+                results["error"] = "Configuration cancelled by user"
+                return results
+
+        # Step 4: Ask for username
+        user_result = await ctx.elicit(
+            message="Enter your Odoo username (email):",
+            response_type=str,
+        )
+
+        match user_result:
+            case AcceptedElicitation(data=username):
+                results["config"]["username"] = username
+            case DeclinedElicitation() | CancelledElicitation():
+                results["error"] = "Configuration cancelled by user"
+                return results
+
+        # Build environment variables
+        results["success"] = True
+        results["env_vars"] = {
+            "ODOO_URL": results["config"]["url"],
+            "ODOO_DB": results["config"]["database"],
+            "ODOO_USERNAME": results["config"]["username"],
         }
+
+        if results["config"]["auth_method"] == "api_key":
+            results["env_vars"]["ODOO_API_KEY"] = "<your-api-key>"
+            results["note"] = "Generate an API key in Odoo: Settings > Users > Preferences > API Keys"
+        else:
+            results["env_vars"]["ODOO_PASSWORD"] = "<your-password>"
+            results["note"] = "Using password authentication. API keys are recommended for production."
+
+        results["instructions"] = (
+            "Set these environment variables to configure the Odoo MCP server:\n"
+            + "\n".join(f"export {k}='{v}'" for k, v in results["env_vars"].items())
+        )
+
+        return results
+
+    except Exception as e:
+        if "elicitation is not supported" in str(e).lower():
+            return {
+                "success": False,
+                "error": "User elicitation not supported by this MCP client",
+                "alternative": "Set environment variables manually: ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_API_KEY",
+            }
+        results["error"] = str(e)
+        return results
 
 
 # ----- MCP Prompts -----
@@ -2087,16 +2329,16 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
 
 
 @mcp.tool(
-    description="""Execute a multi-step workflow in a single call.
+    description="""Execute a multi-step workflow in a single call with progress tracking.
 
     This is the KEY TOOL for Code-First Pattern - combines multiple
     operations into one call, dramatically reducing tokens.
 
     Supported workflows:
-    - quote_to_cash: Create quote → Confirm → Deliver → Invoice → Payment
-    - lead_to_won: Create lead → Convert to opportunity → Mark won
-    - create_and_post_invoice: Create invoice → Post it
-    - stock_transfer: Create transfer → Confirm → Validate
+    - quote_to_cash: Create quote -> Confirm -> Deliver -> Invoice -> Payment
+    - lead_to_won: Create lead -> Convert to opportunity -> Mark won
+    - create_and_post_invoice: Create invoice -> Post it
+    - stock_transfer: Create transfer -> Confirm -> Validate
 
     Or describe a custom workflow in natural language.
     """,
@@ -2106,15 +2348,17 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "destructiveHint": False,
         "idempotentHint": False,
         "openWorldHint": True
-    }
+    },
+    icons=_tool_icons,
+    task=True,  # Enable background task execution with progress
 )
-def execute_workflow(
-    ctx: Context,
+async def execute_workflow(
     workflow: str,
     params_json: str = None,
-) -> Dict[str, Any]:
+    progress: Progress = Progress(),
+) -> ExecuteWorkflowResponse:
     """
-    Execute a multi-step workflow.
+    Execute a multi-step workflow with progress tracking.
 
     Parameters:
         workflow: Workflow name or description
@@ -2123,15 +2367,21 @@ def execute_workflow(
     Returns:
         Results from each step of the workflow
     """
-    odoo = ctx.request_context.lifespan_context.odoo
+    start_time = time.time()
+    # Get Odoo client directly (works in both sync and background task modes)
+    odoo = get_odoo_client()
 
     try:
         params = json.loads(params_json) if params_json else {}
     except json.JSONDecodeError as e:
-        return {"success": False, "error": f"Invalid params_json: {e}"}
+        return ExecuteWorkflowResponse(
+            workflow=workflow,
+            success=False,
+            error=f"Invalid params_json: {e}",
+        )
 
     workflow_lower = workflow.lower().strip()
-    results = {"workflow": workflow, "steps": [], "success": True}
+    steps: List[WorkflowStepResult] = []
 
     try:
         # ----- Quote to Cash Workflow -----
@@ -2139,63 +2389,110 @@ def execute_workflow(
             order_id = params.get("order_id")
 
             if not order_id:
-                return {"success": False, "error": "order_id required for quote_to_cash workflow"}
+                return ExecuteWorkflowResponse(
+                    workflow=workflow,
+                    success=False,
+                    error="order_id required for quote_to_cash workflow",
+                )
+
+            # 3 steps: confirm, create invoice, post invoice
+            await progress.set_total(3)
 
             # Step 1: Confirm order
+            await progress.set_message("Confirming sales order...")
             try:
                 odoo.execute_method("sale.order", "action_confirm", [order_id])
-                results["steps"].append({"step": "confirm_order", "success": True})
+                steps.append(WorkflowStepResult(step="confirm_order", success=True))
             except Exception as e:
-                results["steps"].append({"step": "confirm_order", "success": False, "error": str(e)})
-                results["success"] = False
-                return results
+                steps.append(WorkflowStepResult(step="confirm_order", success=False, error=str(e)))
+                elapsed_ms = (time.time() - start_time) * 1000
+                return ExecuteWorkflowResponse(
+                    workflow=workflow,
+                    success=False,
+                    steps=steps,
+                    execution_time_ms=round(elapsed_ms, 2),
+                )
+            await progress.increment()
 
             # Step 2: Create invoice
+            await progress.set_message("Creating invoice...")
+            invoice_ids = None
             try:
                 invoice_ids = odoo.execute_method("sale.order", "_create_invoices", [order_id])
-                results["steps"].append({"step": "create_invoice", "success": True, "invoice_ids": invoice_ids})
+                steps.append(WorkflowStepResult(step="create_invoice", success=True, result={"invoice_ids": invoice_ids}))
             except Exception as e:
-                results["steps"].append({"step": "create_invoice", "success": False, "error": str(e)})
-                results["success"] = False
-                return results
+                steps.append(WorkflowStepResult(step="create_invoice", success=False, error=str(e)))
+                elapsed_ms = (time.time() - start_time) * 1000
+                return ExecuteWorkflowResponse(
+                    workflow=workflow,
+                    success=False,
+                    steps=steps,
+                    execution_time_ms=round(elapsed_ms, 2),
+                )
+            await progress.increment()
 
             # Step 3: Post invoice (optional)
+            await progress.set_message("Posting invoice...")
             if params.get("post_invoice", True) and invoice_ids:
                 try:
                     odoo.execute_method("account.move", "action_post", invoice_ids)
-                    results["steps"].append({"step": "post_invoice", "success": True})
+                    steps.append(WorkflowStepResult(step="post_invoice", success=True))
                 except Exception as e:
-                    results["steps"].append({"step": "post_invoice", "success": False, "error": str(e)})
+                    steps.append(WorkflowStepResult(step="post_invoice", success=False, error=str(e)))
+            await progress.increment()
 
-            return results
+            elapsed_ms = (time.time() - start_time) * 1000
+            return ExecuteWorkflowResponse(
+                workflow=workflow,
+                success=all(s.success or s.skipped for s in steps),
+                steps=steps,
+                invoice_ids=invoice_ids,
+                execution_time_ms=round(elapsed_ms, 2),
+            )
 
         # ----- Lead to Won Workflow -----
         elif workflow_lower in ["lead_to_won", "crm_workflow", "opportunity_won"]:
             lead_id = params.get("lead_id")
 
             if not lead_id:
-                return {"success": False, "error": "lead_id required for lead_to_won workflow"}
+                return ExecuteWorkflowResponse(
+                    workflow=workflow,
+                    success=False,
+                    error="lead_id required for lead_to_won workflow",
+                )
+
+            # 2 steps: convert, mark won
+            await progress.set_total(2)
 
             # Step 1: Convert to opportunity (if still a lead)
+            await progress.set_message("Converting lead to opportunity...")
             try:
                 lead = odoo.search_read("crm.lead", [["id", "=", lead_id]], fields=["type"], limit=1)
                 if lead and lead[0].get("type") == "lead":
                     odoo.execute_method("crm.lead", "convert_opportunity", [lead_id], partner_id=params.get("partner_id", False))
-                    results["steps"].append({"step": "convert_to_opportunity", "success": True})
+                    steps.append(WorkflowStepResult(step="convert_to_opportunity", success=True))
                 else:
-                    results["steps"].append({"step": "convert_to_opportunity", "skipped": True, "reason": "Already an opportunity"})
+                    steps.append(WorkflowStepResult(step="convert_to_opportunity", success=True, skipped=True, reason="Already an opportunity"))
             except Exception as e:
-                results["steps"].append({"step": "convert_to_opportunity", "success": False, "error": str(e)})
+                steps.append(WorkflowStepResult(step="convert_to_opportunity", success=False, error=str(e)))
+            await progress.increment()
 
             # Step 2: Mark as won
+            await progress.set_message("Marking opportunity as won...")
             try:
                 odoo.execute_method("crm.lead", "action_set_won", [lead_id])
-                results["steps"].append({"step": "mark_won", "success": True})
+                steps.append(WorkflowStepResult(step="mark_won", success=True))
             except Exception as e:
-                results["steps"].append({"step": "mark_won", "success": False, "error": str(e)})
-                results["success"] = False
+                steps.append(WorkflowStepResult(step="mark_won", success=False, error=str(e)))
+            await progress.increment()
 
-            return results
+            elapsed_ms = (time.time() - start_time) * 1000
+            return ExecuteWorkflowResponse(
+                workflow=workflow,
+                success=all(s.success or s.skipped for s in steps),
+                steps=steps,
+                execution_time_ms=round(elapsed_ms, 2),
+            )
 
         # ----- Create and Post Invoice Workflow -----
         elif workflow_lower in ["create_and_post_invoice", "quick_invoice"]:
@@ -2203,9 +2500,20 @@ def execute_workflow(
             lines = params.get("lines", [])
 
             if not partner_id:
-                return {"success": False, "error": "partner_id required"}
+                return ExecuteWorkflowResponse(
+                    workflow=workflow,
+                    success=False,
+                    error="partner_id required",
+                )
             if not lines:
-                return {"success": False, "error": "lines required (list of {product_id, quantity, price_unit})"}
+                return ExecuteWorkflowResponse(
+                    workflow=workflow,
+                    success=False,
+                    error="lines required (list of {product_id, quantity, price_unit})",
+                )
+
+            # 2 steps: create, post
+            await progress.set_total(2)
 
             # Build invoice lines
             invoice_lines = []
@@ -2218,6 +2526,8 @@ def execute_workflow(
                 }))
 
             # Step 1: Create invoice
+            await progress.set_message("Creating invoice...")
+            invoice_id = None
             try:
                 invoice_vals = {
                     "move_type": "out_invoice",
@@ -2225,40 +2535,60 @@ def execute_workflow(
                     "invoice_line_ids": invoice_lines,
                 }
                 invoice_id = odoo.execute_method("account.move", "create", [invoice_vals])
-                results["steps"].append({"step": "create_invoice", "success": True, "invoice_id": invoice_id})
+                steps.append(WorkflowStepResult(step="create_invoice", success=True, result={"invoice_id": invoice_id}))
             except Exception as e:
-                results["steps"].append({"step": "create_invoice", "success": False, "error": str(e)})
-                results["success"] = False
-                return results
+                steps.append(WorkflowStepResult(step="create_invoice", success=False, error=str(e)))
+                elapsed_ms = (time.time() - start_time) * 1000
+                return ExecuteWorkflowResponse(
+                    workflow=workflow,
+                    success=False,
+                    steps=steps,
+                    execution_time_ms=round(elapsed_ms, 2),
+                )
+            await progress.increment()
 
             # Step 2: Post invoice
+            await progress.set_message("Posting invoice...")
             if params.get("post", True):
                 try:
                     odoo.execute_method("account.move", "action_post", [invoice_id])
-                    results["steps"].append({"step": "post_invoice", "success": True})
+                    steps.append(WorkflowStepResult(step="post_invoice", success=True))
                 except Exception as e:
-                    results["steps"].append({"step": "post_invoice", "success": False, "error": str(e)})
+                    steps.append(WorkflowStepResult(step="post_invoice", success=False, error=str(e)))
+            await progress.increment()
 
-            results["invoice_id"] = invoice_id
-            return results
+            elapsed_ms = (time.time() - start_time) * 1000
+            return ExecuteWorkflowResponse(
+                workflow=workflow,
+                success=all(s.success or s.skipped for s in steps),
+                steps=steps,
+                invoice_id=invoice_id,
+                execution_time_ms=round(elapsed_ms, 2),
+            )
 
         # ----- Unknown workflow -----
         else:
-            return {
-                "success": False,
-                "error": f"Unknown workflow: {workflow}",
-                "available_workflows": [
+            return ExecuteWorkflowResponse(
+                workflow=workflow,
+                success=False,
+                error=f"Unknown workflow: {workflow}",
+                available_workflows=[
                     "quote_to_cash - Confirm order, create & post invoice",
                     "lead_to_won - Convert lead and mark as won",
                     "create_and_post_invoice - Create and post a customer invoice",
                 ],
-                "tip": "Read odoo://tools/{query} to find available operations"
-            }
+                tip="Read odoo://tools/{query} to find available operations",
+            )
 
     except Exception as e:
-        results["success"] = False
-        results["error"] = str(e)
-        return results
+        elapsed_ms = (time.time() - start_time) * 1000
+        return ExecuteWorkflowResponse(
+            workflow=workflow,
+            success=False,
+            steps=steps,
+            error=str(e),
+            execution_time_ms=round(elapsed_ms, 2),
+        )
 
 
 # =====================================================

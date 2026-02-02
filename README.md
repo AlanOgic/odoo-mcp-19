@@ -4,10 +4,11 @@ Connect Claude and AI assistants to Odoo 19+ via the Model Context Protocol (MCP
 
 ## Features
 
-- **3 tools, full power** - `execute_method` calls ANY method on ANY model. Combined with `batch_execute` and `execute_workflow`, you have complete Odoo API access
-- **17+ resources** - Dynamic model discovery and introspection
+- **4 tools, full power** - `execute_method` calls ANY method on ANY model. Combined with `batch_execute`, `execute_workflow`, and `configure_odoo`, you have complete Odoo API access
+- **19 resources** - Dynamic model discovery and introspection
 - **30 ORM methods** - Complete documentation with examples
 - **13 modules** - Special methods including AI module (Enterprise)
+- **MCP 2025-11-25** - Background tasks with progress tracking, icons, structured outputs
 
 ## Quick start
 
@@ -82,7 +83,7 @@ execute_method(
 Full documentation available in the **[Wiki](https://github.com/AlanOgic/odoo-mcp-19/wiki)**:
 
 - [Getting Started](https://github.com/AlanOgic/odoo-mcp-19/wiki/Getting-Started) - Installation and configuration
-- [Tools](https://github.com/AlanOgic/odoo-mcp-19/wiki/Tools) - 3 tools for full API access
+- [Tools](https://github.com/AlanOgic/odoo-mcp-19/wiki/Tools) - 4 tools for full API access
 - [Resources](https://github.com/AlanOgic/odoo-mcp-19/wiki/Resources) - Discovery and introspection
 - [ORM Methods](https://github.com/AlanOgic/odoo-mcp-19/wiki/ORM-Methods) - 30 documented methods
 - [Module Knowledge](https://github.com/AlanOgic/odoo-mcp-19/wiki/Module-Knowledge) - Special methods
@@ -124,11 +125,22 @@ Authorization: Bearer your-secret-token
 | `MCP_HOST` | No | HTTP bind address (default: 0.0.0.0) |
 | `MCP_PORT` | No | HTTP port (default: 8080) |
 
+## MCP 2025-11-25 Features
+
+Version 1.9.0 implements the latest MCP specification features:
+
+| Feature | Description |
+|---------|-------------|
+| **Background Tasks** | `batch_execute` and `execute_workflow` support async execution with progress tracking |
+| **Icons** | Server and tools display Odoo brand icon in compatible MCP clients |
+| **Structured Outputs** | All tools return typed Pydantic models with execution time |
+| **User Elicitation** | `configure_odoo` tool provides interactive connection setup |
+
 ## Requirements
 
 - Python 3.10+
 - Odoo 19+
-- FastMCP 3.0.0+
+- FastMCP 3.0.0b1+ (with tasks extra)
 
 ## License
 

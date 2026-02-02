@@ -6,9 +6,16 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **Odoo MCP Server 19** - A standalone MCP server for Odoo 19+ using the v2 JSON-2 API.
 
-- **Version**: 1.8.0
-- **MCP Spec**: MCP 0.2 (FastMCP 3.0.0+)
+- **Version**: 1.9.0
+- **MCP Spec**: MCP 2025-11-25 (FastMCP 3.0.0b1+)
 - **Odoo Support**: v19+ only (v2 JSON-2 API)
+
+### MCP 2025-11-25 Features (v1.9.0)
+
+- **Background Tasks** (SEP-1686): `batch_execute` and `execute_workflow` support async execution with progress tracking
+- **Icons** (SEP-973): Server and tool icons using Odoo brand colors (#714B67)
+- **Structured Output Schemas**: Typed Pydantic response models for all tools
+- **User Elicitation**: Interactive `configure_odoo` tool for connection setup
 
 ## Architecture
 
@@ -22,7 +29,9 @@ odoo-mcp-19/
 │   ├── server.py                # MCP server (tools, resources, prompts)
 │   ├── odoo_client.py           # Odoo v2 API client
 │   ├── arg_mapping.py           # Positional to named args conversion
-│   └── module_knowledge.json    # Module-specific methods knowledge base
+│   ├── module_knowledge.json    # Module-specific methods knowledge base
+│   └── assets/
+│       └── odoo_icon.svg        # Odoo brand icon for MCP clients
 ├── Dockerfile                   # Docker build
 ├── docker-compose.yml           # Docker compose config
 ├── run-docker.sh                # Docker wrapper for Claude Desktop
@@ -33,12 +42,14 @@ odoo-mcp-19/
 ### Key Components
 
 **1. MCP Server** (`server.py`)
-- **3 tools only**: execute_method, batch_execute, execute_workflow
+- **4 tools**: execute_method, batch_execute, execute_workflow, configure_odoo
 - **19 resources** for discovery (models, schema, methods, actions, tools, domain-syntax, model-limitations, templates, etc.)
 - **14 prompts** for guided workflows
 - Module knowledge loading and error suggestions
 - **Automatic fallback**: search_read → search+read on 500 errors with error categorization
 - **Runtime issue tracking**: Detects and tracks problematic model/method combinations
+- **Background tasks**: batch_execute and execute_workflow support progress tracking
+- **Structured outputs**: All tools return typed Pydantic models with execution time
 - Smart limits: DEFAULT_LIMIT=100, MAX_LIMIT=1000
 
 **2. Odoo Client** (`odoo_client.py`)
@@ -277,8 +288,9 @@ All discovery moved to resources. Only action tools remain:
 | Tool | Purpose |
 |------|---------|
 | `execute_method` | Universal Odoo API access |
-| `batch_execute` | Multiple operations atomically |
-| `execute_workflow` | Pre-built multi-step workflows |
+| `batch_execute` | Multiple operations atomically (with progress tracking) |
+| `execute_workflow` | Pre-built multi-step workflows (with progress tracking) |
+| `configure_odoo` | Interactive connection configuration (user elicitation) |
 
 ### Discovery Resources
 

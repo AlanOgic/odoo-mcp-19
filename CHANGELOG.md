@@ -5,6 +5,81 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-02-02
+
+### Added
+- **MCP 2025-11-25 Specification Features**
+  - **Background Tasks (SEP-1686)**: `batch_execute` and `execute_workflow` now support async execution with progress tracking via `task=True` and `Progress` dependency
+  - **Icons (SEP-973)**: Server and all tools now include Odoo brand icon (#714B67) for visual recognition in MCP clients
+  - **Structured Output Schemas**: All tools return typed Pydantic response models instead of plain dicts
+  - **User Elicitation**: New `configure_odoo` tool for interactive connection configuration
+
+- **New Tool**: `configure_odoo`
+  - Interactive connection setup using MCP elicitation protocol
+  - Collects URL, database, authentication method, and username
+  - Returns environment variable instructions
+  - Graceful fallback when elicitation not supported by client
+
+- **Enhanced Response Models**
+  - `ExecuteMethodResponse`: Added `IssueAnalysis`, `execution_time_ms`, `fallback_used` fields
+  - `BatchExecuteResponse`: Added `BatchOperationResult` list, `execution_time_ms`
+  - `ExecuteWorkflowResponse`: New model with `WorkflowStepResult` list, workflow-specific fields
+  - All responses now include execution timing for performance monitoring
+
+- **New Assets**
+  - `assets/odoo_icon.svg`: Odoo brand icon in SVG format
+
+### Changed
+- **Dependencies**: Updated to `fastmcp[tasks]>=3.0.0b1` for background task support
+- **Tools count**: 4 tools (was 3) - added `configure_odoo`
+- `batch_execute`: Now async with progress tracking
+- `execute_workflow`: Now async with progress tracking
+
+### Technical
+- Removed `Context` dependency from task-enabled tools (uses `get_odoo_client()` directly)
+- Added `asyncio` import for background task coordination
+- Added `time` import for execution timing
+- Icon loaded as base64 data URI at module initialization
+
+## [1.8.0] - 2026-01-30
+
+### Added
+- **HTTP Transport** with Bearer token authentication
+  - New `MCP_TRANSPORT` env var: `stdio` (default) or `streamable-http`
+  - New `MCP_API_KEY` env var for Bearer token authentication
+  - New `MCP_HOST` and `MCP_PORT` env vars for HTTP server configuration
+  - Enables remote MCP server deployments
+
+### Changed
+- Added `StaticTokenVerifier` authentication provider for HTTP transport
+- Updated documentation with HTTP transport examples
+
+## [1.7.0] - 2026-01-29
+
+### Added
+- **Automatic search_read Fallback** with error categorization
+  - When `search_read` fails with 500 error, automatically falls back to `search` + `read`
+  - Error categorization: timeout, relational_filter, computed_field, access_rights, memory, data_integrity
+  - Domain pattern detection: dot notation, complex OR, negation, any operator, hierarchical
+  - Problematic field detection for known models (e.g., `stock.move.line`)
+  - Runtime issue tracking: Builds knowledge base of model/method problems during operation
+
+- **Model Limitations Resource** (`odoo://model-limitations`)
+  - Static limitations from source code analysis
+  - Runtime-detected issues with categorization
+  - Pattern summary across all models
+  - Global recommendations based on detected patterns
+
+- **Known Limitations: stock.move.line**
+  - `picking_type_id` with `!=` operator causes NotImplemented error
+  - `lots_visible` field is non-stored computed
+  - `product_category_name` is 3-level deep related field
+  - Documented safe fields and fields to avoid
+
+### Changed
+- `execute_method` now returns detailed `issue_analysis` when fallback is used
+- Enhanced error messages with suggested solutions
+
 ## [1.6.0] - 2026-01-28
 
 ### Added
@@ -265,6 +340,9 @@ This reduces cognitive load and keeps the tool interface minimal:
   - Docker support with `Dockerfile` and `docker-compose.yml`
   - `run-docker.sh` wrapper for Claude Desktop
 
+[1.9.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.9.0
+[1.8.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.8.0
+[1.7.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.7.0
 [1.6.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.6.0
 [1.5.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.5.0
 [1.4.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.4.1
