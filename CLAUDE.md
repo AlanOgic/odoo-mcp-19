@@ -43,7 +43,7 @@ odoo-mcp-19/
 
 **1. MCP Server** (`server.py`)
 - **4 tools**: execute_method, batch_execute, execute_workflow, configure_odoo
-- **22 resources** for discovery (models, schema, methods, actions, tools, domain-syntax, model-limitations, templates, etc.)
+- **23 resources** for discovery (models, schema, fields, methods, actions, tools, domain-syntax, model-limitations, templates, etc.)
 - **13 prompts** for guided workflows
 - Module knowledge loading and error suggestions
 - **Automatic fallback**: search_read → search+read on 500 errors with error categorization
@@ -222,12 +222,13 @@ Read `odoo://model-limitations` to see:
 
 **Why?** Guessing field names based on "common patterns" wastes API calls. Schema introspection is fast and gives you exact field names.
 
-### MCP Resources Available (22 total)
+### MCP Resources Available (23 total)
 | Resource | Description |
 |----------|-------------|
 | `odoo://models` | List all models |
 | `odoo://model/{name}` | Model info with fields |
 | `odoo://model/{name}/schema` | Fields and relationships |
+| `odoo://model/{name}/fields` | Lightweight field list: names, types, labels |
 | `odoo://model/{name}/docs` | Rich docs: labels, help text, selections |
 | `odoo://record/{model}/{id}` | Get a specific record by ID |
 | `odoo://methods/{model}` | Available methods |
@@ -258,7 +259,7 @@ Read `odoo://model-limitations` to see:
 
 ### Pre-Execution Checklist
 - [ ] Model identified?
-- [ ] **Schema introspected?** (odoo://model/{model}/schema) ← DO THIS FIRST
+- [ ] **Fields introspected?** (odoo://model/{model}/fields for lightweight, or /schema for full) ← DO THIS FIRST
 - [ ] Field names from schema (not guessed)?
 - [ ] Method verified (odoo://methods/{model})?
 - [ ] Types correct (Many2one = ID)?
@@ -303,6 +304,8 @@ All discovery moved to resources. Only action tools remain:
 
 | Resource | Purpose |
 |----------|---------|
+| `odoo://model/{model}/fields` | Lightweight field list (~5-10KB) |
+| `odoo://model/{model}/schema` | Full schema with relationships (~300KB) |
 | `odoo://find-model/{concept}` | Natural language → model name |
 | `odoo://tools/{query}` | Search available operations |
 | `odoo://actions/{model}` | Discover model actions |

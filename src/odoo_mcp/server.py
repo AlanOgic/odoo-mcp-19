@@ -589,6 +589,37 @@ def get_model_schema(model_name: str) -> str:
 
 
 @mcp.resource(
+    "odoo://model/{model_name}/fields",
+    description="Lightweight field list: names, types, labels (much smaller than /schema)",
+)
+def get_model_fields_light(model_name: str) -> str:
+    """Get a compact field summary for a model.
+
+    Returns only essential info per field: type, label, required flag,
+    relation model (for relational fields), and selection values.
+    Much smaller than /schema (~5-10KB vs 300KB).
+    """
+    odoo_client = get_odoo_client()
+    try:
+        fields = odoo_client.get_model_fields(model_name)
+        light = {}
+        for name, meta in fields.items():
+            entry = {
+                "type": meta.get("type", ""),
+                "string": meta.get("string", ""),
+                "required": meta.get("required", False),
+            }
+            if meta.get("type") in ("many2one", "one2many", "many2many"):
+                entry["relation"] = meta.get("relation", "")
+            if meta.get("type") == "selection" and meta.get("selection"):
+                entry["selection"] = meta.get("selection")
+            light[name] = entry
+        return json.dumps({"model": model_name, "field_count": len(light), "fields": light}, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, indent=2)
+
+
+@mcp.resource(
     "odoo://record/{model_name}/{record_id}",
     description="Get a specific record by ID",
 )
@@ -894,6 +925,10 @@ def get_resource_templates() -> str:
             "odoo://model/{model_name}/schema": {
                 "description": "Complete schema for a model including fields, relationships, required fields",
                 "example": "odoo://model/sale.order/schema"
+            },
+            "odoo://model/{model_name}/fields": {
+                "description": "Lightweight field list: names, types, labels, required flag (much smaller than /schema)",
+                "example": "odoo://model/res.partner/fields"
             },
             "odoo://model/{model_name}/docs": {
                 "description": "Rich documentation: labels, field help, selection options, action help",
@@ -1540,6 +1575,18 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
     CRITICAL: Many2one fields = ALWAYS numeric ID, never the name!
 
     Smart limits: Default 100, Max 1000 records
+
+    DISCOVERY RESOURCES (read these before querying):
+    - odoo://model/{model}/schema - Field names & types (e.g. odoo://model/sale.order/schema)
+    - odoo://model/{model}/fields - Lightweight field list (e.g. odoo://model/res.partner/fields)
+    - odoo://methods/{model} - Available methods (e.g. odoo://methods/crm.lead)
+    - odoo://actions/{model} - Discover actions (e.g. odoo://actions/sale.order)
+    - odoo://model/{model}/docs - Rich docs with help text
+    - odoo://record/{model}/{id} - Read a record
+    - odoo://find-model/{concept} - Natural language lookup
+    - odoo://tools/{query} - Search operations
+    - odoo://docs/{target} - Documentation URLs
+    - odoo://module-knowledge/{name} - Module-specific methods
     """,
     annotations={
         "title": "Execute Odoo Method",
@@ -1684,11 +1731,20 @@ def execute_method(
         suggestion = get_error_suggestion(error_msg, model, method)
         elapsed_ms = (time.time() - start_time) * 1000
 
+        # Auto-suggest schema introspection for field-related errors
+        hint = None
+        field_error_patterns = ["invalid field", "unknown field", "field_get", "keyerror", "no field", "does not exist"]
+        error_lower = error_msg.lower()
+        if any(p in error_lower for p in field_error_patterns):
+            hint = f"Field name error detected. Read odoo://model/{model}/fields to get exact field names, or odoo://model/{model}/schema for full details."
+        elif suggestion:
+            hint = f"Check odoo://methods/{model} or odoo://module-knowledge for special methods"
+
         return ExecuteMethodResponse(
             success=False,
             error=error_msg,
             suggestion=suggestion,
-            hint="Check odoo://methods/{model} or odoo://module-knowledge/{module} for special methods" if suggestion else None,
+            hint=hint,
             execution_time_ms=round(elapsed_ms, 2),
         )
 
