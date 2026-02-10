@@ -1,11 +1,17 @@
-# Odoo MCP Server for Odoo 19+
+```
+   ____      __               __  _____________     _______
+  / __ \____/ /___  ____     /  |/  / ____/ __ \   <  / __ \  __
+ / / / / __  / __ \/ __ \   / /|_/ / /   / /_/ /   / / /_/ /_/ /_
+/ /_/ / /_/ / /_/ / /_/ /  / /  / / /___/ ____/   / /\__, /_  __/
+\____/\__,_/\____/\____/  /_/  /_/\____/_/       /_//____/ /_/
+```
 
 Connect Claude and AI assistants to Odoo 19+ via the Model Context Protocol (MCP).
 
 ## Features
 
 - **4 tools, full power** - `execute_method` calls ANY method on ANY model. Combined with `batch_execute`, `execute_workflow`, and `configure_odoo`, you have complete Odoo API access
-- **19 resources** - Dynamic model discovery and introspection
+- **22 resources** - Dynamic model discovery and introspection
 - **30 ORM methods** - Complete documentation with examples
 - **13 modules** - Special methods including AI module (Enterprise)
 - **MCP 2025-11-25** - Background tasks with progress tracking, icons, structured outputs

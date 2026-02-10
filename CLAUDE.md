@@ -43,8 +43,8 @@ odoo-mcp-19/
 
 **1. MCP Server** (`server.py`)
 - **4 tools**: execute_method, batch_execute, execute_workflow, configure_odoo
-- **19 resources** for discovery (models, schema, methods, actions, tools, domain-syntax, model-limitations, templates, etc.)
-- **14 prompts** for guided workflows
+- **22 resources** for discovery (models, schema, methods, actions, tools, domain-syntax, model-limitations, templates, etc.)
+- **13 prompts** for guided workflows
 - Module knowledge loading and error suggestions
 - **Automatic fallback**: search_read → search+read on 500 errors with error categorization
 - **Runtime issue tracking**: Detects and tracks problematic model/method combinations
@@ -59,7 +59,7 @@ odoo-mcp-19/
 
 **3. Argument Mapping** (`arg_mapping.py`)
 - Converts positional args to named args for v2 API
-- Supports 17+ ORM methods (search, create, write, etc.)
+- Supports 28 ORM methods (search, create, write, action_*, button_*, etc.)
 
 **4. Module Knowledge** (`module_knowledge.json`)
 - Special methods for 13 Odoo modules (including AI module)
@@ -222,24 +222,31 @@ Read `odoo://model-limitations` to see:
 
 **Why?** Guessing field names based on "common patterns" wastes API calls. Schema introspection is fast and gives you exact field names.
 
-### MCP Resources Available
+### MCP Resources Available (22 total)
 | Resource | Description |
 |----------|-------------|
 | `odoo://models` | List all models |
+| `odoo://model/{name}` | Model info with fields |
 | `odoo://model/{name}/schema` | Fields and relationships |
 | `odoo://model/{name}/docs` | Rich docs: labels, help text, selections |
+| `odoo://record/{model}/{id}` | Get a specific record by ID |
 | `odoo://methods/{model}` | Available methods |
 | `odoo://docs/{model}` | Documentation URLs |
-| `odoo://module-knowledge` | Special methods knowledge |
-| `odoo://workflows` | Business workflows |
 | `odoo://concepts` | Business term → model mappings |
-| `odoo://templates` | **List all resource templates (for clients without templates/list)** |
+| `odoo://find-model/{concept}` | Natural language → model name |
+| `odoo://tools/{query}` | Search available operations by keyword |
+| `odoo://actions/{model}` | Discover model actions |
+| `odoo://templates` | List all resource templates (for clients without templates/list) |
 | `odoo://tool-registry` | Pre-built workflows (Code-First) |
-| `odoo://domain-syntax` | **Complete domain operator reference** |
-| `odoo://pagination` | **Pagination guide (offset/limit/count)** |
-| `odoo://hierarchical` | **Parent/child tree query patterns** |
-| `odoo://aggregation` | **read_group aggregation reference** |
-| `odoo://model-limitations` | **Known model issues + runtime-detected problems** |
+| `odoo://module-knowledge` | Special methods knowledge |
+| `odoo://module-knowledge/{name}` | Knowledge for a specific module |
+| `odoo://workflows` | Business workflows |
+| `odoo://server/info` | Odoo server information |
+| `odoo://domain-syntax` | Complete domain operator reference |
+| `odoo://pagination` | Pagination guide (offset/limit/count) |
+| `odoo://hierarchical` | Parent/child tree query patterns |
+| `odoo://aggregation` | read_group aggregation reference |
+| `odoo://model-limitations` | Known model issues + runtime-detected problems |
 
 ### Common Errors and Fixes
 | Error | Cause | Fix |
@@ -279,11 +286,11 @@ execute_method("model", "write",
 (6, 0, [ids])     # Replace all (M2M)
 ```
 
-## Simplified Architecture (Only 3 Tools)
+## Architecture (4 Tools)
 
 All discovery moved to resources. Only action tools remain:
 
-### Tools (3 total)
+### Tools (4 total)
 
 | Tool | Purpose |
 |------|---------|
@@ -327,20 +334,23 @@ execute_method("account.move", "read_group",
   kwargs_json='{"fields": ["__count"], "groupby": ["state"]}')
 ```
 
-### MCP Prompts Available
+### MCP Prompts Available (13 total)
 
 | Prompt | Purpose |
 |--------|---------|
+| `odoo-exploration` | Discover instance capabilities |
+| `search-records` | Search for records in a model |
+| `odoo-api-reference` | Quick API reference card |
 | `quote-to-cash` | Complete sales workflow |
 | `ar-aging-report` | Accounts receivable aging |
 | `inventory-check` | Stock levels analysis |
 | `crm-pipeline` | Pipeline analysis |
 | `customer-360` | Complete customer view |
 | `daily-operations` | Operations dashboard |
-| `domain-builder` | **Build complex domain filters** |
-| `hierarchical-query` | **Query parent/child trees** |
-| `paginated-search` | **Paginate large result sets** |
-| `aggregation-report` | **Create read_group reports** |
+| `domain-builder` | Build complex domain filters |
+| `hierarchical-query` | Query parent/child trees |
+| `paginated-search` | Paginate large result sets |
+| `aggregation-report` | Create read_group reports |
 
 ## Domain Operators Quick Reference
 
