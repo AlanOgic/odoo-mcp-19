@@ -204,20 +204,62 @@
   },
 
   "aggregation": {
-    "_note": "read_group aggregation reference (Note: deprecated in v19, use formatted_read_group in web module)",
-    "method": "read_group",
-    "parameters": {
-      "domain": "Filter records before grouping",
-      "fields": "List of field:aggregator specs",
-      "groupby": "Fields to group by (supports :day, :week, :month, :quarter, :year for dates)",
-      "offset": "Skip N groups",
-      "limit": "Max groups to return",
-      "order": "Sort order (renamed from orderby in v19)",
-      "lazy": {
-        "type": "boolean",
-        "default": true,
-        "description": "If True (default), groups by first groupby field only; remaining fields are lazy-loaded in subsequent queries. If False, performs all groupings in a single query - more efficient for multiple groupby fields."
-      }
+    "_note": "Aggregation reference: read_group (deprecated) and formatted_read_group (v19+ recommended)",
+    "read_group": {
+      "status": "deprecated in v19 - still works for backward compatibility",
+      "method": "read_group",
+      "parameters": {
+        "domain": "Filter records before grouping",
+        "fields": "List of field:aggregator specs",
+        "groupby": "Fields to group by (supports :day, :week, :month, :quarter, :year for dates)",
+        "offset": "Skip N groups",
+        "limit": "Max groups to return",
+        "order": "Sort order (renamed from orderby in v19)",
+        "lazy": {
+          "type": "boolean",
+          "default": true,
+          "description": "If True (default), groups by first groupby field only; remaining fields are lazy-loaded in subsequent queries. If False, performs all groupings in a single query - more efficient for multiple groupby fields."
+        }
+      },
+      "examples": [
+        {
+          "description": "Total sales by customer",
+          "call": "read_group(domain=[], fields=['amount_total:sum'], groupby=['partner_id'])"
+        },
+        {
+          "description": "Invoice count by month",
+          "call": "read_group(domain=[['move_type','=','out_invoice']], fields=['__count'], groupby=['invoice_date:month'])"
+        }
+      ]
+    },
+    "formatted_read_group": {
+      "status": "v19+ recommended replacement for read_group",
+      "method": "formatted_read_group",
+      "module": "web (available when web module installed, i.e. always in standard Odoo)",
+      "parameters": {
+        "domain": "Filter records before grouping",
+        "groupby": "Fields to group by (supports :day, :week, :month, :quarter, :year for dates)",
+        "aggregates": "List of 'field:agg' specs (e.g. 'amount_total:sum', '__count')",
+        "having": "Filter on aggregated values (list of conditions)",
+        "offset": "Skip N groups",
+        "limit": "Max groups to return",
+        "order": "Sort order"
+      },
+      "note": "Key difference: uses 'aggregates' parameter instead of 'fields'. No 'lazy' parameter - always returns all grouping levels.",
+      "examples": [
+        {
+          "description": "Total sales by customer",
+          "call": "formatted_read_group(domain=[], groupby=['partner_id'], aggregates=['amount_total:sum'])"
+        },
+        {
+          "description": "Invoice count by month",
+          "call": "formatted_read_group(domain=[['move_type','=','out_invoice']], groupby=['invoice_date:month'], aggregates=['__count'])"
+        },
+        {
+          "description": "Average order value by salesperson",
+          "call": "formatted_read_group(domain=[], groupby=['user_id'], aggregates=['amount_total:avg'])"
+        }
+      ]
     },
     "aggregators": {
       "__count": "Count records in group",
@@ -228,21 +270,17 @@
       "count_distinct": "Count distinct values",
       "array_agg": "Collect values into array"
     },
-    "examples": [
-      {
-        "description": "Total sales by customer",
-        "call": "read_group(domain=[], fields=['amount_total:sum'], groupby=['partner_id'])"
-      },
-      {
-        "description": "Invoice count by month",
-        "call": "read_group(domain=[['move_type','=','out_invoice']], fields=['__count'], groupby=['invoice_date:month'])"
-      },
-      {
-        "description": "Average order value by salesperson",
-        "call": "read_group(domain=[], fields=['amount_total:avg'], groupby=['user_id'])"
-      }
-    ],
-    "v19_note": "In Odoo 19, read_group is deprecated. For new code, use formatted_read_group (web module) or _read_group (backend). The MCP still uses read_group for compatibility."
+    "migration_guide": {
+      "description": "Migrating from read_group to formatted_read_group",
+      "old": "read_group(domain=[], fields=['amount_total:sum'], groupby=['partner_id'])",
+      "new": "formatted_read_group(domain=[], groupby=['partner_id'], aggregates=['amount_total:sum'])",
+      "changes": [
+        "'fields' parameter renamed to 'aggregates'",
+        "'aggregates' comes after 'groupby' (different arg order)",
+        "No 'lazy' parameter - all groupings returned in single query",
+        "New 'having' parameter for filtering on aggregated values"
+      ]
+    }
   },
 
   "orm_methods": {
@@ -525,15 +563,29 @@
     },
     "check_access_rights": {
       "signature": "Model.check_access_rights(operation, raise_exception=True)",
-      "description": "Check if current user has permission for operation on model",
+      "description": "Check if current user has permission for operation on model (legacy, still works)",
       "parameters": {
         "operation": {"type": "str", "description": "One of: 'read', 'write', 'create', 'unlink'"},
         "raise_exception": {"type": "bool", "default": "True", "description": "Raise AccessError or return False"}
       },
       "returns": "True if permitted, False or raises AccessError if not",
+      "note": "Still works in v19 but has_access is preferred. Note: check_access (without _rights) is @api.private and NOT callable via RPC.",
       "example": {
         "description": "Check if user can create invoices",
         "call": "execute_method('account.move', 'check_access_rights', args_json='[\"create\"]')"
+      }
+    },
+    "has_access": {
+      "signature": "Model.has_access(operation)",
+      "description": "Check if user has access for operation on model (v19+ preferred)",
+      "parameters": {
+        "operation": {"type": "str", "description": "One of: 'read', 'write', 'create', 'unlink'"}
+      },
+      "returns": "Boolean - True if user has access, False otherwise. Never raises an exception.",
+      "note": "Preferred over check_access_rights in v19+. Simpler API: always returns boolean, never raises.",
+      "example": {
+        "description": "Check if user can read partners",
+        "call": "execute_method('res.partner', 'has_access', args_json='[\"read\"]')"
       }
     },
     "browse": {
@@ -690,7 +742,7 @@
     },
     "search_fetch": {
       "signature": "Model.search_fetch(domain, field_names, offset=0, limit=None, order=None)",
-      "description": "Search and prefetch fields in optimized way (new in v17)",
+      "description": "Search and prefetch fields in optimized way (new in v17) - @api.private, NOT callable via RPC",
       "parameters": {
         "domain": {"type": "list", "description": "Search domain"},
         "field_names": {"type": "list[str]", "description": "Fields to prefetch into cache"},
@@ -700,16 +752,19 @@
       },
       "returns": "Recordset with specified fields pre-loaded in cache",
       "vs_search_read": "Returns recordset (not dicts), better for further ORM operations",
-      "note": "Preferred over search() when you need to access multiple fields"
+      "note": "@api.private in v19 - NOT callable via JSON-2 API. Use search_read instead for RPC access.",
+      "rpc_callable": false
     },
     "fetch": {
       "signature": "records.fetch(field_names)",
-      "description": "Prefetch specified fields for recordset (populate cache)",
+      "description": "Prefetch specified fields for recordset (populate cache) - @api.private, NOT callable via RPC",
       "parameters": {
         "field_names": {"type": "list[str]", "description": "Fields to fetch into cache"}
       },
       "returns": "self (recordset unchanged, but cache populated)",
-      "use_case": "Optimize batch operations by pre-loading needed fields"
+      "use_case": "Optimize batch operations by pre-loading needed fields",
+      "note": "@api.private in v19 - NOT callable via JSON-2 API. Use read instead for RPC access.",
+      "rpc_callable": false
     },
     "action_archive": {
       "signature": "records.action_archive()",

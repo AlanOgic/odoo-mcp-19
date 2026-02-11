@@ -56,10 +56,11 @@ odoo-mcp-19/
 - v2 JSON-2 API only (Bearer token auth)
 - Endpoint: `/json/2/{model}/{method}`
 - Automatic argument conversion via arg_mapping
+- Live model documentation via `/doc-bearer/<model>.json` (api_doc module)
 
 **3. Argument Mapping** (`arg_mapping.py`)
 - Converts positional args to named args for v2 API
-- Supports 28 ORM methods (search, create, write, action_*, button_*, etc.)
+- Supports 30 ORM methods (search, create, write, formatted_read_group, has_access, action_*, button_*, etc.)
 
 **4. Module Knowledge** (`module_knowledge.json`)
 - Special methods for 13 Odoo modules (including AI module)
@@ -208,6 +209,12 @@ Read `odoo://model-limitations` to see:
 - arg_mapping.py is essential for converting positional to named args
 - Module knowledge is loaded from JSON file at startup
 - Docker image must include module_knowledge.json as package data
+- `@api.private` methods are blocked before API call with actionable hints (e.g. `check_access` → `has_access`, `search_fetch` → `search_read`)
+- `@api.private` detection is also dynamic: methods starting with `_` are checked against live `/doc-bearer/` data when available
+- `read_group` is deprecated in v19; `formatted_read_group` is the replacement (different param: `aggregates` instead of `fields`)
+- `odoo://methods/{model}` is enriched with live data from `/doc-bearer/<model>.json` (signatures, return types, API decorators, exceptions, module attribution). Falls back to static data silently if unavailable.
+- Live doc data requires the `api_doc.group_allow_doc` group on the API user. The `api_doc` module is auto-installed (depends: `web`).
+- Live doc responses are cached in-memory for 5 minutes (`_DOC_CACHE_TTL`)
 
 ## Odoo MCP Best Practices
 
@@ -231,7 +238,7 @@ Read `odoo://model-limitations` to see:
 | `odoo://model/{name}/fields` | Lightweight field list: names, types, labels |
 | `odoo://model/{name}/docs` | Rich docs: labels, help text, selections |
 | `odoo://record/{model}/{id}` | Get a specific record by ID |
-| `odoo://methods/{model}` | Available methods |
+| `odoo://methods/{model}` | Available methods (live-enriched with signatures, return types, API decorators from /doc-bearer/) |
 | `odoo://docs/{model}` | Documentation URLs |
 | `odoo://concepts` | Business term → model mappings |
 | `odoo://find-model/{concept}` | Natural language → model name |
@@ -246,7 +253,7 @@ Read `odoo://model-limitations` to see:
 | `odoo://domain-syntax` | Complete domain operator reference |
 | `odoo://pagination` | Pagination guide (offset/limit/count) |
 | `odoo://hierarchical` | Parent/child tree query patterns |
-| `odoo://aggregation` | read_group aggregation reference |
+| `odoo://aggregation` | Aggregation guide: formatted_read_group (v19+) and read_group (deprecated) |
 | `odoo://model-limitations` | Known model issues + runtime-detected problems |
 
 ### Common Errors and Fixes
@@ -256,6 +263,7 @@ Read `odoo://model-limitations` to see:
 | MissingError | Record doesn't exist | Verify ID first |
 | Unknown method | Typo or wrong method | get_model_methods first |
 | AccessError | Permission denied | Check user permissions |
+| @api.private method | Method not callable via RPC | Use public alternative (e.g. `has_access` instead of `check_access`, `search_read` instead of `search_fetch`) |
 
 ### Pre-Execution Checklist
 - [ ] Model identified?
@@ -306,11 +314,12 @@ All discovery moved to resources. Only action tools remain:
 |----------|---------|
 | `odoo://model/{model}/fields` | Lightweight field list (~5-10KB) |
 | `odoo://model/{model}/schema` | Full schema with relationships (~300KB) |
+| `odoo://methods/{model}` | Live-enriched methods with signatures, types, decorators (via /doc-bearer/) |
 | `odoo://find-model/{concept}` | Natural language → model name |
 | `odoo://tools/{query}` | Search available operations |
 | `odoo://actions/{model}` | Discover model actions |
 | `odoo://domain-syntax` | Domain filter reference |
-| `odoo://aggregation` | read_group guide |
+| `odoo://aggregation` | Aggregation guide (formatted_read_group + read_group) |
 | `odoo://pagination` | Offset/limit patterns |
 | `odoo://hierarchical` | Parent/child queries |
 
@@ -326,15 +335,30 @@ execute_workflow("create_and_post_invoice", '{"partner_id": 1, "lines": [...]}')
 ### Aggregation via execute_method
 
 ```python
-# Total sales by customer (see odoo://aggregation)
+# v19+ recommended: formatted_read_group (see odoo://aggregation)
+execute_method("sale.order", "formatted_read_group",
+  kwargs_json='{"domain": [], "groupby": ["partner_id"], "aggregates": ["amount_total:sum"]}')
+
+# Invoice count by state
+execute_method("account.move", "formatted_read_group",
+  kwargs_json='{"domain": [["move_type", "=", "out_invoice"]], "groupby": ["state"], "aggregates": ["__count"]}')
+
+# Legacy read_group (deprecated but still works)
 execute_method("sale.order", "read_group",
   args_json='[[]]',
   kwargs_json='{"fields": ["amount_total:sum"], "groupby": ["partner_id"]}')
+```
 
-# Invoice count by state
-execute_method("account.move", "read_group",
-  args_json='[[["move_type", "=", "out_invoice"]]]',
-  kwargs_json='{"fields": ["__count"], "groupby": ["state"]}')
+### Access Check
+
+```python
+# v19+ recommended: has_access (returns boolean, never raises)
+execute_method("res.partner", "has_access", args_json='["read"]')
+
+# Legacy: check_access_rights (still works)
+execute_method("res.partner", "check_access_rights", args_json='["read"]')
+
+# WARNING: check_access (without _rights) is @api.private - NOT callable via RPC
 ```
 
 ### MCP Prompts Available (13 total)
@@ -353,7 +377,7 @@ execute_method("account.move", "read_group",
 | `domain-builder` | Build complex domain filters |
 | `hierarchical-query` | Query parent/child trees |
 | `paginated-search` | Paginate large result sets |
-| `aggregation-report` | Create read_group reports |
+| `aggregation-report` | Create aggregation reports (formatted_read_group / read_group) |
 
 ## Domain Operators Quick Reference
 

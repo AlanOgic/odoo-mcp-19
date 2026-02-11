@@ -139,6 +139,44 @@ ERROR_CATEGORIES = {
     }
 }
 
+# ----- /doc-bearer/ Live Documentation Cache -----
+
+# Cache for /doc-bearer/ responses: {model_name: (timestamp, data)}
+_DOC_CACHE: Dict[str, tuple] = {}
+_DOC_CACHE_TTL = 300  # 5 minutes
+
+
+def _strip_html(html_str: str) -> str:
+    """Strip HTML tags and normalize whitespace for plain text display."""
+    if not html_str:
+        return ""
+    text = re.sub(r'<[^>]+>', '', html_str)
+    return ' '.join(text.split()).strip()
+
+
+def _get_live_doc(model_name: str) -> Optional[Dict[str, Any]]:
+    """Fetch live model docs from /doc-bearer/ with in-memory caching.
+
+    Returns the doc dict if available, or None on any failure.
+    Failures are silent — the caller falls back to static data.
+    """
+    now = time.time()
+    if model_name in _DOC_CACHE:
+        ts, data = _DOC_CACHE[model_name]
+        if now - ts < _DOC_CACHE_TTL:
+            return data
+
+    try:
+        odoo = get_odoo_client()
+        doc = odoo.get_model_doc(model_name)
+        if doc and isinstance(doc, dict) and "methods" in doc:
+            _DOC_CACHE[model_name] = (now, doc)
+            return doc
+    except Exception as e:
+        print(f"Warning: /doc-bearer/ unavailable for {model_name}: {e}", file=sys.stderr)
+
+    return None
+
 
 def _categorize_error(error_msg: str) -> str:
     """Categorize an error message by its root cause."""
@@ -650,7 +688,8 @@ def get_methods(model_name: str) -> str:
             {"name": "search_read", "description": "Search and read in one call", "params": ["domain", "fields", "offset", "limit", "order", "load"]},
             {"name": "read", "description": "Read specific records by ID", "params": ["ids", "fields", "load"], "note": "load='_classic_read' (default) returns Many2one as (id, name); load=None returns raw ID for better performance"},
             {"name": "search_count", "description": "Count matching records", "params": ["domain"]},
-            {"name": "read_group", "description": "Aggregation with grouping", "params": ["domain", "fields", "groupby", "offset", "limit", "orderby", "lazy"]},
+            {"name": "read_group", "description": "Aggregation with grouping (deprecated in v19, use formatted_read_group)", "params": ["domain", "fields", "groupby", "offset", "limit", "orderby", "lazy"], "note": "Deprecated in v19. Use formatted_read_group instead. Still works for backward compatibility."},
+            {"name": "formatted_read_group", "description": "Aggregation with grouping (v19+ replacement for read_group)", "params": ["domain", "groupby", "aggregates", "having", "offset", "limit", "order"], "note": "Uses 'aggregates' param with 'field:agg' format (e.g. 'amount_total:sum', '__count'). Replaces deprecated read_group."},
         ],
         "write_methods": [
             {"name": "create", "description": "Create new record(s)", "params": ["vals_list"], "note": "Pass list of dicts for batch creation"},
@@ -662,7 +701,8 @@ def get_methods(model_name: str) -> str:
             {"name": "fields_get", "description": "Get field definitions and metadata", "params": ["allfields", "attributes"]},
             {"name": "default_get", "description": "Get default values for fields", "params": ["fields_list"]},
             {"name": "name_search", "description": "Search by name (autocomplete)", "params": ["name", "domain", "operator", "limit"]},
-            {"name": "check_access_rights", "description": "Check user permissions", "params": ["operation"]},
+            {"name": "check_access_rights", "description": "Check user permissions (legacy, still works)", "params": ["operation", "raise_exception"], "note": "Still works but has_access is preferred in v19+."},
+            {"name": "has_access", "description": "Check if user has access (returns boolean)", "params": ["operation"], "note": "Preferred over check_access_rights in v19+. Returns True/False without raising exceptions."},
         ],
         "special_methods": [],
         "warnings": [],
@@ -689,6 +729,86 @@ def get_methods(model_name: str) -> str:
             # Add field mappings if any
             if module_info.get("field_mappings"):
                 common_methods["field_mappings"] = module_info["field_mappings"]
+
+    # --- Live enrichment from /doc-bearer/ ---
+    live_doc = _get_live_doc(model_name)
+    if live_doc:
+        live_methods = live_doc.get("methods", {})
+
+        # Build set of all static method names for quick lookup
+        static_names = set()
+        for category in ["read_methods", "write_methods", "introspection_methods", "special_methods"]:
+            for m in common_methods.get(category, []):
+                static_names.add(m["name"])
+
+        # 1) Enrich existing static methods with live signatures, types, decorators
+        for category in ["read_methods", "write_methods", "introspection_methods", "special_methods"]:
+            for method_entry in common_methods.get(category, []):
+                name = method_entry["name"]
+                if name in live_methods:
+                    live = live_methods[name]
+                    if live.get("signature"):
+                        method_entry["signature"] = live["signature"]
+                    if live.get("return"):
+                        ret = live["return"]
+                        if ret.get("annotation"):
+                            method_entry["return_type"] = ret["annotation"]
+                    if live.get("api"):
+                        method_entry["api"] = live["api"]
+                    if live.get("module"):
+                        method_entry["module"] = live["module"]
+                    if live.get("raise"):
+                        method_entry["exceptions"] = {
+                            k: _strip_html(v) for k, v in live["raise"].items()
+                        }
+                    # Enrich params with types and defaults from live data
+                    if live.get("parameters"):
+                        param_details = {}
+                        for pname, pinfo in live["parameters"].items():
+                            detail = {}
+                            if pinfo.get("annotation"):
+                                detail["type"] = pinfo["annotation"]
+                            if "default" in pinfo:
+                                detail["default"] = pinfo["default"]
+                            if pinfo.get("doc"):
+                                detail["description"] = _strip_html(pinfo["doc"])
+                            if detail:
+                                param_details[pname] = detail
+                        if param_details:
+                            method_entry["param_details"] = param_details
+
+        # 2) Discover additional model-specific methods not in our static list
+        additional = []
+        for name, live in live_methods.items():
+            if name not in static_names:
+                entry = {
+                    "name": name,
+                    "description": _strip_html(live.get("doc", "")) if live.get("doc") else "",
+                }
+                if live.get("signature"):
+                    entry["signature"] = live["signature"]
+                if live.get("return", {}).get("annotation"):
+                    entry["return_type"] = live["return"]["annotation"]
+                if live.get("api"):
+                    entry["api"] = live["api"]
+                if live.get("module"):
+                    entry["module"] = live["module"]
+                if live.get("raise"):
+                    entry["exceptions"] = {
+                        k: _strip_html(v) for k, v in live["raise"].items()
+                    }
+                if live.get("parameters"):
+                    entry["params"] = list(live["parameters"].keys())
+                additional.append(entry)
+
+        if additional:
+            # Sort by module then name for consistent ordering
+            additional.sort(key=lambda m: (m.get("module", "zzz"), m["name"]))
+            common_methods["additional_methods"] = additional
+
+        common_methods["_source"] = "live (enriched from /doc-bearer/)"
+    else:
+        common_methods["_source"] = "static (live docs unavailable)"
 
     return json.dumps(common_methods, indent=2)
 
@@ -1301,42 +1421,58 @@ def get_hierarchical_guide() -> str:
 
 @mcp.resource(
     "odoo://aggregation",
-    description="Guide for read_group aggregation (sum, avg, count, groupby)",
+    description="Guide for aggregation: formatted_read_group (v19+) and read_group (deprecated)",
 )
 def get_aggregation_guide() -> str:
-    """Get read_group aggregation reference."""
+    """Get aggregation reference for both formatted_read_group and read_group."""
     aggregation = MODULE_KNOWLEDGE.get("aggregation", {})
     return json.dumps({
-        "title": "Aggregation Guide (read_group)",
+        "title": "Aggregation Guide",
+        "recommendation": "Use formatted_read_group for new code (v19+). read_group still works but is deprecated.",
         **aggregation,
         "execute_method_examples": {
-            "sales_by_customer": {
-                "description": "Total sales amount by customer",
-                "call": "execute_method('sale.order', 'read_group', args_json='[[]]', kwargs_json='{\"fields\": [\"amount_total:sum\"], \"groupby\": [\"partner_id\"]}')"
+            "_note": "Examples using both methods. Prefer formatted_read_group for new code.",
+            "formatted_read_group_examples": {
+                "sales_by_customer": {
+                    "description": "Total sales amount by customer (v19+ recommended)",
+                    "call": "execute_method('sale.order', 'formatted_read_group', kwargs_json='{\"domain\": [], \"groupby\": [\"partner_id\"], \"aggregates\": [\"amount_total:sum\"]}')"
+                },
+                "invoices_by_month": {
+                    "description": "Invoice count grouped by month",
+                    "call": "execute_method('account.move', 'formatted_read_group', kwargs_json='{\"domain\": [[\"move_type\", \"=\", \"out_invoice\"]], \"groupby\": [\"invoice_date:month\"], \"aggregates\": [\"__count\"]}')"
+                },
+                "products_by_category": {
+                    "description": "Product count and total value by category",
+                    "call": "execute_method('product.product', 'formatted_read_group', kwargs_json='{\"domain\": [], \"groupby\": [\"categ_id\"], \"aggregates\": [\"__count\", \"list_price:sum\"]}')"
+                },
+                "leads_by_stage": {
+                    "description": "Expected revenue by CRM stage",
+                    "call": "execute_method('crm.lead', 'formatted_read_group', kwargs_json='{\"domain\": [[\"type\", \"=\", \"opportunity\"]], \"groupby\": [\"stage_id\"], \"aggregates\": [\"expected_revenue:sum\", \"__count\"]}')"
+                },
+                "multi_level_grouping": {
+                    "description": "Sales by customer and state",
+                    "call": "execute_method('sale.order', 'formatted_read_group', kwargs_json='{\"domain\": [], \"groupby\": [\"partner_id\", \"state\"], \"aggregates\": [\"amount_total:sum\"]}')"
+                }
             },
-            "invoices_by_month": {
-                "description": "Invoice count grouped by month",
-                "call": "execute_method('account.move', 'read_group', args_json='[[[\"move_type\", \"=\", \"out_invoice\"]]]', kwargs_json='{\"fields\": [\"__count\"], \"groupby\": [\"invoice_date:month\"]}')"
-            },
-            "products_by_category": {
-                "description": "Product count and total value by category",
-                "call": "execute_method('product.product', 'read_group', args_json='[[]]', kwargs_json='{\"fields\": [\"__count\", \"list_price:sum\"], \"groupby\": [\"categ_id\"]}')"
-            },
-            "leads_by_stage": {
-                "description": "Expected revenue by CRM stage",
-                "call": "execute_method('crm.lead', 'read_group', args_json='[[[\"type\", \"=\", \"opportunity\"]]]', kwargs_json='{\"fields\": [\"expected_revenue:sum\", \"__count\"], \"groupby\": [\"stage_id\"]}')"
-            },
-            "multi_level_grouping": {
-                "description": "Sales by customer and state (use lazy=False for efficiency)",
-                "call": "execute_method('sale.order', 'read_group', args_json='[[]]', kwargs_json='{\"fields\": [\"amount_total:sum\"], \"groupby\": [\"partner_id\", \"state\"], \"lazy\": false}')"
+            "read_group_examples_legacy": {
+                "_note": "read_group is deprecated in v19 but still works. Use formatted_read_group above for new code.",
+                "sales_by_customer": {
+                    "description": "Total sales amount by customer (legacy)",
+                    "call": "execute_method('sale.order', 'read_group', args_json='[[]]', kwargs_json='{\"fields\": [\"amount_total:sum\"], \"groupby\": [\"partner_id\"]}')"
+                },
+                "invoices_by_month": {
+                    "description": "Invoice count grouped by month (legacy)",
+                    "call": "execute_method('account.move', 'read_group', args_json='[[[\"move_type\", \"=\", \"out_invoice\"]]]', kwargs_json='{\"fields\": [\"__count\"], \"groupby\": [\"invoice_date:month\"]}')"
+                }
             }
         },
         "lazy_parameter": {
+            "applies_to": "read_group only (formatted_read_group always returns all levels)",
             "description": "Controls grouping behavior for multiple groupby fields",
             "default": True,
             "lazy_true": "Groups by first field only; remaining fields lazy-loaded (multiple queries)",
             "lazy_false": "All groupings in single query - more efficient for multi-level reports",
-            "recommendation": "Use lazy=False when grouping by 2+ fields for better performance"
+            "recommendation": "Use lazy=False when grouping by 2+ fields, or switch to formatted_read_group"
         }
     }, indent=2)
 
@@ -1647,6 +1783,36 @@ def execute_method(
                     return ExecuteMethodResponse(success=False, error="kwargs_json must be a JSON object")
             except json.JSONDecodeError as e:
                 return ExecuteMethodResponse(success=False, error=f"Invalid kwargs_json: {e}")
+
+        # Known @api.private methods that cannot be called via RPC in Odoo 19
+        PRIVATE_METHOD_HINTS = {
+            "check_access": "check_access is @api.private in v19. Use has_access(operation) instead (returns boolean).",
+            "_read_group": "_read_group is @api.private. Use formatted_read_group (v19+) or read_group (deprecated but still works).",
+            "search_fetch": "search_fetch is @api.private. Use search_read instead.",
+            "fetch": "fetch is @api.private. Use read instead.",
+        }
+
+        # Static fallback check for known private methods
+        if method in PRIVATE_METHOD_HINTS:
+            elapsed_ms = (time.time() - start_time) * 1000
+            return ExecuteMethodResponse(
+                success=False,
+                error=f"Method '{method}' is @api.private and cannot be called via RPC.",
+                hint=PRIVATE_METHOD_HINTS[method],
+                execution_time_ms=round(elapsed_ms, 2),
+            )
+
+        # Dynamic check: if method starts with _ and live doc confirms it's not public
+        if method.startswith("_"):
+            live_doc = _get_live_doc(model)
+            if live_doc and method not in live_doc.get("methods", {}):
+                elapsed_ms = (time.time() - start_time) * 1000
+                return ExecuteMethodResponse(
+                    success=False,
+                    error=f"Method '{method}' is not a public method on {model}. It may be @api.private or doesn't exist.",
+                    hint=f"Use odoo://methods/{model} to see available public methods.",
+                    execution_time_ms=round(elapsed_ms, 2),
+                )
 
         # Apply smart limits for search methods
         DEFAULT_LIMIT = 100
