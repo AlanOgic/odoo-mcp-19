@@ -31,6 +31,13 @@ V2_ARG_MAPPING: Dict[str, List[Tuple[int, str]]] = {
         (1, "fields"),
         (2, "groupby"),
     ],
+    # formatted_read_group (v19+ replacement for deprecated read_group)
+    # Signature: formatted_read_group(domain, groupby=(), aggregates=(), having=(), offset=0, limit=None, order=None)
+    "formatted_read_group": [
+        (0, "domain"),
+        (1, "groupby"),
+        (2, "aggregates"),
+    ],
 
     # Write methods
     # v2 API uses vals_list (array of dicts) for create
@@ -72,6 +79,10 @@ V2_ARG_MAPPING: Dict[str, List[Tuple[int, str]]] = {
         (0, "operation"),
     ],
     "check_access_rule": [
+        (0, "operation"),
+    ],
+    # has_access (v19+ replacement for check_access which is now @api.private)
+    "has_access": [
         (0, "operation"),
     ],
 

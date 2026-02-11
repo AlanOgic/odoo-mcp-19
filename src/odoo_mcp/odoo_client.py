@@ -166,6 +166,26 @@ class OdooClient:
         except Exception as e:
             return {"error": str(e)}
 
+    def get_model_doc(self, model_name: str) -> Optional[Dict[str, Any]]:
+        """Fetch model documentation from /doc-bearer/<model>.json endpoint.
+
+        The api_doc module is auto-installed in Odoo 19 (depends: ['web']).
+        Requires the user to have the api_doc.group_allow_doc group.
+
+        Returns the full model doc dict or None if unavailable.
+        """
+        url = f"{self.url}/doc-bearer/{model_name}.json"
+        try:
+            response = self.session.post(url, json={}, timeout=self.timeout)
+            response.raise_for_status()
+            data = response.json()
+            # JSON-2 may wrap in {"result": ...} or return directly
+            if isinstance(data, dict) and "result" in data and isinstance(data["result"], dict):
+                return data["result"]
+            return data
+        except Exception:
+            return None
+
     def search_read(
         self,
         model_name: str,
