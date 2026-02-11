@@ -8,16 +8,6 @@
 
 Connect Claude and AI assistants to Odoo 19+ via the Model Context Protocol (MCP).
 
-"I have administrator-level access to your entire Odoo instance — every model, every method, every field, here's what that means in practice:
-I can do anything a senior Odoo developer + admin can do, but through natural language:
-- Data & Reporting — search, read, aggregate, export from any model. Sales analytics, stock valuations, CRM pipelines, accounting reports, tax compliance... you name it.
-- Operations — create/update/delete records, confirm sales orders, validate invoices, process payments, manage stock transfers, handle rentals and loans. Full quote-to-cash and lead-to-won workflows in single calls.
-- Configuration — modify settings, create custom fields logic, manage users/access rights, set up automated actions.
-- Discovery — I can introspect any model's schema, methods, fields, and documentation on the fly. If I don't know a field name, I look it up before querying — no guessing.
-- Batch & Workflows — chain multiple operations together atomically, run complex multi-step business processes.
-The approach is simple: you tell me what you need in plain language, I translate it into precise Odoo API calls. Whether it's "show me overdue rental equipment" or "create an invoice for client X with these lines and post it" or "what's our sales pipeline looking like this quarter" — I've got it.
-What do you need? 🔧", Claude Opus 4.6
-
 ## Features
 
 - **4 tools, full power** - `execute_method` calls ANY method on ANY model. Combined with `batch_execute`, `execute_workflow`, and `configure_odoo`, you have complete Odoo API access
