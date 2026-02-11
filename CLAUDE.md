@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **Odoo MCP Server 19** - A standalone MCP server for Odoo 19+ using the v2 JSON-2 API.
 
-- **Version**: 1.9.0
+- **Version**: 1.10.0
 - **MCP Spec**: MCP 2025-11-25 (FastMCP 3.0.0b1+)
 - **Odoo Support**: v19+ only (v2 JSON-2 API)
 
@@ -27,6 +27,7 @@ odoo-mcp-19/
 │   ├── __init__.py              # Package initialization
 │   ├── __main__.py              # CLI entry point
 │   ├── server.py                # MCP server (tools, resources, prompts)
+│   ├── safety.py                # Safety classification engine (v1.10.0)
 │   ├── odoo_client.py           # Odoo v2 API client
 │   ├── arg_mapping.py           # Positional to named args conversion
 │   ├── module_knowledge.json    # Module-specific methods knowledge base
@@ -202,6 +203,54 @@ Read `odoo://model-limitations` to see:
 | `lots_visible` in fields | Non-stored computed field | Exclude from fields, fetch separately |
 | `product_category_name` | 3-level deep related field | Exclude from fields/domain |
 | Dot notation filters | Complex JOINs may fail | Query related models separately |
+
+## Safety Layer (v1.10.0)
+
+Pre-execution safety classification that gates dangerous operations behind confirmation.
+
+### Risk Levels
+
+| Level | Behavior | Confirm? |
+|-------|----------|----------|
+| `SAFE` | Execute immediately | Never |
+| `MEDIUM` | Gate based on mode/volume | Conditional |
+| `HIGH` | Always require confirmation | Always |
+| `BLOCKED` | Always refuse | N/A |
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_SAFETY_MODE` | `strict` | `strict` = MEDIUM batch writes confirm; `permissive` = only HIGH/BLOCKED |
+| `MCP_SAFETY_AUDIT` | (disabled) | `true` to log audit entries to stderr |
+
+### Confirmation Flow
+
+1. Caller sends `execute_method(model, method, args_json, kwargs_json)`
+2. Safety layer classifies the operation
+3. If confirmation needed → returns `pending_confirmation=true` with `safety` classification
+4. Caller reviews, then re-calls with `confirmed=true` to proceed
+
+### Blocked Models (write always refused)
+
+`ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `res.users`
+
+### Sensitive Models (write always confirms)
+
+`account.move`, `account.payment`, `account.bank.statement`, `hr.payslip`, `ir.cron`
+
+### Cascade Warnings
+
+Known side effects are surfaced for:
+- `sale.order` + `action_confirm` → creates deliveries
+- `account.move` + `action_post` → creates journal entries (irreversible)
+- `stock.picking` + `button_validate` → updates stock levels
+- `purchase.order` + `button_confirm` → creates incoming receipts
+- `account.payment` + `action_post` → creates journal entries + reconciliation
+
+### Integration
+
+Safety checks are integrated in `execute_method`, `batch_execute`, and `execute_workflow`. The `confirmed` parameter (default `False`) is backward-compatible.
 
 ## Notes for Claude Code
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "odoo-mcp-19"
-version = "1.9.0"
+version = "1.10.0"
 description = "MCP Server for Odoo 19+ with v2 JSON-2 API Support"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,6 +40,7 @@ dev = [
     "ruff",
     "build",
     "twine",
+    "pytest>=7.0",
 ]
 
 [project.scripts]
