@@ -17,4 +17,6 @@ docker run --rm -i \
   -e ODOO_PASSWORD="${ODOO_PASSWORD:-}" \
   -e ODOO_TIMEOUT="${ODOO_TIMEOUT:-30}" \
   -e ODOO_VERIFY_SSL="${ODOO_VERIFY_SSL:-true}" \
-  odoo-mcp-19:doc-bearer
+  -e MCP_SAFETY_MODE="${MCP_SAFETY_MODE:-strict}" \
+  -e MCP_SAFETY_AUDIT="${MCP_SAFETY_AUDIT:-true}" \
+  odoo-mcp-19:latest

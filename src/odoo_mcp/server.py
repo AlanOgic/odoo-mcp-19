@@ -30,6 +30,14 @@ from mcp.types import Icon
 from pydantic import BaseModel, Field
 
 from .odoo_client import OdooClient, get_odoo_client
+from .safety import (
+    RiskLevel,
+    SafetyClassification,
+    classify_operation,
+    classify_batch,
+    classify_workflow,
+    audit_log,
+)
 
 
 # ----- Icon Loading -----
@@ -509,6 +517,8 @@ class ExecuteMethodResponse(BaseModel):
     issue_analysis: Optional[IssueAnalysis] = Field(default=None, description="Issue analysis when fallback was used")
     note: Optional[str] = Field(default=None, description="Additional note about the execution")
     execution_time_ms: Optional[float] = Field(default=None, description="Execution time in milliseconds")
+    pending_confirmation: bool = Field(default=False, description="Whether the operation requires confirmation before execution")
+    safety: Optional[SafetyClassification] = Field(default=None, description="Safety classification of the operation")
 
 
 class BatchOperationResult(BaseModel):
@@ -528,6 +538,9 @@ class BatchExecuteResponse(BaseModel):
     failed_operations: int = Field(description="Failed operations count")
     error: Optional[str] = Field(default=None, description="Overall error message if any operation failed")
     execution_time_ms: Optional[float] = Field(default=None, description="Total execution time in milliseconds")
+    pending_confirmation: bool = Field(default=False, description="Whether the batch requires confirmation before execution")
+    safety_preview: Optional[List[SafetyClassification]] = Field(default=None, description="Safety classifications for each operation")
+    overall_risk: Optional[str] = Field(default=None, description="Overall risk level across all operations")
 
 
 class WorkflowStepResult(BaseModel):
@@ -552,6 +565,9 @@ class ExecuteWorkflowResponse(BaseModel):
     invoice_id: Optional[int] = Field(default=None, description="Created invoice ID (for invoice workflows)")
     invoice_ids: Optional[List[int]] = Field(default=None, description="Created invoice IDs (for order workflows)")
     execution_time_ms: Optional[float] = Field(default=None, description="Total execution time in milliseconds")
+    pending_confirmation: bool = Field(default=False, description="Whether the workflow requires confirmation before execution")
+    safety_preview: Optional[List[SafetyClassification]] = Field(default=None, description="Safety classifications for each workflow step")
+    overall_risk: Optional[str] = Field(default=None, description="Overall risk level across all workflow steps")
 
 
 # ----- MCP Resources -----
@@ -1723,6 +1739,9 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
     - odoo://tools/{query} - Search operations
     - odoo://docs/{target} - Documentation URLs
     - odoo://module-knowledge/{name} - Module-specific methods
+
+    SAFETY: Dangerous operations return pending_confirmation=true.
+    Add confirmed=true to proceed after reviewing the classification.
     """,
     annotations={
         "title": "Execute Odoo Method",
@@ -1739,6 +1758,7 @@ def execute_method(
     method: str,
     args_json: str = None,
     kwargs_json: str = None,
+    confirmed: bool = False,
 ) -> ExecuteMethodResponse:
     """
     Execute any method on an Odoo model.
@@ -1813,6 +1833,39 @@ def execute_method(
                     hint=f"Use odoo://methods/{model} to see available public methods.",
                     execution_time_ms=round(elapsed_ms, 2),
                 )
+
+        # --- Safety Classification ---
+        classification = classify_operation(model, method, args, kwargs)
+
+        if classification.risk_level == RiskLevel.BLOCKED:
+            audit_log(classification, confirmed=confirmed, executed=False)
+            elapsed_ms = (time.time() - start_time) * 1000
+            return ExecuteMethodResponse(
+                success=False,
+                pending_confirmation=True,
+                safety=classification,
+                error=classification.blocked_reason,
+                hint="Use the Odoo web interface instead.",
+                execution_time_ms=round(elapsed_ms, 2),
+            )
+
+        if classification.requires_confirmation and not confirmed:
+            audit_log(classification, confirmed=False, executed=False)
+            message = classification.reason
+            if classification.cascade_warning:
+                message += f"\n\nWARNING: {classification.cascade_warning}"
+            elapsed_ms = (time.time() - start_time) * 1000
+            return ExecuteMethodResponse(
+                success=False,
+                pending_confirmation=True,
+                safety=classification,
+                error=message,
+                hint="Re-call execute_method with confirmed=true to proceed.",
+                execution_time_ms=round(elapsed_ms, 2),
+            )
+
+        if classification.risk_level != RiskLevel.SAFE:
+            audit_log(classification, confirmed=confirmed, executed=True)
 
         # Apply smart limits for search methods
         DEFAULT_LIMIT = 100
@@ -1916,7 +1969,10 @@ def execute_method(
 
 
 @mcp.tool(
-    description="Execute multiple Odoo operations in a batch with progress tracking",
+    description="""Execute multiple Odoo operations in a batch with progress tracking.
+
+    SAFETY: Dangerous operations return pending_confirmation=true.
+    Add confirmed=true to proceed after reviewing the safety preview.""",
     annotations={
         "title": "Batch Execute",
         "readOnlyHint": False,
@@ -1930,6 +1986,7 @@ def execute_method(
 async def batch_execute(
     operations: List[Dict[str, Any]],
     atomic: bool = True,
+    confirmed: bool = False,
     progress: Progress = Progress(),
 ) -> BatchExecuteResponse:
     """
@@ -1942,6 +1999,7 @@ async def batch_execute(
             - args_json: str (optional)
             - kwargs_json: str (optional)
         atomic: If True, fail fast on first error
+        confirmed: Set to true to bypass safety confirmation
     """
     start_time = time.time()
     # Get Odoo client directly (works in both sync and background task modes)
@@ -1952,6 +2010,53 @@ async def batch_execute(
 
     # Set up progress tracking
     await progress.set_total(len(operations))
+
+    # --- Safety Classification for batch ---
+    classifications, overall_risk, any_needs_confirmation = classify_batch(operations)
+
+    # BLOCKED operations always refuse
+    blocked = [c for c in classifications if c.risk_level == RiskLevel.BLOCKED]
+    if blocked:
+        for c in blocked:
+            audit_log(c, confirmed=confirmed, executed=False)
+        elapsed_ms = (time.time() - start_time) * 1000
+        blocked_models = ", ".join(set(c.model for c in blocked))
+        return BatchExecuteResponse(
+            success=False,
+            results=[],
+            total_operations=len(operations),
+            successful_operations=0,
+            failed_operations=0,
+            error=f"Batch contains blocked operations on: {blocked_models}. Remove them and retry.",
+            pending_confirmation=True,
+            safety_preview=classifications,
+            overall_risk=overall_risk.value,
+            execution_time_ms=round(elapsed_ms, 2),
+        )
+
+    # Operations needing confirmation
+    if any_needs_confirmation and not confirmed:
+        for c in classifications:
+            if c.requires_confirmation:
+                audit_log(c, confirmed=False, executed=False)
+        elapsed_ms = (time.time() - start_time) * 1000
+        return BatchExecuteResponse(
+            success=False,
+            results=[],
+            total_operations=len(operations),
+            successful_operations=0,
+            failed_operations=0,
+            error="Batch contains operations that require confirmation. Review safety_preview and re-call with confirmed=true.",
+            pending_confirmation=True,
+            safety_preview=classifications,
+            overall_risk=overall_risk.value,
+            execution_time_ms=round(elapsed_ms, 2),
+        )
+
+    # Audit non-safe operations that will proceed
+    for c in classifications:
+        if c.risk_level != RiskLevel.SAFE:
+            audit_log(c, confirmed=confirmed, executed=True)
 
     try:
         for idx, op in enumerate(operations):
@@ -2563,6 +2668,9 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     - stock_transfer: Create transfer -> Confirm -> Validate
 
     Or describe a custom workflow in natural language.
+
+    SAFETY: Workflows with dangerous steps return pending_confirmation=true.
+    Add confirmed=true to proceed after reviewing the safety preview.
     """,
     annotations={
         "title": "Execute Workflow",
@@ -2577,6 +2685,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
 async def execute_workflow(
     workflow: str,
     params_json: str = None,
+    confirmed: bool = False,
     progress: Progress = Progress(),
 ) -> ExecuteWorkflowResponse:
     """
@@ -2585,6 +2694,7 @@ async def execute_workflow(
     Parameters:
         workflow: Workflow name or description
         params_json: JSON object with workflow parameters
+        confirmed: Set to true to bypass safety confirmation
 
     Returns:
         Results from each step of the workflow
@@ -2600,6 +2710,32 @@ async def execute_workflow(
             workflow=workflow,
             success=False,
             error=f"Invalid params_json: {e}",
+        )
+
+    # --- Safety Classification for workflow ---
+    safety_preview = classify_workflow(workflow, params)
+    if safety_preview is not None and not confirmed:
+        elapsed_ms = (time.time() - start_time) * 1000
+        return ExecuteWorkflowResponse(
+            workflow=workflow,
+            success=False,
+            pending_confirmation=True,
+            safety_preview=[
+                SafetyClassification(
+                    risk_level=step.risk_level,
+                    model=step.model,
+                    method=step.method,
+                    record_count=None,
+                    requires_confirmation=step.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED),
+                    reason=f"Step '{step.step}': {step.risk_level.value} risk",
+                    cascade_warning=step.cascade_warning,
+                )
+                for step in safety_preview.steps
+            ],
+            overall_risk=safety_preview.overall_risk.value,
+            error=safety_preview.message,
+            tip="Re-call execute_workflow with confirmed=true to proceed.",
+            execution_time_ms=round(elapsed_ms, 2),
         )
 
     workflow_lower = workflow.lower().strip()
