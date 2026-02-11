@@ -42,7 +42,7 @@ odoo-mcp-19/
 ### Key Components
 
 **1. MCP Server** (`server.py`)
-- **4 tools**: execute_method, batch_execute, execute_workflow, configure_odoo
+- **5 tools**: execute_method, batch_execute, execute_workflow, configure_odoo, read_resource
 - **23 resources** for discovery (models, schema, fields, methods, actions, tools, domain-syntax, model-limitations, templates, etc.)
 - **13 prompts** for guided workflows
 - Module knowledge loading and error suggestions
@@ -295,11 +295,11 @@ execute_method("model", "write",
 (6, 0, [ids])     # Replace all (M2M)
 ```
 
-## Architecture (4 Tools)
+## Architecture (5 Tools)
 
-All discovery moved to resources. Only action tools remain:
+All discovery moved to resources. Action tools + resource bridge for clients without MCP resources support:
 
-### Tools (4 total)
+### Tools (5 total)
 
 | Tool | Purpose |
 |------|---------|
@@ -307,6 +307,7 @@ All discovery moved to resources. Only action tools remain:
 | `batch_execute` | Multiple operations atomically (with progress tracking) |
 | `execute_workflow` | Pre-built multi-step workflows (with progress tracking) |
 | `configure_odoo` | Interactive connection configuration (user elicitation) |
+| `read_resource` | Read any `odoo://` resource by URI (bridge for clients like Claude Desktop) |
 
 ### Discovery Resources
 

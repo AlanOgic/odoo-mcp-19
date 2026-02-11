@@ -17,4 +17,4 @@ docker run --rm -i \
   -e ODOO_PASSWORD="${ODOO_PASSWORD:-}" \
   -e ODOO_TIMEOUT="${ODOO_TIMEOUT:-30}" \
   -e ODOO_VERIFY_SSL="${ODOO_VERIFY_SSL:-true}" \
-  alanogik/odoo-mcp-19:latest
+  odoo-mcp-19:doc-bearer

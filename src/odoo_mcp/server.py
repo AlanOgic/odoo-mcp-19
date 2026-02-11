@@ -1679,7 +1679,7 @@ def discover_actions_resource(model: str) -> str:
     return json.dumps(result, indent=2)
 
 
-# ----- MCP Tools (Only 3: execute_method, batch_execute, execute_workflow) -----
+# ----- MCP Tools (execute_method, batch_execute, execute_workflow, configure_odoo, read_resource) -----
 
 # Icon list for tools (reusable)
 _tool_icons = [ODOO_ICON] if ODOO_ICON else None
@@ -2990,4 +2990,99 @@ def get_tool_registry() -> str:
             "stock": [k for k, v in TOOL_REGISTRY.items() if "stock" in v.get("model", "")],
             "hr": [k for k, v in TOOL_REGISTRY.items() if "hr" in v.get("model", "")],
         }
+    }, indent=2)
+
+
+# ----- URI Routing for read_resource tool -----
+# Maps odoo:// URIs to their handler functions.
+# More specific patterns (e.g. /schema, /fields, /docs) MUST come before generic /model/{name}.
+
+_RESOURCE_ROUTES: list[tuple[str, callable, list[str]]] = [
+    (r"^odoo://models$", get_models, []),
+    (r"^odoo://model/([^/]+)/schema$", get_model_schema, ["model_name"]),
+    (r"^odoo://model/([^/]+)/fields$", get_model_fields_light, ["model_name"]),
+    (r"^odoo://model/([^/]+)/docs$", get_model_docs, ["model_name"]),
+    (r"^odoo://model/([^/]+)$", get_model_info, ["model_name"]),
+    (r"^odoo://record/([^/]+)/(\d+)$", get_record, ["model_name", "record_id"]),
+    (r"^odoo://methods/([^/]+)$", get_methods, ["model_name"]),
+    (r"^odoo://find-model/(.+)$", find_model_resource, ["concept"]),
+    (r"^odoo://actions/([^/]+)$", discover_actions_resource, ["model"]),
+    (r"^odoo://tools/(.+)$", search_tools_resource, ["query"]),
+    (r"^odoo://docs/(.+)$", get_documentation_urls, ["target"]),
+    (r"^odoo://module-knowledge/(.+)$", get_module_knowledge_by_name, ["module_name"]),
+    (r"^odoo://module-knowledge$", get_module_knowledge, []),
+    (r"^odoo://concepts$", get_concept_mappings, []),
+    (r"^odoo://templates$", get_resource_templates, []),
+    (r"^odoo://workflows$", get_workflows, []),
+    (r"^odoo://server/info$", get_server_info, []),
+    (r"^odoo://domain-syntax$", get_domain_syntax, []),
+    (r"^odoo://model-limitations$", get_model_limitations, []),
+    (r"^odoo://pagination$", get_pagination_guide, []),
+    (r"^odoo://hierarchical$", get_hierarchical_guide, []),
+    (r"^odoo://aggregation$", get_aggregation_guide, []),
+    (r"^odoo://tool-registry$", get_tool_registry, []),
+]
+
+
+_READ_RESOURCE_MAX_CHARS = 15000  # Safe default for Claude Desktop context window
+
+
+@mcp.tool(
+    description="""Read any odoo:// resource by URI. Use this for schema discovery, method lookup, guides, etc.
+
+    IMPORTANT: Only fetch resources relevant to the user's current task. Do NOT explore multiple resources just to see what's available.
+
+    Recommended workflow:
+    1. odoo://find-model/{concept} - Find the right model name
+    2. odoo://model/{model}/fields - Get field names and types (use BEFORE any query)
+    3. odoo://methods/{model} - Check available methods if needed
+    Then use execute_method() to query.
+
+    Other useful resources:
+    - odoo://domain-syntax - Domain filter reference
+    - odoo://aggregation - Aggregation/groupby guide
+    - odoo://templates - List all available resource URIs
+    """,
+    annotations={
+        "title": "Read Resource",
+        "readOnlyHint": True,
+        "openWorldHint": False,
+    },
+    icons=_tool_icons,
+)
+def read_resource(uri: str, max_chars: int = _READ_RESOURCE_MAX_CHARS) -> str:
+    """Read an Odoo MCP resource by URI.
+
+    Parameters:
+        uri: Resource URI (e.g. 'odoo://model/res.partner/fields')
+        max_chars: Max output length in characters (default: 15000). Set to 0 for unlimited.
+    """
+    for pattern, handler, param_names in _RESOURCE_ROUTES:
+        match = re.match(pattern, uri)
+        if match:
+            args = dict(zip(param_names, match.groups()))
+            result = handler(**args)
+            if max_chars and len(result) > max_chars:
+                truncated = result[:max_chars]
+                warning = json.dumps({
+                    "_truncated": True,
+                    "_total_chars": len(result),
+                    "_returned_chars": max_chars,
+                    "_hint": f"Output truncated from {len(result):,} to {max_chars:,} chars. "
+                             f"Use max_chars=0 for full output, or use narrower queries "
+                             f"(e.g. odoo://model/{{model}}/fields instead of /schema)."
+                })
+                return truncated + "\n\n" + warning
+            return result
+
+    return json.dumps({
+        "error": f"Unknown resource URI: {uri}",
+        "hint": "Use odoo://templates to list all available resource URIs",
+        "examples": [
+            "odoo://model/res.partner/schema",
+            "odoo://model/sale.order/fields",
+            "odoo://methods/res.partner",
+            "odoo://find-model/invoice",
+            "odoo://domain-syntax",
+        ]
     }, indent=2)
