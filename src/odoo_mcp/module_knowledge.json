@@ -1723,15 +1723,121 @@
         },
         {
           "match": "Access Denied",
-          "suggestion": "Check user permissions with odoo://model/{model}/access"
+          "suggestion": "Check user permissions with has_access('read') on {model}"
+        },
+        {
+          "match": "Expected singleton",
+          "suggestion": "The method expects exactly one record but got multiple. Pass a single ID: args_json='[[id]]' not args_json='[[id1, id2]]'"
+        },
+        {
+          "match": "null value in column",
+          "suggestion": "A required field is missing. Read odoo://model/{model}/quick-schema to see required fields (req=true)"
+        },
+        {
+          "match": "invalid field",
+          "suggestion": "Field name doesn't exist on {model}. Read odoo://model/{model}/quick-schema to get exact field names"
+        },
+        {
+          "match": "readonly",
+          "suggestion": "Trying to write a readonly/computed field on {model}. Read odoo://model/{model}/quick-schema (ro=true = readonly)"
+        },
+        {
+          "match": "Invalid value for Many2one",
+          "suggestion": "Many2one fields require a numeric ID, not a string name. Use name_search to find the ID first, or use resolve_json parameter"
+        },
+        {
+          "match": "expected an integer",
+          "suggestion": "Many2one field requires numeric ID. Use name_search on the target model to resolve the name to an ID, or use resolve_json parameter"
+        },
+        {
+          "match": "is not a valid value",
+          "suggestion": "Invalid selection value for {model}. Read odoo://model/{model}/quick-schema to see valid selection values for the state field"
+        },
+        {
+          "match": "does not exist",
+          "suggestion": "Record not found. Verify the ID exists with search_read on {model} before calling this method"
+        },
+        {
+          "match": "unique constraint",
+          "suggestion": "Duplicate value violates a unique constraint on {model}. Check for existing records with the same value first"
+        },
+        {
+          "match": "ondelete",
+          "suggestion": "Cannot delete: other records reference this one. Check related records before deleting from {model}"
+        },
+        {
+          "match": "vals_list",
+          "suggestion": "create() expects a dict or list of dicts. Use args_json='[{\"field\": \"value\"}]' (single) or args_json='[[{\"f1\": \"v1\"}, {\"f2\": \"v2\"}]]' (batch)"
         }
       ]
     },
+    "500": {
+      "patterns": [
+        {
+          "match": "OperationalError",
+          "suggestion": "Database error on {model}. Possible timeout or lock. Try reducing limit or simplifying domain"
+        },
+        {
+          "match": "NoneType",
+          "suggestion": "Null reference error on {model}. A computed field may depend on missing data. Try excluding computed fields from the fields list"
+        },
+        {
+          "match": "NotImplementedError",
+          "suggestion": "Method not fully implemented for this case on {model}. Check odoo://model-limitations for known issues"
+        },
+        {
+          "match": "RecursionError",
+          "suggestion": "Circular reference detected on {model}. Check for circular parent/child relationships"
+        },
+        {
+          "match": "statement timeout",
+          "suggestion": "Query too slow on {model}. Reduce limit, simplify domain, or avoid dot notation in filters"
+        }
+      ],
+      "suggestion": "Internal server error on {model}. Check odoo://model-limitations for known issues, or try with simpler parameters."
+    },
     "403": {
-      "suggestion": "Permission denied. Verify API key permissions and record-level access rules."
+      "patterns": [
+        {
+          "match": "ir.rule",
+          "suggestion": "Record-level security rule blocking access to {model}. The current user's ir.rule prevents this operation"
+        },
+        {
+          "match": "group_",
+          "suggestion": "User lacks the required security group for this operation on {model}. Check user groups in Odoo settings"
+        }
+      ],
+      "suggestion": "Permission denied on {model}. Verify API key permissions and record-level access rules (ir.rule)."
     },
     "404": {
-      "suggestion": "Record or endpoint not found. Verify the model name and record ID exist."
+      "patterns": [
+        {
+          "match": "json/2",
+          "suggestion": "API endpoint not found. Verify the model name '{model}' is correct (use odoo://find-model to search)"
+        },
+        {
+          "match": "doc-bearer",
+          "suggestion": "Live documentation unavailable. The api_doc module may not be installed, or the user lacks the group_allow_doc group"
+        }
+      ],
+      "suggestion": "Not found. Verify the model name and record ID exist on {model}. Use odoo://find-model to search by concept."
+    },
+    "_fallback_patterns": {
+      "_note": "Generic patterns matched against any error message regardless of HTTP status code",
+      "patterns": [
+        {
+          "match": "Many2one",
+          "suggestion": "Many2one fields require a numeric ID (integer), not a string name. Use name_search() or resolve_json to convert names to IDs"
+        },
+        {
+          "match": "singleton",
+          "suggestion": "Method expects exactly one record. Pass a single ID in the list: args_json='[[42]]'"
+        },
+        {
+          "match": "readonly field",
+          "suggestion": "Cannot write to a readonly/computed field on {model}. Exclude it from write values"
+        }
+      ]
     }
   }
 }

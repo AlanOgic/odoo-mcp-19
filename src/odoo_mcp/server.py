@@ -75,6 +75,162 @@ def load_module_knowledge() -> Dict[str, Any]:
 
 MODULE_KNOWLEDGE = load_module_knowledge()
 
+# ----- Default Context from env -----
+
+_DEFAULT_CONTEXT: Optional[Dict[str, Any]] = None
+_default_ctx_raw = os.environ.get("MCP_DEFAULT_CONTEXT")
+if _default_ctx_raw:
+    try:
+        _DEFAULT_CONTEXT = json.loads(_default_ctx_raw)
+        if not isinstance(_DEFAULT_CONTEXT, dict):
+            print(f"Warning: MCP_DEFAULT_CONTEXT must be a JSON object, ignoring", file=sys.stderr)
+            _DEFAULT_CONTEXT = None
+    except json.JSONDecodeError as e:
+        print(f"Warning: MCP_DEFAULT_CONTEXT invalid JSON: {e}", file=sys.stderr)
+
+
+def _merge_context(explicit_context: Optional[Dict] = None) -> Optional[Dict]:
+    """Merge MCP_DEFAULT_CONTEXT with explicit context. Explicit takes priority."""
+    if not _DEFAULT_CONTEXT and not explicit_context:
+        return None
+    if not _DEFAULT_CONTEXT:
+        return explicit_context
+    if not explicit_context:
+        return dict(_DEFAULT_CONTEXT)
+    merged = dict(_DEFAULT_CONTEXT)
+    merged.update(explicit_context)
+    return merged
+
+
+# ----- Compact Schema Builder -----
+
+
+def _build_compact_schema(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Build an ultra-compact schema representation from fields_get output.
+
+    Returns a dict with:
+    - fields: {name: {t, req?, ro?, rel?, sel?}} with short keys
+    - required_fields: list of required field names (top-level for quick access)
+
+    This produces ~1.5-2KB vs 5-10KB for /fields, saving 60-80% tokens.
+    """
+    compact = {}
+    required = []
+    for name, meta in fields.items():
+        ftype = meta.get("type", "")
+        entry: Dict[str, Any] = {"t": ftype}
+        if meta.get("required"):
+            entry["req"] = True
+            required.append(name)
+        if meta.get("readonly"):
+            entry["ro"] = True
+        if ftype in ("many2one", "one2many", "many2many"):
+            entry["rel"] = meta.get("relation", "")
+        # Only include selection values for 'state' field (high-value, small)
+        if ftype == "selection" and name == "state" and meta.get("selection"):
+            entry["sel"] = meta["selection"]
+        compact[name] = entry
+    return {"fields": compact, "required_fields": required}
+
+
+# ----- State Machine Definitions -----
+
+
+MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
+    "sale.order": {
+        "state_field": "state",
+        "states": ["draft", "sent", "sale", "done", "cancel"],
+        "transitions": [
+            {"from": "draft", "to": "sent", "method": "action_quotation_sent", "label": "Mark as Sent"},
+            {"from": "draft", "to": "sale", "method": "action_confirm", "label": "Confirm Order",
+             "side_effects": ["Creates delivery orders (stock.picking)", "Reserves stock"],
+             "irreversible": False},
+            {"from": "sent", "to": "sale", "method": "action_confirm", "label": "Confirm Order",
+             "side_effects": ["Creates delivery orders (stock.picking)", "Reserves stock"],
+             "irreversible": False},
+            {"from": "sale", "to": "done", "method": "action_lock", "label": "Lock Order",
+             "irreversible": False},
+            {"from": ["draft", "sent", "sale"], "to": "cancel", "method": "action_cancel", "label": "Cancel",
+             "irreversible": False},
+        ],
+    },
+    "account.move": {
+        "state_field": "state",
+        "states": ["draft", "posted", "cancel"],
+        "transitions": [
+            {"from": "draft", "to": "posted", "method": "action_post", "label": "Post/Validate",
+             "side_effects": ["Creates journal entries", "Updates account balances", "Assigns sequence number"],
+             "irreversible": True},
+            {"from": "posted", "to": "draft", "method": "button_draft", "label": "Reset to Draft",
+             "side_effects": ["Removes sequence assignment"],
+             "irreversible": False},
+            {"from": "posted", "to": "cancel", "method": "button_cancel", "label": "Cancel",
+             "irreversible": False},
+        ],
+    },
+    "crm.lead": {
+        "state_field": "type",
+        "note": "CRM uses type (lead/opportunity) + stage_id, not a simple state field",
+        "stages": "Dynamic - read crm.stage for available stages",
+        "transitions": [
+            {"from": "lead", "to": "opportunity", "method": "convert_opportunity", "label": "Convert to Opportunity",
+             "side_effects": ["May create/link partner"],
+             "irreversible": False},
+            {"from": "opportunity", "to": "won", "method": "action_set_won", "label": "Mark Won",
+             "side_effects": ["Updates probability to 100%"],
+             "irreversible": False},
+            {"from": "opportunity", "to": "lost", "method": "action_set_lost", "label": "Mark Lost",
+             "side_effects": ["Archives the lead"],
+             "irreversible": False},
+        ],
+    },
+    "stock.picking": {
+        "state_field": "state",
+        "states": ["draft", "waiting", "confirmed", "assigned", "done", "cancel"],
+        "transitions": [
+            {"from": "draft", "to": "confirmed", "method": "action_confirm", "label": "Confirm",
+             "irreversible": False},
+            {"from": ["confirmed", "waiting"], "to": "assigned", "method": "action_assign", "label": "Check Availability",
+             "side_effects": ["Reserves stock quantities"],
+             "irreversible": False},
+            {"from": "assigned", "to": "done", "method": "button_validate", "label": "Validate",
+             "side_effects": ["Updates stock levels", "Creates stock moves"],
+             "irreversible": True},
+            {"from": ["draft", "confirmed", "assigned"], "to": "cancel", "method": "action_cancel", "label": "Cancel",
+             "irreversible": False},
+        ],
+    },
+    "purchase.order": {
+        "state_field": "state",
+        "states": ["draft", "sent", "purchase", "done", "cancel"],
+        "transitions": [
+            {"from": "draft", "to": "sent", "method": "action_rfq_send", "label": "Send RFQ",
+             "irreversible": False},
+            {"from": ["draft", "sent"], "to": "purchase", "method": "button_confirm", "label": "Confirm Order",
+             "side_effects": ["Creates incoming receipt (stock.picking)"],
+             "irreversible": False},
+            {"from": "purchase", "to": "done", "method": "button_lock", "label": "Lock",
+             "irreversible": False},
+            {"from": ["draft", "sent", "purchase"], "to": "cancel", "method": "button_cancel", "label": "Cancel",
+             "irreversible": False},
+        ],
+    },
+    "hr.leave": {
+        "state_field": "state",
+        "states": ["draft", "confirm", "validate1", "validate", "refuse"],
+        "transitions": [
+            {"from": "draft", "to": "confirm", "method": "action_confirm", "label": "Confirm",
+             "irreversible": False},
+            {"from": "confirm", "to": "validate", "method": "action_approve", "label": "Approve",
+             "side_effects": ["Deducts leave allocation"],
+             "irreversible": False},
+            {"from": ["confirm", "validate"], "to": "refuse", "method": "action_refuse", "label": "Refuse",
+             "irreversible": False},
+        ],
+    },
+}
+
+
 # Runtime tracking of models that triggered fallback mechanisms
 # Structure: {"model.name": {"method": {error_category: {...}}}}
 RUNTIME_MODEL_ISSUES: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -349,21 +505,39 @@ def _track_model_issue(model: str, method: str, error_msg: str, domain: List = N
 
 
 def get_error_suggestion(error_msg: str, model: str = None, method: str = None) -> Optional[str]:
-    """Get a helpful suggestion based on error message patterns."""
+    """Get a helpful suggestion based on error message patterns.
+
+    Supports {model} template variable in suggestions (substituted with actual model name).
+    """
     error_patterns = MODULE_KNOWLEDGE.get("error_patterns", {})
+    model_name = model or "the model"
+
+    def _substitute(suggestion: str) -> str:
+        """Replace {model} placeholder with actual model name."""
+        return suggestion.replace("{model}", model_name)
+
+    error_lower = error_msg.lower()
 
     # Check for HTTP status code patterns
     for code, info in error_patterns.items():
+        if code.startswith("_"):
+            continue  # Skip meta keys like _fallback_patterns
         if code in str(error_msg):
             if isinstance(info, dict) and "patterns" in info:
                 for pattern in info["patterns"]:
-                    if pattern.get("match", "").lower() in error_msg.lower():
-                        return pattern.get("suggestion")
+                    if pattern.get("match", "").lower() in error_lower:
+                        return _substitute(pattern.get("suggestion", ""))
                 # Return general suggestion for this code
                 if "suggestion" in info:
-                    return info["suggestion"]
+                    return _substitute(info["suggestion"])
             elif isinstance(info, dict) and "suggestion" in info:
-                return info["suggestion"]
+                return _substitute(info["suggestion"])
+
+    # Check fallback patterns (match against any error regardless of HTTP code)
+    fallback = error_patterns.get("_fallback_patterns", {})
+    for pattern in fallback.get("patterns", []):
+        if pattern.get("match", "").lower() in error_lower:
+            return _substitute(pattern.get("suggestion", ""))
 
     # Check module-specific suggestions
     if model:
@@ -671,6 +845,167 @@ def get_model_fields_light(model_name: str) -> str:
         return json.dumps({"model": model_name, "field_count": len(light), "fields": light}, indent=2)
     except Exception as e:
         return json.dumps({"error": str(e)}, indent=2)
+
+
+@mcp.resource(
+    "odoo://model/{model_name}/quick-schema",
+    description="Ultra-compact schema (~1.5KB): short keys, no labels, no help. Best for token savings.",
+)
+def get_model_quick_schema(model_name: str) -> str:
+    """Get ultra-compact schema for a model.
+
+    Returns minimal field info with short keys (t=type, req=required, ro=readonly, rel=relation).
+    No indentation, no labels, no help text. ~60-80% smaller than /fields.
+    """
+    odoo_client = get_odoo_client()
+    try:
+        fields = odoo_client.get_model_fields(model_name)
+        schema = _build_compact_schema(fields)
+        schema["model"] = model_name
+        schema["field_count"] = len(schema["fields"])
+        return json.dumps(schema, separators=(",", ":"))
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.resource(
+    "odoo://model/{model_name}/workflow",
+    description="State machine transitions for a model: states, methods, side effects, irreversibility",
+)
+def get_model_workflow(model_name: str) -> str:
+    """Get workflow/state machine for a model.
+
+    Returns state transitions with methods to call, side effects, and irreversibility flags.
+    Static data for 6 main models, dynamic fallback for others (reads state field + action methods).
+    """
+    # Static state machines for well-known models
+    if model_name in MODEL_STATE_MACHINES:
+        result = {
+            "model": model_name,
+            "source": "static",
+            **MODEL_STATE_MACHINES[model_name],
+        }
+        return json.dumps(result, indent=2)
+
+    # Dynamic fallback: try to infer workflow from model metadata
+    odoo_client = get_odoo_client()
+    try:
+        fields = odoo_client.get_model_fields(model_name)
+        result = {
+            "model": model_name,
+            "source": "dynamic",
+            "state_field": None,
+            "states": [],
+            "available_methods": [],
+        }
+
+        # Check for state field
+        if "state" in fields:
+            state_meta = fields["state"]
+            if state_meta.get("type") == "selection" and state_meta.get("selection"):
+                result["state_field"] = "state"
+                result["states"] = [
+                    {"value": val, "label": label}
+                    for val, label in state_meta["selection"]
+                ]
+
+        # Check live doc for action/button methods
+        live_doc = _get_live_doc(model_name)
+        if live_doc:
+            for method_name, method_info in live_doc.get("methods", {}).items():
+                if method_name.startswith(("action_", "button_")):
+                    entry = {
+                        "name": method_name,
+                        "description": _strip_html(method_info.get("doc", "")) if method_info.get("doc") else "",
+                    }
+                    if method_info.get("api"):
+                        entry["api"] = method_info["api"]
+                    result["available_methods"].append(entry)
+
+        # Also check module knowledge
+        for module_name, module_info in MODULE_KNOWLEDGE.get("modules", {}).items():
+            if module_info.get("model") == model_name:
+                for method_name, method_info in module_info.get("special_methods", {}).items():
+                    if method_name.startswith(("action_", "button_")):
+                        result["available_methods"].append({
+                            "name": method_name,
+                            "description": method_info.get("description", ""),
+                        })
+
+        if not result["state_field"] and not result["available_methods"]:
+            result["note"] = f"No state machine detected for {model_name}. It may not have workflow transitions."
+
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, indent=2)
+
+
+@mcp.resource(
+    "odoo://bundle/{models_csv}",
+    description="Batch quick-schema for multiple models in one call (comma-separated, max 10)",
+)
+def get_bundle(models_csv: str) -> str:
+    """Get compact schemas for multiple models in a single call.
+
+    URI format: odoo://bundle/res.partner,sale.order,stock.picking
+    Max 10 models per request to keep response size reasonable.
+    """
+    odoo_client = get_odoo_client()
+    model_names = [m.strip() for m in models_csv.split(",") if m.strip()]
+    if len(model_names) > 10:
+        return json.dumps({"error": "Maximum 10 models per bundle request", "requested": len(model_names)})
+
+    bundle = {"models": {}, "errors": {}}
+    for model_name in model_names:
+        try:
+            fields = odoo_client.get_model_fields(model_name)
+            schema = _build_compact_schema(fields)
+            schema["field_count"] = len(schema["fields"])
+            bundle["models"][model_name] = schema
+        except Exception as e:
+            bundle["errors"][model_name] = str(e)
+
+    bundle["total"] = len(bundle["models"])
+    return json.dumps(bundle, separators=(",", ":"))
+
+
+_DEFAULT_BOOTSTRAP_MODELS = "res.partner,sale.order,account.move,product.product,stock.picking"
+
+
+@mcp.resource(
+    "odoo://session-bootstrap",
+    description="Bootstrap a conversation: quick-schemas + workflows for common models (configurable via MCP_BOOTSTRAP_MODELS)",
+)
+def get_session_bootstrap() -> str:
+    """Single call to bootstrap a conversation with schemas and workflows.
+
+    Includes compact schemas and workflow state machines for the most common models.
+    Configure via MCP_BOOTSTRAP_MODELS env var (comma-separated model names).
+    Default: res.partner,sale.order,account.move,product.product,stock.picking
+    """
+    odoo_client = get_odoo_client()
+    models_csv = os.environ.get("MCP_BOOTSTRAP_MODELS", _DEFAULT_BOOTSTRAP_MODELS)
+    model_names = [m.strip() for m in models_csv.split(",") if m.strip()]
+
+    result = {"schemas": {}, "workflows": {}, "errors": {}}
+
+    for model_name in model_names:
+        # Get compact schema
+        try:
+            fields = odoo_client.get_model_fields(model_name)
+            schema = _build_compact_schema(fields)
+            schema["field_count"] = len(schema["fields"])
+            result["schemas"][model_name] = schema
+        except Exception as e:
+            result["errors"][model_name] = str(e)
+
+        # Get workflow if available
+        if model_name in MODEL_STATE_MACHINES:
+            result["workflows"][model_name] = MODEL_STATE_MACHINES[model_name]
+
+    result["models_loaded"] = len(result["schemas"])
+    result["workflows_loaded"] = len(result["workflows"])
+    return json.dumps(result, separators=(",", ":"))
 
 
 @mcp.resource(
@@ -1054,6 +1389,22 @@ def get_resource_templates() -> str:
         "description": "Available resource templates (parameterized URIs)",
         "note": "Replace {param} with actual values when reading these resources",
         "templates": {
+            "odoo://model/{model_name}/quick-schema": {
+                "description": "Ultra-compact schema (~1.5KB): short keys (t=type, req, ro, rel). Best for token savings.",
+                "example": "odoo://model/res.partner/quick-schema"
+            },
+            "odoo://model/{model_name}/workflow": {
+                "description": "State machine: transitions, methods, side effects, irreversibility",
+                "example": "odoo://model/sale.order/workflow"
+            },
+            "odoo://bundle/{models_csv}": {
+                "description": "Batch quick-schema for multiple models (comma-separated, max 10)",
+                "example": "odoo://bundle/res.partner,sale.order,stock.picking"
+            },
+            "odoo://session-bootstrap": {
+                "description": "Bootstrap a conversation: quick-schemas + workflows for common models",
+                "example": "odoo://session-bootstrap"
+            },
             "odoo://model/{model_name}": {
                 "description": "Get information about a specific model including fields",
                 "example": "odoo://model/res.partner"
@@ -1713,7 +2064,7 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
     - odoo://aggregation - read_group guide
 
     MANDATORY WORKFLOW (no guessing!):
-    1. FIRST: Read odoo://model/{model}/schema to get exact field names/types
+    1. FIRST: Read odoo://model/{model}/quick-schema to get exact field names/types
     2. THEN: Build your query using schema field names
     Never guess field names - introspect schema first to avoid failed requests.
 
@@ -1725,12 +2076,16 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
     - One2many: (0,0,{}) create, (1,id,{}) update, (2,id,0) delete
 
     CRITICAL: Many2one fields = ALWAYS numeric ID, never the name!
+    Use resolve_json to auto-resolve names to IDs.
 
     Smart limits: Default 100, Max 1000 records
 
     DISCOVERY RESOURCES (read these before querying):
-    - odoo://model/{model}/schema - Field names & types (e.g. odoo://model/sale.order/schema)
+    - odoo://model/{model}/quick-schema - Compact field names & types (~1.5KB, best for token savings)
     - odoo://model/{model}/fields - Lightweight field list (e.g. odoo://model/res.partner/fields)
+    - odoo://model/{model}/workflow - State machine transitions (e.g. odoo://model/sale.order/workflow)
+    - odoo://bundle/{models} - Batch quick-schema for N models (e.g. odoo://bundle/res.partner,sale.order)
+    - odoo://session-bootstrap - Bootstrap conversation with schemas + workflows
     - odoo://methods/{model} - Available methods (e.g. odoo://methods/crm.lead)
     - odoo://actions/{model} - Discover actions (e.g. odoo://actions/sale.order)
     - odoo://model/{model}/docs - Rich docs with help text
@@ -1759,6 +2114,7 @@ def execute_method(
     args_json: str = None,
     kwargs_json: str = None,
     confirmed: bool = False,
+    resolve_json: str = None,
 ) -> ExecuteMethodResponse:
     """
     Execute any method on an Odoo model.
@@ -1768,6 +2124,10 @@ def execute_method(
         method: Method name (e.g., 'search_read', 'create')
         args_json: JSON array of positional arguments
         kwargs_json: JSON object of keyword arguments
+        confirmed: Set to true to bypass safety confirmation
+        resolve_json: JSON object to auto-resolve Many2one names to IDs.
+            Format: '{"field_name": {"model": "target.model", "search": "name to find"}}'
+            Resolves via name_search before execution. Errors if 0 or >1 matches.
 
     Examples:
         Search partners:
@@ -1780,6 +2140,12 @@ def execute_method(
             model='res.partner'
             method='create'
             args_json='[{"name": "Test Company"}]'
+
+        Write with auto-resolved Many2one:
+            model='res.partner'
+            method='write'
+            args_json='[[1], {"user_id": null}]'
+            resolve_json='{"user_id": {"model": "res.users", "search": "Administrator"}}'
     """
     start_time = time.time()
     odoo = ctx.request_context.lifespan_context.odoo
@@ -1803,6 +2169,73 @@ def execute_method(
                     return ExecuteMethodResponse(success=False, error="kwargs_json must be a JSON object")
             except json.JSONDecodeError as e:
                 return ExecuteMethodResponse(success=False, error=f"Invalid kwargs_json: {e}")
+
+        # Merge default context if configured
+        if _DEFAULT_CONTEXT:
+            explicit_ctx = kwargs.get("context")
+            merged = _merge_context(explicit_ctx)
+            if merged:
+                kwargs["context"] = merged
+
+        # --- resolve_json: auto-resolve Many2one names to IDs ---
+        if resolve_json:
+            try:
+                resolves = json.loads(resolve_json)
+                if not isinstance(resolves, dict):
+                    return ExecuteMethodResponse(success=False, error="resolve_json must be a JSON object")
+            except json.JSONDecodeError as e:
+                return ExecuteMethodResponse(success=False, error=f"Invalid resolve_json: {e}")
+
+            resolved_values = {}
+            for field_name, spec in resolves.items():
+                target_model = spec.get("model")
+                search_term = spec.get("search")
+                if not target_model or not search_term:
+                    return ExecuteMethodResponse(
+                        success=False,
+                        error=f"resolve_json['{field_name}'] requires 'model' and 'search' keys",
+                    )
+                try:
+                    matches = odoo.execute_method(
+                        target_model, "name_search", name=search_term, limit=5
+                    )
+                    if not matches:
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        return ExecuteMethodResponse(
+                            success=False,
+                            error=f"resolve_json: No match for '{search_term}' in {target_model}",
+                            hint=f"Search {target_model} manually to find the correct record",
+                            execution_time_ms=round(elapsed_ms, 2),
+                        )
+                    if len(matches) > 1:
+                        options = [f"  {m[0]}: {m[1]}" for m in matches[:5]]
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        return ExecuteMethodResponse(
+                            success=False,
+                            error=f"resolve_json: Ambiguous match for '{search_term}' in {target_model} ({len(matches)} results)",
+                            hint="Multiple matches found:\n" + "\n".join(options) + "\nUse the numeric ID directly instead.",
+                            execution_time_ms=round(elapsed_ms, 2),
+                        )
+                    resolved_values[field_name] = matches[0][0]  # Use the ID
+                except Exception as e:
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    return ExecuteMethodResponse(
+                        success=False,
+                        error=f"resolve_json: Failed to resolve '{field_name}': {e}",
+                        execution_time_ms=round(elapsed_ms, 2),
+                    )
+
+            # Inject resolved IDs into args (for write/create methods)
+            if resolved_values and args:
+                if method == "write" and len(args) >= 2 and isinstance(args[1], dict):
+                    args[1].update(resolved_values)
+                elif method == "create":
+                    if isinstance(args[0], dict):
+                        args[0].update(resolved_values)
+                    elif isinstance(args[0], list):
+                        for vals in args[0]:
+                            if isinstance(vals, dict):
+                                vals.update(resolved_values)
 
         # Known @api.private methods that cannot be called via RPC in Odoo 19
         PRIVATE_METHOD_HINTS = {
@@ -1902,11 +2335,14 @@ def execute_method(
                 limit = kwargs.get("limit", 100)
                 offset = kwargs.get("offset", 0)
                 order = kwargs.get("order")
+                context = kwargs.get("context")
 
                 # Step 1: search for IDs
                 search_kwargs = {"domain": domain, "limit": limit, "offset": offset}
                 if order:
                     search_kwargs["order"] = order
+                if context:
+                    search_kwargs["context"] = context
                 ids = odoo.execute_method(model, "search", **search_kwargs)
 
                 # Step 2: read the records
@@ -1914,6 +2350,8 @@ def execute_method(
                     read_kwargs = {}
                     if fields:
                         read_kwargs["fields"] = fields
+                    if context:
+                        read_kwargs["context"] = context
                     result = odoo.execute_method(model, "read", ids, **read_kwargs)
                 else:
                     result = []
@@ -2073,6 +2511,13 @@ async def batch_execute(
 
                 args = json.loads(args_json) if args_json else []
                 kwargs = json.loads(kwargs_json) if kwargs_json else {}
+
+                # Merge default context if configured
+                if _DEFAULT_CONTEXT:
+                    explicit_ctx = kwargs.get("context")
+                    merged = _merge_context(explicit_ctx)
+                    if merged:
+                        kwargs["context"] = merged
 
                 result = odoo.execute_method(model, method, *args, **kwargs)
                 results.append(BatchOperationResult(operation_index=idx, success=True, result=result))
@@ -3135,6 +3580,10 @@ def get_tool_registry() -> str:
 
 _RESOURCE_ROUTES: list[tuple[str, callable, list[str]]] = [
     (r"^odoo://models$", get_models, []),
+    (r"^odoo://session-bootstrap$", get_session_bootstrap, []),
+    (r"^odoo://bundle/(.+)$", get_bundle, ["models_csv"]),
+    (r"^odoo://model/([^/]+)/quick-schema$", get_model_quick_schema, ["model_name"]),
+    (r"^odoo://model/([^/]+)/workflow$", get_model_workflow, ["model_name"]),
     (r"^odoo://model/([^/]+)/schema$", get_model_schema, ["model_name"]),
     (r"^odoo://model/([^/]+)/fields$", get_model_fields_light, ["model_name"]),
     (r"^odoo://model/([^/]+)/docs$", get_model_docs, ["model_name"]),
@@ -3170,11 +3619,17 @@ _READ_RESOURCE_MAX_CHARS = 15000  # Safe default for Claude Desktop context wind
 
     Recommended workflow:
     1. odoo://find-model/{concept} - Find the right model name
-    2. odoo://model/{model}/fields - Get field names and types (use BEFORE any query)
+    2. odoo://model/{model}/quick-schema - Get field names and types (ultra-compact, best for tokens)
     3. odoo://methods/{model} - Check available methods if needed
     Then use execute_method() to query.
 
+    Batch operations:
+    - odoo://bundle/{models} - Quick-schema for N models in one call (e.g. odoo://bundle/res.partner,sale.order)
+    - odoo://session-bootstrap - Bootstrap conversation with schemas + workflows for common models
+
     Other useful resources:
+    - odoo://model/{model}/workflow - State machine transitions
+    - odoo://model/{model}/fields - Lightweight field list (larger than quick-schema, includes labels)
     - odoo://domain-syntax - Domain filter reference
     - odoo://aggregation - Aggregation/groupby guide
     - odoo://templates - List all available resource URIs
