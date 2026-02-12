@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **Odoo MCP Server 19** - A standalone MCP server for Odoo 19+ using the v2 JSON-2 API.
 
-- **Version**: 1.10.0
+- **Version**: 1.11.0
 - **MCP Spec**: MCP 2025-11-25 (FastMCP 3.0.0b1+)
 - **Odoo Support**: v19+ only (v2 JSON-2 API)
 
@@ -44,7 +44,7 @@ odoo-mcp-19/
 
 **1. MCP Server** (`server.py`)
 - **5 tools**: execute_method, batch_execute, execute_workflow, configure_odoo, read_resource
-- **23 resources** for discovery (models, schema, fields, methods, actions, tools, domain-syntax, model-limitations, templates, etc.)
+- **27 resources** for discovery (models, schema, quick-schema, fields, methods, workflow, bundle, session-bootstrap, actions, tools, domain-syntax, model-limitations, templates, etc.)
 - **13 prompts** for guided workflows
 - Module knowledge loading and error suggestions
 - **Automatic fallback**: search_read → search+read on 500 errors with error categorization
@@ -120,6 +120,10 @@ HTTP Transport (v1.8.0+):
 - `MCP_API_KEY` - Bearer token for HTTP authentication
 - `MCP_HOST` - HTTP bind address (default: 0.0.0.0)
 - `MCP_PORT` - HTTP port (default: 8080)
+
+DX Configuration (v1.11.0+):
+- `MCP_DEFAULT_CONTEXT` - JSON object merged into all operation contexts (e.g. `{"lang": "fr_FR"}`)
+- `MCP_BOOTSTRAP_MODELS` - Comma-separated model names for session-bootstrap (default: `res.partner,sale.order,account.move,product.product,stock.picking`)
 
 ## v2 API Details
 
@@ -252,6 +256,64 @@ Known side effects are surfaced for:
 
 Safety checks are integrated in `execute_method`, `batch_execute`, and `execute_workflow`. The `confirmed` parameter (default `False`) is backward-compatible.
 
+## DX Improvements (v1.11.0)
+
+### Quick Schema (`odoo://model/{model}/quick-schema`)
+
+Ultra-compact schema (~1.5-2KB vs 5-10KB for `/fields`). Short keys: `t` (type), `req` (required), `ro` (readonly), `rel` (relation). No labels, no help text, no indentation. Use as **default** for schema introspection.
+
+### Bundle (`odoo://bundle/{models}`)
+
+Batch quick-schema for N models in one call. Max 10 models. Format: `odoo://bundle/res.partner,sale.order,stock.picking`
+
+### Session Bootstrap (`odoo://session-bootstrap`)
+
+One call to bootstrap a conversation: quick-schemas + state machine workflows for common models. Configurable via `MCP_BOOTSTRAP_MODELS` env var. Default: `res.partner,sale.order,account.move,product.product,stock.picking`
+
+### Workflow Resource (`odoo://model/{model}/workflow`)
+
+State machine transitions for 6 main models: `sale.order`, `account.move`, `crm.lead`, `stock.picking`, `purchase.order`, `hr.leave`. Each transition includes: from, to, method, label, side_effects, irreversible flag. Dynamic fallback for unmapped models (reads state field + action methods from live doc).
+
+### Many2one Resolution (`resolve_json` parameter)
+
+New optional parameter on `execute_method` to auto-resolve Many2one field names to IDs:
+```python
+execute_method("res.partner", "write",
+    args_json='[[1], {"user_id": null}]',
+    resolve_json='{"user_id": {"model": "res.users", "search": "Administrator"}}')
+```
+Uses `name_search` internally. Returns error with options if ambiguous (>1 match) or no match.
+
+### Default Context (`MCP_DEFAULT_CONTEXT`)
+
+Set `MCP_DEFAULT_CONTEXT` env var (JSON object) to apply default context to all operations:
+```bash
+export MCP_DEFAULT_CONTEXT='{"lang": "fr_FR", "tz": "Europe/Paris"}'
+```
+Explicit context in kwargs takes priority. Applied in `execute_method` and `batch_execute`.
+
+### Expanded Error Patterns
+
+Error patterns expanded from ~5 to ~25 with template variable `{model}` substitution. Covers:
+- 422: singleton, null value, invalid field, readonly, Many2one type, unique constraint
+- 500: OperationalError, NoneType, NotImplementedError, statement timeout
+- 403: ir.rule, group_ security
+- 404: json/2 endpoint, doc-bearer
+- Fallback patterns: Many2one, singleton, readonly (matched regardless of HTTP status)
+
+### Bug Fix: Context in Fallback
+
+The `context` parameter is now correctly preserved when `search_read` falls back to `search` + `read` on 500 errors.
+
+### New Resources Summary (27 total, +4 new)
+
+| Resource | Description |
+|----------|-------------|
+| `odoo://model/{name}/quick-schema` | Ultra-compact schema (~1.5KB) |
+| `odoo://model/{name}/workflow` | State machine transitions |
+| `odoo://bundle/{models}` | Batch quick-schema (max 10) |
+| `odoo://session-bootstrap` | Bootstrap conversation |
+
 ## Notes for Claude Code
 
 - This is a v2-only server - no v1 fallback code
@@ -271,21 +333,27 @@ Safety checks are integrated in `execute_method`, `batch_execute`, and `execute_
 **NEVER guess field names. Introspect THEN query.**
 
 **BEFORE any Odoo MCP operation on unfamiliar models:**
-1. **MANDATORY**: Read `odoo://model/{model}/schema` to get exact field names and types
+1. **MANDATORY**: Read `odoo://model/{model}/quick-schema` to get exact field names and types (~1.5KB, ultra-compact)
 2. Read `odoo://methods/{model}` to discover available methods
-3. Check `odoo://docs/{model}` resource for documentation URLs if needed
+3. Check `odoo://model/{model}/workflow` for state machine transitions if relevant
 4. Execute with correct field names from schema
+
+**For multiple models:** Use `odoo://bundle/model1,model2,...` (max 10) or `odoo://session-bootstrap` for common models.
 
 **Why?** Guessing field names based on "common patterns" wastes API calls. Schema introspection is fast and gives you exact field names.
 
-### MCP Resources Available (23 total)
+### MCP Resources Available (27 total)
 | Resource | Description |
 |----------|-------------|
 | `odoo://models` | List all models |
 | `odoo://model/{name}` | Model info with fields |
 | `odoo://model/{name}/schema` | Fields and relationships |
 | `odoo://model/{name}/fields` | Lightweight field list: names, types, labels |
+| `odoo://model/{name}/quick-schema` | Ultra-compact schema (~1.5KB, short keys, no labels) |
+| `odoo://model/{name}/workflow` | State machine transitions, methods, side effects |
 | `odoo://model/{name}/docs` | Rich docs: labels, help text, selections |
+| `odoo://bundle/{models}` | Batch quick-schema for N models (comma-separated, max 10) |
+| `odoo://session-bootstrap` | Bootstrap conversation: schemas + workflows for common models |
 | `odoo://record/{model}/{id}` | Get a specific record by ID |
 | `odoo://methods/{model}` | Available methods (live-enriched with signatures, return types, API decorators from /doc-bearer/) |
 | `odoo://docs/{model}` | Documentation URLs |
@@ -316,11 +384,12 @@ Safety checks are integrated in `execute_method`, `batch_execute`, and `execute_
 
 ### Pre-Execution Checklist
 - [ ] Model identified?
-- [ ] **Fields introspected?** (odoo://model/{model}/fields for lightweight, or /schema for full) ← DO THIS FIRST
+- [ ] **Fields introspected?** (odoo://model/{model}/quick-schema for compact, /fields for labels, /schema for full) ← DO THIS FIRST
 - [ ] Field names from schema (not guessed)?
 - [ ] Method verified (odoo://methods/{model})?
-- [ ] Types correct (Many2one = ID)?
-- [ ] Required fields present?
+- [ ] Types correct (Many2one = ID)? Use `resolve_json` to auto-resolve names
+- [ ] Required fields present? (check `required_fields` in quick-schema)
+- [ ] Workflow checked? (odoo://model/{model}/workflow for state transitions)
 
 ### Key API Patterns
 ```python
@@ -362,8 +431,12 @@ All discovery moved to resources. Action tools + resource bridge for clients wit
 
 | Resource | Purpose |
 |----------|---------|
-| `odoo://model/{model}/fields` | Lightweight field list (~5-10KB) |
+| `odoo://model/{model}/quick-schema` | Ultra-compact field list (~1.5KB, short keys) — **best for tokens** |
+| `odoo://model/{model}/fields` | Lightweight field list (~5-10KB, includes labels) |
 | `odoo://model/{model}/schema` | Full schema with relationships (~300KB) |
+| `odoo://model/{model}/workflow` | State machine transitions with side effects |
+| `odoo://bundle/{models}` | Batch quick-schema for N models (max 10) |
+| `odoo://session-bootstrap` | Bootstrap: schemas + workflows for common models |
 | `odoo://methods/{model}` | Live-enriched methods with signatures, types, decorators (via /doc-bearer/) |
 | `odoo://find-model/{concept}` | Natural language → model name |
 | `odoo://tools/{query}` | Search available operations |
