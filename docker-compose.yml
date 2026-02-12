@@ -10,5 +10,9 @@ services:
       - ODOO_PASSWORD=${ODOO_PASSWORD:-}
       - ODOO_TIMEOUT=${ODOO_TIMEOUT:-30}
       - ODOO_VERIFY_SSL=${ODOO_VERIFY_SSL:-true}
+      - MCP_SAFETY_MODE=${MCP_SAFETY_MODE:-strict}
+      - MCP_SAFETY_AUDIT=${MCP_SAFETY_AUDIT:-}
+      - MCP_DEFAULT_CONTEXT=${MCP_DEFAULT_CONTEXT:-}
+      - MCP_BOOTSTRAP_MODELS=${MCP_BOOTSTRAP_MODELS:-}
     stdin_open: true
     tty: true

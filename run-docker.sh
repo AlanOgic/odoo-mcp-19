@@ -19,4 +19,6 @@ docker run --rm -i \
   -e ODOO_VERIFY_SSL="${ODOO_VERIFY_SSL:-true}" \
   -e MCP_SAFETY_MODE="${MCP_SAFETY_MODE:-strict}" \
   -e MCP_SAFETY_AUDIT="${MCP_SAFETY_AUDIT:-true}" \
+  -e MCP_DEFAULT_CONTEXT="${MCP_DEFAULT_CONTEXT:-}" \
+  -e MCP_BOOTSTRAP_MODELS="${MCP_BOOTSTRAP_MODELS:-}" \
   odoo-mcp-19:latest
