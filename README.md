@@ -94,6 +94,20 @@ python -m odoo_mcp
 pip install odoo-mcp-19
 ```
 
+## Setup Wizard
+
+Interactive wizard that generates `.env`, Docker commands, and Claude Desktop config:
+
+```bash
+# From source
+python -m odoo_mcp --setup
+
+# From pip
+odoo-mcp-19 --setup
+```
+
+The wizard walks you through Odoo connection, transport (stdio or streamable-http), safety mode, and outputs ready-to-use configuration files.
+
 ## Configure Claude Desktop
 
 Edit your Claude Desktop configuration file:
@@ -343,7 +357,26 @@ export MCP_DEFAULT_CONTEXT='{"lang": "fr_FR", "tz": "Europe/Paris"}'
 
 ## HTTP Transport
 
-Run as HTTP server with Bearer token authentication:
+Run as an HTTP server with Bearer token authentication for remote or multi-client access.
+
+### Docker Compose (recommended)
+
+Add to your `.env`:
+
+```bash
+MCP_TRANSPORT=streamable-http
+MCP_API_KEY=your-secret-bearer-token
+```
+
+Then:
+
+```bash
+docker compose up -d
+```
+
+The MCP endpoint is available at `http://localhost:8080/mcp`.
+
+### Docker run
 
 ```bash
 docker run -d -p 8080:8080 \
@@ -356,7 +389,36 @@ docker run -d -p 8080:8080 \
   odoo-mcp-19:latest
 ```
 
-Connect with: `Authorization: Bearer your-secret-token`
+### Claude Desktop config (HTTP)
+
+```json
+{
+  "mcpServers": {
+    "odoo": {
+      "type": "streamable-http",
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer your-secret-token"
+      }
+    }
+  }
+}
+```
+
+### Verify it works
+
+```bash
+# Should succeed (200)
+curl -i -X POST http://localhost:8080/mcp \
+  -H "Authorization: Bearer your-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "method": "initialize", "id": 1}'
+
+# Should fail (401/403) — wrong or missing token
+curl -i -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "method": "initialize", "id": 1}'
+```
 
 ## Configuration
 

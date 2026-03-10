@@ -2,7 +2,10 @@ services:
   odoo-mcp:
     build: .
     container_name: odoo-mcp-19
+    ports:
+      - "${MCP_PORT:-8080}:${MCP_PORT:-8080}"
     environment:
+      # Odoo connection
       - ODOO_URL=${ODOO_URL}
       - ODOO_DB=${ODOO_DB}
       - ODOO_USERNAME=${ODOO_USERNAME}
@@ -10,9 +13,13 @@ services:
       - ODOO_PASSWORD=${ODOO_PASSWORD:-}
       - ODOO_TIMEOUT=${ODOO_TIMEOUT:-30}
       - ODOO_VERIFY_SSL=${ODOO_VERIFY_SSL:-true}
+      # MCP transport
+      - MCP_TRANSPORT=${MCP_TRANSPORT:-streamable-http}
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=${MCP_PORT:-8080}
+      - MCP_API_KEY=${MCP_API_KEY:-}
+      # Safety & DX
       - MCP_SAFETY_MODE=${MCP_SAFETY_MODE:-strict}
       - MCP_SAFETY_AUDIT=${MCP_SAFETY_AUDIT:-}
       - MCP_DEFAULT_CONTEXT=${MCP_DEFAULT_CONTEXT:-}
       - MCP_BOOTSTRAP_MODELS=${MCP_BOOTSTRAP_MODELS:-}
-    stdin_open: true
-    tty: true
