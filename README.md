@@ -18,6 +18,7 @@ Connect Claude and AI assistants to Odoo 19+ via the Model Context Protocol (MCP
 - **Safety layer** - Pre-execution risk classification, blocked models, cascade warnings
 - **DX optimizations** - Quick-schema, bundle, session-bootstrap, resolve_json for token-efficient AI operations
 - **MCP 2025-11-25** - Background tasks, progress tracking, icons, structured outputs
+- **FastMCP 3.1.0** - Latest stable SDK with providers, transforms, component versioning, OpenTelemetry
 
 ## Installation
 
@@ -394,7 +395,7 @@ Full documentation in the **[Wiki](https://github.com/AlanOgic/odoo-mcp-19/wiki)
 
 - Python 3.10+
 - Odoo 19+
-- FastMCP 3.0.0b1+ (with tasks extra)
+- FastMCP 3.1.0+ (with tasks extra)
 
 ## License
 

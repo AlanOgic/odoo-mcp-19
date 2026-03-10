@@ -6,8 +6,8 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **Odoo MCP Server 19** - A standalone MCP server for Odoo 19+ using the v2 JSON-2 API.
 
-- **Version**: 1.11.0
-- **MCP Spec**: MCP 2025-11-25 (FastMCP 3.0.0b1+)
+- **Version**: 1.12.0
+- **MCP Spec**: MCP 2025-11-25 (FastMCP 3.1.0+)
 - **Odoo Support**: v19+ only (v2 JSON-2 API)
 
 ### MCP 2025-11-25 Features (v1.9.0)

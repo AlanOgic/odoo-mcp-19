@@ -2148,7 +2148,7 @@ def execute_method(
             resolve_json='{"user_id": {"model": "res.users", "search": "Administrator"}}'
     """
     start_time = time.time()
-    odoo = ctx.request_context.lifespan_context.odoo
+    odoo = get_odoo_client()
 
     try:
         args = []

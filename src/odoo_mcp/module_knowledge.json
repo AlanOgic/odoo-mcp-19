@@ -1,7 +1,7 @@
 {
   "_description": "Module-specific methods and patterns for Odoo 19+",
-  "_version": "1.4.0",
-  "_updated": "2026-01-28",
+  "_version": "1.5.0",
+  "_updated": "2026-03-10",
   "_validated_against": "Odoo 19.0 source code and official documentation",
 
   "model_limitations": {
@@ -1510,8 +1510,9 @@
             "is_system_agent": "System agent (cannot be deleted)"
           }
         },
-        "ai.topic": {
-          "description": "Topic containing instructions and AI tools",
+    "ai.topic": {
+          "description": "Topic containing instructions and AI tools (deprecated — use ir.actions.server with use_in_ai=True)",
+          "deprecated": true,
           "key_fields": {
             "name": "Topic title",
             "description": "Short description",
@@ -1537,8 +1538,17 @@
             "attachment_id": "Source attachment",
             "sequence": "Chunk order",
             "content": "Text content",
-            "embedding_model": "Model used (text-embedding-3-small)",
-            "embedding_vector": "Vector(1536) - pgvector type"
+            "embedding_model": "Model used (text-embedding-3-small or gemini-embedding-001)",
+            "embedding_vector": "Vector(1536) - pgvector type",
+            "has_embedding_generation_failed": "Boolean flag for failed embeddings"
+          },
+          "known_issues": {
+            "model_overview_report": {
+              "issue": "Model Overview PDF generation fails with KeyError: 'vector'",
+              "cause": "ir_qweb_fields.py does not handle the 'vector' field type",
+              "github_issue": "#247281",
+              "impact": "Minor - does not affect normal operations"
+            }
           }
         },
         "ai.composer": {
@@ -1662,11 +1672,21 @@
         "openai_key": "ir.config_parameter: ai.openai_key or env ODOO_AI_CHATGPT_TOKEN",
         "google_key": "ir.config_parameter: ai.google_key or env ODOO_AI_GEMINI_TOKEN"
       },
+      "system_parameters": {
+        "ai.max_successive_calls": {"default": 20, "description": "Max recursive tool-calling loop iterations per agent response"},
+        "ai.max_tool_calls_per_call": {"default": 20, "description": "Max tool calls the LLM can make in a single response"}
+      },
+      "access_control": {
+        "group_user": "Read-only on ai.agent, ai.topic, ai.agent.source, ai.embedding",
+        "group_system": "Full CRUD on all AI models"
+      },
       "notes": [
         "AI module is Enterprise only",
         "Requires pgvector PostgreSQL extension for embeddings",
         "Default Ask AI agent cannot modify database - add Topics with tools to enable actions",
-        "Private methods (_generate_response, _ai_tool_*) not accessible via JSON-2 API"
+        "Private methods (_generate_response, _ai_tool_*) not accessible via JSON-2 API",
+        "Gemini limitation: AI fields (Studio) and web grounding require OpenAI — Gemini's OpenAI-compatible layer does not support the Responses API yet",
+        "ai.topic is deprecated in Odoo 19 — tools now use ir.actions.server with use_in_ai=True directly"
       ]
     },
 
