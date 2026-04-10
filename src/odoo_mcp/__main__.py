@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from .server import mcp
 
@@ -83,6 +84,7 @@ def _generate_docker_cmd(config: dict) -> str:
 
 def _generate_claude_desktop(config: dict) -> str:
     """Generate Claude Desktop JSON config snippet."""
+    server: dict[str, Any] = {}
     if config["transport"] == "streamable-http":
         server = {
             "type": "streamable-http",

@@ -34,10 +34,10 @@ Issues = "https://github.com/AlanOgic/odoo-mcp-19/issues"
 
 [project.optional-dependencies]
 dev = [
-    "black",
-    "isort",
-    "mypy",
-    "ruff",
+    "black>=24.0",
+    "isort>=5.13",
+    "mypy>=1.10",
+    "ruff>=0.4",
     "build",
     "twine",
     "pytest>=7.0",
@@ -53,10 +53,24 @@ packages = ["odoo_mcp"]
 [tool.setuptools.package-data]
 odoo_mcp = ["*.json", "assets/*.svg"]
 
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+no_implicit_optional = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
 [tool.black]
-line-length = 88
-target-version = ["py310", "py311", "py312", "py313"]
+line-length = 120
+target-version = ["py310"]
 
 [tool.isort]
 profile = "black"
-line_length = 88
+line_length = 120

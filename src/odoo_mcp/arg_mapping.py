@@ -5,12 +5,12 @@ Odoo 19+ uses JSON-2 API with named arguments only.
 This module provides mapping from positional args to named args.
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 
 # Mapping of ORM method arguments from positional to named
 # Format: method_name -> list of (arg_position, v2_param_name)
-V2_ARG_MAPPING: Dict[str, List[Tuple[int, str]]] = {
+V2_ARG_MAPPING: dict[str, list[tuple[int, str]]] = {
     # Search methods
     "search": [
         (0, "domain"),
@@ -112,7 +112,7 @@ V2_ARG_MAPPING: Dict[str, List[Tuple[int, str]]] = {
 
 
 # Kwargs mapping: some kwargs have different names in v2
-V2_KWARGS_MAPPING: Dict[str, str] = {
+V2_KWARGS_MAPPING: dict[str, str] = {
     "fields": "fields",
     "offset": "offset",
     "limit": "limit",
@@ -127,9 +127,9 @@ V2_KWARGS_MAPPING: Dict[str, str] = {
 
 def convert_args_to_v2(
     method: str,
-    args: Tuple[Any, ...],
-    kwargs: Dict[str, Any]
-) -> Dict[str, Any]:
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any]
+) -> dict[str, Any]:
     """
     Convert positional arguments to named arguments for v2 API.
 
@@ -141,7 +141,7 @@ def convert_args_to_v2(
     Returns:
         Dictionary with all arguments as named parameters for v2 API
     """
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
 
     # Get mapping for this method
     arg_mapping = V2_ARG_MAPPING.get(method, [])
@@ -164,7 +164,7 @@ def convert_args_to_v2(
     return result
 
 
-def get_supported_methods() -> List[str]:
+def get_supported_methods() -> list[str]:
     """Return list of methods with explicit v2 mapping support."""
     return list(V2_ARG_MAPPING.keys())
 

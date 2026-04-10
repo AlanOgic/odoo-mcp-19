@@ -12,6 +12,7 @@ MCP 2025-11-25 Features:
 
 import asyncio
 import base64
+import copy
 import json
 import os
 import re
@@ -22,7 +23,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Callable
 
 from fastmcp import Context, FastMCP
 from fastmcp.dependencies import Progress
@@ -43,7 +44,7 @@ from .safety import (
 
 # ----- Icon Loading -----
 
-def _load_icon() -> Optional[Icon]:
+def _load_icon() -> Icon | None:
     """Load the Odoo icon from assets as a data URI."""
     icon_path = Path(__file__).parent / "assets" / "odoo_icon.svg"
     try:
@@ -63,7 +64,7 @@ ODOO_ICON = _load_icon()
 
 # ----- Module Knowledge Base -----
 
-def load_module_knowledge() -> Dict[str, Any]:
+def load_module_knowledge() -> dict[str, Any]:
     """Load the module knowledge base from JSON file."""
     knowledge_path = Path(__file__).parent / "module_knowledge.json"
     try:
@@ -78,7 +79,7 @@ MODULE_KNOWLEDGE = load_module_knowledge()
 
 # ----- Default Context from env -----
 
-_DEFAULT_CONTEXT: Optional[Dict[str, Any]] = None
+_DEFAULT_CONTEXT: dict[str, Any] | None = None
 _default_ctx_raw = os.environ.get("MCP_DEFAULT_CONTEXT")
 if _default_ctx_raw:
     if len(_default_ctx_raw) > 4096:
@@ -87,13 +88,13 @@ if _default_ctx_raw:
         try:
             _DEFAULT_CONTEXT = json.loads(_default_ctx_raw)
             if not isinstance(_DEFAULT_CONTEXT, dict):
-                print(f"Warning: MCP_DEFAULT_CONTEXT must be a JSON object, ignoring", file=sys.stderr)
+                print("Warning: MCP_DEFAULT_CONTEXT must be a JSON object, ignoring", file=sys.stderr)
                 _DEFAULT_CONTEXT = None
         except json.JSONDecodeError as e:
             print(f"Warning: MCP_DEFAULT_CONTEXT invalid JSON: {e}", file=sys.stderr)
 
 
-def _merge_context(explicit_context: Optional[Dict] = None) -> Optional[Dict]:
+def _merge_context(explicit_context: dict | None = None) -> dict | None:
     """Merge MCP_DEFAULT_CONTEXT with explicit context. Explicit takes priority."""
     if not _DEFAULT_CONTEXT and not explicit_context:
         return None
@@ -112,7 +113,7 @@ _MODEL_RE = re.compile(r'^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$')
 _METHOD_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
 
-def _validate_model(model: str) -> Optional[str]:
+def _validate_model(model: str) -> str | None:
     """Validate model name format. Returns error message or None if valid."""
     if not model or len(model) > 128:
         return "Model name is required and must be <= 128 characters"
@@ -121,7 +122,7 @@ def _validate_model(model: str) -> Optional[str]:
     return None
 
 
-def _validate_method(method: str) -> Optional[str]:
+def _validate_method(method: str) -> str | None:
     """Validate method name format. Returns error message or None if valid."""
     if not method or len(method) > 64:
         return "Method name is required and must be <= 64 characters"
@@ -130,10 +131,25 @@ def _validate_method(method: str) -> Optional[str]:
     return None
 
 
+# ----- Module-Level Constants -----
+
+DEFAULT_LIMIT = 100
+MAX_LIMIT = 1000
+
+ODOO_VERSION = "19.0"
+
+PRIVATE_METHOD_HINTS = {
+    "check_access": "check_access is @api.private in v19. Use has_access(operation) instead (returns boolean).",
+    "_read_group": "_read_group is @api.private. Use formatted_read_group (v19+) or read_group (deprecated but still works).",
+    "search_fetch": "search_fetch is @api.private. Use search_read instead.",
+    "fetch": "fetch is @api.private. Use read instead.",
+}
+
+
 # ----- Compact Schema Builder -----
 
 
-def _build_compact_schema(fields: Dict[str, Any]) -> Dict[str, Any]:
+def _build_compact_schema(fields: dict[str, Any]) -> dict[str, Any]:
     """Build an ultra-compact schema representation from fields_get output.
 
     Returns a dict with:
@@ -146,7 +162,7 @@ def _build_compact_schema(fields: Dict[str, Any]) -> Dict[str, Any]:
     required = []
     for name, meta in fields.items():
         ftype = meta.get("type", "")
-        entry: Dict[str, Any] = {"t": ftype}
+        entry: dict[str, Any] = {"t": ftype}
         if meta.get("required"):
             entry["req"] = True
             required.append(name)
@@ -164,7 +180,7 @@ def _build_compact_schema(fields: Dict[str, Any]) -> Dict[str, Any]:
 # ----- State Machine Definitions -----
 
 
-MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
+MODEL_STATE_MACHINES: dict[str, dict[str, Any]] = {
     "sale.order": {
         "state_field": "state",
         "states": ["draft", "sent", "sale", "done", "cancel"],
@@ -261,7 +277,7 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
 
 # Runtime tracking of models that triggered fallback mechanisms
 # Structure: {"model.name": {"method": {error_category: {...}}}}
-RUNTIME_MODEL_ISSUES: Dict[str, Dict[str, Dict[str, Any]]] = {}
+RUNTIME_MODEL_ISSUES: dict[str, dict[str, dict[str, Any]]] = {}
 _RUNTIME_ISSUES_LOCK = threading.Lock()
 
 # Error categorization patterns and their solutions
@@ -335,7 +351,7 @@ ERROR_CATEGORIES = {
 # ----- /doc-bearer/ Live Documentation Cache -----
 
 # Cache for /doc-bearer/ responses: {model_name: (timestamp, data)}
-_DOC_CACHE: Dict[str, tuple] = {}
+_DOC_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _DOC_CACHE_TTL = 300  # 5 minutes
 _DOC_CACHE_MAX_ENTRIES = 100
 _DOC_CACHE_LOCK = threading.Lock()
@@ -349,7 +365,7 @@ def _strip_html(html_str: str) -> str:
     return ' '.join(text.split()).strip()
 
 
-def _get_live_doc(model_name: str) -> Optional[Dict[str, Any]]:
+def _get_live_doc(model_name: str) -> dict[str, Any] | None:
     """Fetch live model docs from /doc-bearer/ with in-memory caching.
 
     Returns the doc dict if available, or None on any failure.
@@ -362,12 +378,15 @@ def _get_live_doc(model_name: str) -> Optional[Dict[str, Any]]:
             if now - ts < _DOC_CACHE_TTL:
                 return data
 
+    # Fetch outside the lock (allows concurrent fetches for different models)
     try:
         odoo = get_odoo_client()
         doc = odoo.get_model_doc(model_name)
         if doc and isinstance(doc, dict) and "methods" in doc:
             with _DOC_CACHE_LOCK:
-                _DOC_CACHE[model_name] = (now, doc)
+                # Store result (another thread may have written between our check and now — that's fine, last-write-wins)
+                _DOC_CACHE[model_name] = (time.time(), doc)
+                # LRU eviction
                 if len(_DOC_CACHE) > _DOC_CACHE_MAX_ENTRIES:
                     oldest = min(_DOC_CACHE, key=lambda k: _DOC_CACHE[k][0])
                     del _DOC_CACHE[oldest]
@@ -390,7 +409,7 @@ def _categorize_error(error_msg: str) -> str:
     return "unknown"
 
 
-def _detect_domain_pattern(domain: List, model: str = None) -> List[str]:
+def _detect_domain_pattern(domain: list, model: str | None = None) -> list[str]:
     """Detect patterns in domain that might cause issues."""
     patterns = []
     if not domain:
@@ -431,7 +450,7 @@ def _detect_domain_pattern(domain: List, model: str = None) -> List[str]:
     return patterns
 
 
-def _detect_problematic_fields(fields: List, model: str = None) -> List[str]:
+def _detect_problematic_fields(fields: list, model: str | None = None) -> list[str]:
     """Detect fields that might cause issues when included in search_read."""
     problematic = []
     if not fields:
@@ -455,7 +474,7 @@ def _detect_problematic_fields(fields: List, model: str = None) -> List[str]:
     return problematic
 
 
-def _track_model_issue(model: str, method: str, error_msg: str, domain: List = None, fields: List = None) -> Dict[str, Any]:
+def _track_model_issue(model: str, method: str, error_msg: str, domain: list | None = None, fields: list | None = None) -> dict[str, Any]:
     """
     Track a model/method issue with error categorization and pattern detection.
     Returns analysis with suggested solutions.
@@ -543,7 +562,7 @@ def _track_model_issue(model: str, method: str, error_msg: str, domain: List = N
     }
 
 
-def get_error_suggestion(error_msg: str, model: str = None, method: str = None) -> Optional[str]:
+def get_error_suggestion(error_msg: str, model: str | None = None, method: str | None = None) -> str | None:
     """Get a helpful suggestion based on error message patterns.
 
     Supports {model} template variable in suggestions (substituted with actual model name).
@@ -600,7 +619,7 @@ def get_error_suggestion(error_msg: str, model: str = None, method: str = None) 
 # ----- Concept to Model Mappings -----
 
 # Common concept aliases for natural language model discovery
-CONCEPT_ALIASES: Dict[str, List[str]] = {
+CONCEPT_ALIASES: dict[str, list[str]] = {
     # Contacts & Partners
     "contact": ["res.partner"],
     "customer": ["res.partner"],
@@ -676,10 +695,7 @@ class AppContext:
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     """Application lifespan for initialization and cleanup"""
     odoo_client = get_odoo_client()
-    try:
-        yield AppContext(odoo=odoo_client)
-    finally:
-        pass
+    yield AppContext(odoo=odoo_client)
 
 
 # Configure authentication if MCP_API_KEY is set
@@ -719,47 +735,47 @@ class IssueAnalysis(BaseModel):
     """Analysis of issues encountered during execution."""
     category: str = Field(description="Error category: timeout, relational_filter, computed_field, access_rights, memory, data_integrity, unknown")
     cause: str = Field(description="Human-readable cause description")
-    domain_patterns: List[str] = Field(default_factory=list, description="Detected patterns in domain that may cause issues")
-    problematic_fields: List[str] = Field(default_factory=list, description="Fields that may cause issues")
-    suggested_solutions: List[str] = Field(default_factory=list, description="Suggested solutions for the issue")
-    model_specific_advice: List[str] = Field(default_factory=list, description="Model-specific recommendations")
+    domain_patterns: list[str] = Field(default_factory=list, description="Detected patterns in domain that may cause issues")
+    problematic_fields: list[str] = Field(default_factory=list, description="Fields that may cause issues")
+    suggested_solutions: list[str] = Field(default_factory=list, description="Suggested solutions for the issue")
+    model_specific_advice: list[str] = Field(default_factory=list, description="Model-specific recommendations")
 
 
 class ExecuteMethodResponse(BaseModel):
     """Response model for execute_method tool with structured output."""
     success: bool = Field(description="Whether the execution was successful")
-    result: Optional[Any] = Field(default=None, description="Result of the method call")
-    error: Optional[str] = Field(default=None, description="Error message if failed")
-    suggestion: Optional[str] = Field(default=None, description="Helpful suggestion for fixing the error")
-    hint: Optional[str] = Field(default=None, description="Additional hint for troubleshooting")
+    result: Any | None = Field(default=None, description="Result of the method call")
+    error: str | None = Field(default=None, description="Error message if failed")
+    suggestion: str | None = Field(default=None, description="Helpful suggestion for fixing the error")
+    hint: str | None = Field(default=None, description="Additional hint for troubleshooting")
     fallback_used: bool = Field(default=False, description="Whether automatic fallback was triggered")
-    issue_analysis: Optional[IssueAnalysis] = Field(default=None, description="Issue analysis when fallback was used")
-    note: Optional[str] = Field(default=None, description="Additional note about the execution")
-    execution_time_ms: Optional[float] = Field(default=None, description="Execution time in milliseconds")
+    issue_analysis: IssueAnalysis | None = Field(default=None, description="Issue analysis when fallback was used")
+    note: str | None = Field(default=None, description="Additional note about the execution")
+    execution_time_ms: float | None = Field(default=None, description="Execution time in milliseconds")
     pending_confirmation: bool = Field(default=False, description="Whether the operation requires confirmation before execution")
-    safety: Optional[SafetyClassification] = Field(default=None, description="Safety classification of the operation")
+    safety: SafetyClassification | None = Field(default=None, description="Safety classification of the operation")
 
 
 class BatchOperationResult(BaseModel):
     """Result of a single batch operation."""
     operation_index: int = Field(description="Index of the operation in the batch")
     success: bool = Field(description="Whether this operation succeeded")
-    result: Optional[Any] = Field(default=None, description="Result if successful")
-    error: Optional[str] = Field(default=None, description="Error message if failed")
+    result: Any | None = Field(default=None, description="Result if successful")
+    error: str | None = Field(default=None, description="Error message if failed")
 
 
 class BatchExecuteResponse(BaseModel):
     """Response model for batch_execute tool with structured output."""
     success: bool = Field(description="Whether all operations succeeded")
-    results: List[BatchOperationResult] = Field(description="Results for each operation")
+    results: list[BatchOperationResult] = Field(description="Results for each operation")
     total_operations: int = Field(description="Total operations attempted")
     successful_operations: int = Field(description="Successful operations count")
     failed_operations: int = Field(description="Failed operations count")
-    error: Optional[str] = Field(default=None, description="Overall error message if any operation failed")
-    execution_time_ms: Optional[float] = Field(default=None, description="Total execution time in milliseconds")
+    error: str | None = Field(default=None, description="Overall error message if any operation failed")
+    execution_time_ms: float | None = Field(default=None, description="Total execution time in milliseconds")
     pending_confirmation: bool = Field(default=False, description="Whether the batch requires confirmation before execution")
-    safety_preview: Optional[List[SafetyClassification]] = Field(default=None, description="Safety classifications for each operation")
-    overall_risk: Optional[str] = Field(default=None, description="Overall risk level across all operations")
+    safety_preview: list[SafetyClassification] | None = Field(default=None, description="Safety classifications for each operation")
+    overall_risk: str | None = Field(default=None, description="Overall risk level across all operations")
 
 
 class WorkflowStepResult(BaseModel):
@@ -767,26 +783,26 @@ class WorkflowStepResult(BaseModel):
     step: str = Field(description="Name of the workflow step")
     success: bool = Field(description="Whether this step succeeded")
     skipped: bool = Field(default=False, description="Whether this step was skipped")
-    reason: Optional[str] = Field(default=None, description="Reason for skipping or failure")
-    error: Optional[str] = Field(default=None, description="Error message if failed")
-    result: Optional[Any] = Field(default=None, description="Step result data")
+    reason: str | None = Field(default=None, description="Reason for skipping or failure")
+    error: str | None = Field(default=None, description="Error message if failed")
+    result: Any | None = Field(default=None, description="Step result data")
 
 
 class ExecuteWorkflowResponse(BaseModel):
     """Response model for execute_workflow tool with structured output."""
     workflow: str = Field(description="Name of the executed workflow")
     success: bool = Field(description="Whether the workflow completed successfully")
-    steps: List[WorkflowStepResult] = Field(default_factory=list, description="Results for each workflow step")
-    error: Optional[str] = Field(default=None, description="Error message if failed")
-    available_workflows: Optional[List[str]] = Field(default=None, description="Available workflows if unknown workflow requested")
-    tip: Optional[str] = Field(default=None, description="Helpful tip for using workflows")
+    steps: list[WorkflowStepResult] = Field(default_factory=list, description="Results for each workflow step")
+    error: str | None = Field(default=None, description="Error message if failed")
+    available_workflows: list[str] | None = Field(default=None, description="Available workflows if unknown workflow requested")
+    tip: str | None = Field(default=None, description="Helpful tip for using workflows")
     # Additional result fields for specific workflows
-    invoice_id: Optional[int] = Field(default=None, description="Created invoice ID (for invoice workflows)")
-    invoice_ids: Optional[List[int]] = Field(default=None, description="Created invoice IDs (for order workflows)")
-    execution_time_ms: Optional[float] = Field(default=None, description="Total execution time in milliseconds")
+    invoice_id: int | None = Field(default=None, description="Created invoice ID (for invoice workflows)")
+    invoice_ids: list[int] | None = Field(default=None, description="Created invoice IDs (for order workflows)")
+    execution_time_ms: float | None = Field(default=None, description="Total execution time in milliseconds")
     pending_confirmation: bool = Field(default=False, description="Whether the workflow requires confirmation before execution")
-    safety_preview: Optional[List[SafetyClassification]] = Field(default=None, description="Safety classifications for each workflow step")
-    overall_risk: Optional[str] = Field(default=None, description="Overall risk level across all workflow steps")
+    safety_preview: list[SafetyClassification] | None = Field(default=None, description="Safety classifications for each workflow step")
+    overall_risk: str | None = Field(default=None, description="Overall risk level across all workflow steps")
 
 
 # ----- MCP Resources -----
@@ -1243,7 +1259,6 @@ def _get_documentation_urls(target: str) -> str:
     - Suggested search queries
     - Special methods if known
     """
-    ODOO_VERSION = "19.0"
     DOC_BASE = f"https://www.odoo.com/documentation/{ODOO_VERSION}"
     GITHUB_BASE = f"https://github.com/odoo/odoo/tree/{ODOO_VERSION}/addons"
 
@@ -1607,8 +1622,8 @@ def get_workflows() -> str:
                     "model": model_name,
                     "state": action.get('state')
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[server] ir.actions.server query failed: {e}", file=sys.stderr)
 
         return json.dumps({
             "installed_modules": list(module_names.keys()),
@@ -1707,7 +1722,7 @@ def get_model_limitations() -> str:
     all_categories = {}
 
     with _RUNTIME_ISSUES_LOCK:
-        runtime_snapshot = {k: dict(v) for k, v in RUNTIME_MODEL_ISSUES.items()}
+        runtime_snapshot = copy.deepcopy(RUNTIME_MODEL_ISSUES)
 
     for model, methods in runtime_snapshot.items():
         result["runtime_detected"][model] = {
@@ -1938,8 +1953,8 @@ def find_model_resource(concept: str) -> str:
             result["best_match"] = result["all_matches"][0]["model"]
             result["source"] = "ir.model"
             return json.dumps(result, indent=2)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[server] ir.model fuzzy search failed: {e}", file=sys.stderr)
 
     # 3. Fuzzy match
     try:
@@ -2071,8 +2086,8 @@ def discover_actions_resource(model: str) -> str:
                 "name": action.get('name'),
                 "type": action.get('state'),
             })
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[server] ir.actions.server discovery failed: {e}", file=sys.stderr)
 
     # 4. Add usage examples
     result["usage_examples"] = [
@@ -2171,10 +2186,10 @@ def execute_method(
     ctx: Context,
     model: str,
     method: str,
-    args_json: str = None,
-    kwargs_json: str = None,
+    args_json: str | None = None,
+    kwargs_json: str | None = None,
     confirmed: bool = False,
-    resolve_json: str = None,
+    resolve_json: str | None = None,
 ) -> ExecuteMethodResponse:
     """
     Execute any method on an Odoo model.
@@ -2295,26 +2310,20 @@ def execute_method(
                     )
 
             # Inject resolved IDs into args (for write/create methods)
+            # Create new dicts instead of mutating parsed args in-place
             if resolved_values and args:
                 if method == "write" and len(args) >= 2 and isinstance(args[1], dict):
-                    args[1].update(resolved_values)
+                    args[1] = {**args[1], **resolved_values}
                 elif method == "create":
                     if isinstance(args[0], dict):
-                        args[0].update(resolved_values)
+                        args[0] = {**args[0], **resolved_values}
                     elif isinstance(args[0], list):
-                        for vals in args[0]:
-                            if isinstance(vals, dict):
-                                vals.update(resolved_values)
+                        args[0] = [
+                            {**vals, **resolved_values} if isinstance(vals, dict) else vals
+                            for vals in args[0]
+                        ]
 
-        # Known @api.private methods that cannot be called via RPC in Odoo 19
-        PRIVATE_METHOD_HINTS = {
-            "check_access": "check_access is @api.private in v19. Use has_access(operation) instead (returns boolean).",
-            "_read_group": "_read_group is @api.private. Use formatted_read_group (v19+) or read_group (deprecated but still works).",
-            "search_fetch": "search_fetch is @api.private. Use search_read instead.",
-            "fetch": "fetch is @api.private. Use read instead.",
-        }
-
-        # Static fallback check for known private methods
+        # Static fallback check for known @api.private methods (see PRIVATE_METHOD_HINTS at module level)
         if method in PRIVATE_METHOD_HINTS:
             elapsed_ms = (time.time() - start_time) * 1000
             return ExecuteMethodResponse(
@@ -2370,9 +2379,6 @@ def execute_method(
             audit_log(classification, confirmed=confirmed, executed=True)
 
         # Apply smart limits for search methods
-        DEFAULT_LIMIT = 100
-        MAX_LIMIT = 1000
-
         if method in ["search", "search_read"] and 'limit' not in kwargs:
             kwargs['limit'] = DEFAULT_LIMIT
             print(f"Applied default limit={DEFAULT_LIMIT}", file=sys.stderr)
@@ -2491,7 +2497,7 @@ def execute_method(
     task=True,  # Enable background task execution with progress
 )
 async def batch_execute(
-    operations: List[Dict[str, Any]],
+    operations: list[dict[str, Any]],
     atomic: bool = True,
     confirmed: bool = False,
     progress: Progress = Progress(),
@@ -2511,7 +2517,7 @@ async def batch_execute(
     start_time = time.time()
     # Get Odoo client directly (works in both sync and background task modes)
     odoo = get_odoo_client()
-    results: List[BatchOperationResult] = []
+    results: list[BatchOperationResult] = []
     successful = 0
     failed = 0
 
@@ -2678,7 +2684,7 @@ class OdooConnectionConfig:
     },
     icons=_tool_icons,
 )
-async def configure_odoo(ctx: Context) -> Dict[str, Any]:
+async def configure_odoo(ctx: Context) -> dict[str, Any]:
     """
     Interactive Odoo connection configuration using MCP elicitation.
 
@@ -3068,7 +3074,7 @@ New code should use formatted_read_group (web module).
 
 # ----- Tool Registry for Code-First Pattern -----
 
-TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
+TOOL_REGISTRY: dict[str, dict[str, Any]] = {
     # Sales Operations
     "create_quotation": {
         "description": "Create a new sales quotation",
@@ -3209,7 +3215,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
 )
 async def execute_workflow(
     workflow: str,
-    params_json: str = None,
+    params_json: str | None = None,
     confirmed: bool = False,
     progress: Progress = Progress(),
 ) -> ExecuteWorkflowResponse:
@@ -3264,7 +3270,7 @@ async def execute_workflow(
         )
 
     workflow_lower = workflow.lower().strip()
-    steps: List[WorkflowStepResult] = []
+    steps: list[WorkflowStepResult] = []
 
     try:
         # ----- Quote to Cash Workflow -----
@@ -3480,7 +3486,7 @@ async def execute_workflow(
 
 
 @mcp.prompt(name="quote-to-cash")
-def quote_to_cash_prompt(order_id: str = None) -> list[Message]:
+def quote_to_cash_prompt(order_id: str | None = None) -> list[Message]:
     """Complete quote-to-cash workflow"""
     if order_id:
         return [Message(f"""Execute the quote-to-cash workflow for order {order_id}:
@@ -3529,7 +3535,7 @@ def ar_aging_report_prompt() -> list[Message]:
 
 
 @mcp.prompt(name="inventory-check")
-def inventory_check_prompt(product: str = None) -> list[Message]:
+def inventory_check_prompt(product: str | None = None) -> list[Message]:
     """Check inventory levels"""
     if product:
         return [Message(f"""Check inventory for "{product}":
@@ -3658,7 +3664,7 @@ def get_tool_registry() -> str:
 # Maps odoo:// URIs to their handler functions.
 # More specific patterns (e.g. /schema, /fields, /docs) MUST come before generic /model/{name}.
 
-_RESOURCE_ROUTES: list[tuple[str, callable, list[str]]] = [
+_RESOURCE_ROUTES: list[tuple[str, Callable[..., Any], list[str]]] = [
     (r"^odoo://models$", get_models, []),
     (r"^odoo://session-bootstrap$", get_session_bootstrap, []),
     (r"^odoo://bundle/(.+)$", get_bundle, ["models_csv"]),

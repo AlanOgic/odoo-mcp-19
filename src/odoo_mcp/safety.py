@@ -14,7 +14,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -59,7 +59,10 @@ BLOCKED_MODELS = frozenset({
     "ir.model.access",
     "ir.module.module",
     "ir.config_parameter",
+    "ir.model",
+    "ir.model.fields",
     "res.users",
+    "res.groups",
 })
 
 SENSITIVE_MODELS = frozenset({
@@ -73,7 +76,7 @@ SENSITIVE_MODELS = frozenset({
 
 # ----- Cascade Warnings -----
 
-CASCADE_WARNINGS: Dict[Tuple[str, str], str] = {
+CASCADE_WARNINGS: dict[tuple[str, str], str] = {
     ("sale.order", "action_confirm"): (
         "Confirming a sales order creates delivery orders and "
         "may trigger procurement rules."
@@ -104,29 +107,18 @@ class SafetyClassification(BaseModel):
     risk_level: RiskLevel = Field(description="Classified risk level")
     model: str = Field(description="Odoo model name")
     method: str = Field(description="Method name")
-    record_count: Optional[int] = Field(
+    record_count: int | None = Field(
         default=None, description="Estimated number of records affected"
     )
     requires_confirmation: bool = Field(
         description="Whether the caller must re-call with confirmed=true"
     )
     reason: str = Field(description="Human-readable reason for the classification")
-    cascade_warning: Optional[str] = Field(
+    cascade_warning: str | None = Field(
         default=None, description="Warning about side effects"
     )
-    blocked_reason: Optional[str] = Field(
+    blocked_reason: str | None = Field(
         default=None, description="Reason when operation is blocked"
-    )
-
-
-class PendingConfirmation(BaseModel):
-    """Returned when an operation needs confirmation before execution."""
-    pending_confirmation: bool = Field(default=True)
-    classification: SafetyClassification
-    message: str = Field(description="User-facing confirmation message")
-    confirm_hint: str = Field(
-        default="Re-call with confirmed=true to proceed.",
-        description="Hint for the caller",
     )
 
 
@@ -136,28 +128,41 @@ class WorkflowStepClassification(BaseModel):
     model: str = Field(description="Model involved")
     method: str = Field(description="Method called")
     risk_level: RiskLevel = Field(description="Risk level for this step")
-    cascade_warning: Optional[str] = Field(default=None)
+    cascade_warning: str | None = Field(default=None)
 
 
 class WorkflowSafetyPreview(BaseModel):
     """Safety preview for a complete workflow."""
     pending_confirmation: bool = Field(default=True)
     workflow: str = Field(description="Workflow name")
-    steps: List[WorkflowStepClassification] = Field(
+    steps: list[WorkflowStepClassification] = Field(
         description="Classification for each step"
     )
     overall_risk: RiskLevel = Field(description="Highest risk across all steps")
     message: str = Field(description="User-facing summary")
 
 
+# ----- Cached Configuration -----
+
+_SAFETY_MODE: str = os.environ.get("MCP_SAFETY_MODE", "strict").lower()
+_AUDIT_ENABLED: bool = os.environ.get("MCP_SAFETY_AUDIT", "").lower() == "true"
+
+_RISK_ORDER: dict[RiskLevel, int] = {
+    RiskLevel.SAFE: 0,
+    RiskLevel.MEDIUM: 1,
+    RiskLevel.HIGH: 2,
+    RiskLevel.BLOCKED: 3,
+}
+
+
 # ----- Helpers -----
 
 def _get_safety_mode() -> str:
     """Get the configured safety mode."""
-    return os.environ.get("MCP_SAFETY_MODE", "strict").lower()
+    return _SAFETY_MODE
 
 
-def _estimate_record_count(method: str, args: list, kwargs: dict) -> Optional[int]:
+def _estimate_record_count(method: str, args: list, kwargs: dict) -> int | None:
     """Estimate the number of records affected by an operation."""
     try:
         if method in ("unlink", "write"):
@@ -189,8 +194,8 @@ def _estimate_record_count(method: str, args: list, kwargs: dict) -> Optional[in
 def classify_operation(
     model: str,
     method: str,
-    args: Optional[list] = None,
-    kwargs: Optional[dict] = None,
+    args: list | None = None,
+    kwargs: dict | None = None,
 ) -> SafetyClassification:
     """
     Classify an Odoo operation by risk level.
@@ -312,8 +317,8 @@ def classify_operation(
 # ----- Batch Classification -----
 
 def classify_batch(
-    operations: List[Dict[str, Any]],
-) -> Tuple[List[SafetyClassification], RiskLevel, bool]:
+    operations: list[dict[str, Any]],
+) -> tuple[list[SafetyClassification], RiskLevel, bool]:
     """
     Classify all operations in a batch.
 
@@ -323,13 +328,6 @@ def classify_batch(
     classifications = []
     overall_risk = RiskLevel.SAFE
     any_needs_confirmation = False
-
-    risk_order = {
-        RiskLevel.SAFE: 0,
-        RiskLevel.MEDIUM: 1,
-        RiskLevel.HIGH: 2,
-        RiskLevel.BLOCKED: 3,
-    }
 
     for op in operations:
         model = op.get("model", "unknown")
@@ -348,7 +346,7 @@ def classify_batch(
         classification = classify_operation(model, method, args, kwargs)
         classifications.append(classification)
 
-        if risk_order[classification.risk_level] > risk_order[overall_risk]:
+        if _RISK_ORDER[classification.risk_level] > _RISK_ORDER[overall_risk]:
             overall_risk = classification.risk_level
 
         if classification.requires_confirmation:
@@ -359,54 +357,46 @@ def classify_batch(
 
 # ----- Workflow Classification -----
 
+# Canonical step lists (defined once, aliased below)
+_QUOTE_TO_CASH_STEPS: list[tuple[str, str, str]] = [
+    ("confirm_order", "sale.order", "action_confirm"),
+    ("create_invoice", "sale.order", "_create_invoices"),
+    ("post_invoice", "account.move", "action_post"),
+]
+
+_LEAD_TO_WON_STEPS: list[tuple[str, str, str]] = [
+    ("convert_to_opportunity", "crm.lead", "convert_opportunity"),
+    ("mark_won", "crm.lead", "action_set_won"),
+]
+
+_CREATE_AND_POST_INVOICE_STEPS: list[tuple[str, str, str]] = [
+    ("create_invoice", "account.move", "create"),
+    ("post_invoice", "account.move", "action_post"),
+]
+
+_STOCK_TRANSFER_STEPS: list[tuple[str, str, str]] = [
+    ("confirm_transfer", "stock.picking", "action_confirm"),
+    ("validate_transfer", "stock.picking", "button_validate"),
+]
+
 # Maps workflow name → list of (step_name, model, method)
-_WORKFLOW_STEPS: Dict[str, List[Tuple[str, str, str]]] = {
-    "quote_to_cash": [
-        ("confirm_order", "sale.order", "action_confirm"),
-        ("create_invoice", "sale.order", "_create_invoices"),
-        ("post_invoice", "account.move", "action_post"),
-    ],
-    "quotation_to_invoice": [
-        ("confirm_order", "sale.order", "action_confirm"),
-        ("create_invoice", "sale.order", "_create_invoices"),
-        ("post_invoice", "account.move", "action_post"),
-    ],
-    "sales_workflow": [
-        ("confirm_order", "sale.order", "action_confirm"),
-        ("create_invoice", "sale.order", "_create_invoices"),
-        ("post_invoice", "account.move", "action_post"),
-    ],
-    "lead_to_won": [
-        ("convert_to_opportunity", "crm.lead", "convert_opportunity"),
-        ("mark_won", "crm.lead", "action_set_won"),
-    ],
-    "crm_workflow": [
-        ("convert_to_opportunity", "crm.lead", "convert_opportunity"),
-        ("mark_won", "crm.lead", "action_set_won"),
-    ],
-    "opportunity_won": [
-        ("convert_to_opportunity", "crm.lead", "convert_opportunity"),
-        ("mark_won", "crm.lead", "action_set_won"),
-    ],
-    "create_and_post_invoice": [
-        ("create_invoice", "account.move", "create"),
-        ("post_invoice", "account.move", "action_post"),
-    ],
-    "quick_invoice": [
-        ("create_invoice", "account.move", "create"),
-        ("post_invoice", "account.move", "action_post"),
-    ],
-    "stock_transfer": [
-        ("confirm_transfer", "stock.picking", "action_confirm"),
-        ("validate_transfer", "stock.picking", "button_validate"),
-    ],
+_WORKFLOW_STEPS: dict[str, list[tuple[str, str, str]]] = {
+    "quote_to_cash": _QUOTE_TO_CASH_STEPS,
+    "quotation_to_invoice": _QUOTE_TO_CASH_STEPS,
+    "sales_workflow": _QUOTE_TO_CASH_STEPS,
+    "lead_to_won": _LEAD_TO_WON_STEPS,
+    "crm_workflow": _LEAD_TO_WON_STEPS,
+    "opportunity_won": _LEAD_TO_WON_STEPS,
+    "create_and_post_invoice": _CREATE_AND_POST_INVOICE_STEPS,
+    "quick_invoice": _CREATE_AND_POST_INVOICE_STEPS,
+    "stock_transfer": _STOCK_TRANSFER_STEPS,
 }
 
 
 def classify_workflow(
     workflow: str,
-    params: Optional[dict] = None,
-) -> Optional[WorkflowSafetyPreview]:
+    params: dict | None = None,
+) -> WorkflowSafetyPreview | None:
     """
     Classify a workflow by its name.
 
@@ -417,13 +407,6 @@ def classify_workflow(
 
     if steps_def is None:
         return None
-
-    risk_order = {
-        RiskLevel.SAFE: 0,
-        RiskLevel.MEDIUM: 1,
-        RiskLevel.HIGH: 2,
-        RiskLevel.BLOCKED: 3,
-    }
 
     step_classifications = []
     overall_risk = RiskLevel.SAFE
@@ -441,7 +424,7 @@ def classify_workflow(
         )
         step_classifications.append(step_cls)
 
-        if risk_order[classification.risk_level] > risk_order[overall_risk]:
+        if _RISK_ORDER[classification.risk_level] > _RISK_ORDER[overall_risk]:
             overall_risk = classification.risk_level
 
     # Build human-readable message
@@ -474,7 +457,7 @@ def classify_workflow(
 
 def _is_audit_enabled() -> bool:
     """Check if audit logging is enabled."""
-    return os.environ.get("MCP_SAFETY_AUDIT", "").lower() == "true"
+    return _AUDIT_ENABLED
 
 
 def audit_log(
@@ -511,5 +494,8 @@ def audit_log(
             f"[SAFETY AUDIT] {json.dumps(entry)}",
             file=sys.stderr,
         )
-    except Exception:
-        pass  # Audit logging never raises
+    except Exception as exc:
+        try:
+            print(f"[SAFETY AUDIT ERROR] {exc}", file=sys.stderr)
+        except Exception:
+            pass

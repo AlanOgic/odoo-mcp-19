@@ -10,7 +10,7 @@ import sys
 import re
 import threading
 import urllib.parse
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 from dotenv import load_dotenv
@@ -26,8 +26,8 @@ class OdooClient:
         url: str,
         db: str,
         username: str,
-        password: Optional[str] = None,
-        api_key: Optional[str] = None,
+        password: str | None = None,
+        api_key: str | None = None,
         timeout: int = 30,
         verify_ssl: bool = True,
     ):
@@ -60,33 +60,32 @@ class OdooClient:
         if not self.auth_credential:
             raise ValueError("Either api_key or password is required")
 
+        # Parse hostname for logging and SaaS detection
+        parsed_url = urllib.parse.urlparse(self.url)
+        self.hostname = parsed_url.netloc
+
         # Setup session
         self.session = requests.Session()
         self.session.verify = verify_ssl
         self.session.headers['Content-Type'] = 'application/json'
-        # Only set X-Odoo-Database for multi-DB instances.
+
+        # Only set X-Odoo-Database for non-SaaS instances.
         # Odoo.com SaaS identifies the DB via subdomain — sending this header causes 404.
-        if db and not self.url.endswith(".odoo.com"):
+        hostname_lower = (parsed_url.hostname or "").lower()
+        is_odoo_saas = hostname_lower.endswith(".odoo.com") or hostname_lower == "odoo.com"
+        if db and not is_odoo_saas:
             self.session.headers['X-Odoo-Database'] = db
 
         if api_key:
             self.session.headers['Authorization'] = f'Bearer {api_key}'
-
-        # HTTP proxy support
-        proxy = os.environ.get("HTTP_PROXY")
-        if proxy:
-            self.session.proxies = {"http": proxy, "https": proxy}
-
-        # Parse hostname for logging
-        parsed_url = urllib.parse.urlparse(self.url)
-        self.hostname = parsed_url.netloc
 
         self._log_connection()
 
     def _log_connection(self):
         """Log connection details"""
         print(f"Connecting to Odoo 19+ at: {self.url}", file=sys.stderr)
-        print(f"  Database: {self.db}", file=sys.stderr)
+        if self.db:
+            print(f"  Database: {self.db}", file=sys.stderr)
         print(f"  Auth: {'API Key' if self.api_key else 'Password'}", file=sys.stderr)
         if not self.verify_ssl and self.url.startswith("https://"):
             print(
@@ -153,14 +152,13 @@ class OdooClient:
         """Execute an arbitrary method on a model."""
         return self._execute(model, method, *args, **kwargs)
 
-    def get_models(self) -> Dict[str, Any]:
+    def get_models(self) -> dict[str, Any]:
         """Get all available models."""
         try:
-            model_ids = self._execute("ir.model", "search", [])
-            if not model_ids:
+            result = self._execute("ir.model", "search_read", [], fields=["model", "name"])
+            if not result:
                 return {"model_names": [], "models_details": {}}
 
-            result = self._execute("ir.model", "read", model_ids, fields=["model", "name"])
             models = sorted([rec["model"] for rec in result])
 
             return {
@@ -173,7 +171,7 @@ class OdooClient:
             print(f"Error retrieving models: {e}", file=sys.stderr)
             return {"model_names": [], "models_details": {}, "error": str(e)}
 
-    def get_model_info(self, model_name: str) -> Dict[str, Any]:
+    def get_model_info(self, model_name: str) -> dict[str, Any]:
         """Get information about a specific model."""
         try:
             result = self._execute(
@@ -188,14 +186,14 @@ class OdooClient:
         except Exception as e:
             return {"error": str(e)}
 
-    def get_model_fields(self, model_name: str) -> Dict[str, Any]:
+    def get_model_fields(self, model_name: str) -> dict[str, Any]:
         """Get field definitions for a model."""
         try:
             return self._execute(model_name, "fields_get")
         except Exception as e:
             return {"error": str(e)}
 
-    def get_model_doc(self, model_name: str) -> Optional[Dict[str, Any]]:
+    def get_model_doc(self, model_name: str) -> dict[str, Any] | None:
         """Fetch model documentation from /doc-bearer/<model>.json endpoint.
 
         The api_doc module is auto-installed in Odoo 19 (depends: ['web']).
@@ -212,53 +210,46 @@ class OdooClient:
             if isinstance(data, dict) and "result" in data and isinstance(data["result"], dict):
                 return data["result"]
             return data
-        except Exception:
+        except Exception as e:
+            print(f"[OdooClient] get_model_doc failed for {model_name}: {type(e).__name__}: {e}", file=sys.stderr)
             return None
 
     def search_read(
         self,
         model_name: str,
-        domain: List,
-        fields: Optional[List[str]] = None,
-        offset: Optional[int] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        domain: list,
+        fields: list[str] | None = None,
+        offset: int | None = None,
+        limit: int | None = None,
+        order: str | None = None
+    ) -> list[dict[str, Any]]:
         """Search and read records in one call."""
-        try:
-            kwargs = {}
-            if fields is not None:
-                kwargs["fields"] = fields
-            if offset is not None:
-                kwargs["offset"] = offset
-            if limit is not None:
-                kwargs["limit"] = limit
-            if order is not None:
-                kwargs["order"] = order
+        kwargs: dict[str, Any] = {}
+        if fields is not None:
+            kwargs["fields"] = fields
+        if offset is not None:
+            kwargs["offset"] = offset
+        if limit is not None:
+            kwargs["limit"] = limit
+        if order is not None:
+            kwargs["order"] = order
 
-            return self._execute(model_name, "search_read", domain, **kwargs)
-        except Exception as e:
-            print(f"Error in search_read: {e}", file=sys.stderr)
-            return []
+        return self._execute(model_name, "search_read", domain, **kwargs)
 
     def read_records(
         self,
         model_name: str,
-        ids: List[int],
-        fields: Optional[List[str]] = None
-    ) -> List[Dict[str, Any]]:
+        ids: list[int],
+        fields: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         """Read records by IDs."""
-        try:
-            kwargs = {}
-            if fields is not None:
-                kwargs["fields"] = fields
-            return self._execute(model_name, "read", ids, **kwargs)
-        except Exception as e:
-            print(f"Error reading records: {e}", file=sys.stderr)
-            return []
+        kwargs: dict[str, Any] = {}
+        if fields is not None:
+            kwargs["fields"] = fields
+        return self._execute(model_name, "read", ids, **kwargs)
 
 
-def load_config() -> Dict[str, str]:
+def load_config() -> dict[str, str]:
     """Load Odoo configuration from environment or files."""
     # Try .env files
     env_paths = [
@@ -296,8 +287,11 @@ def load_config() -> Dict[str, str]:
     for path in config_paths:
         if os.path.exists(path):
             print(f"Loading config from: {path}", file=sys.stderr)
-            with open(path, "r") as f:
-                return json.load(f)
+            try:
+                with open(path, "r") as f:
+                    return json.load(f)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON in config file {path}: {e}") from e
 
     raise FileNotFoundError(
         "No Odoo configuration found.\n"
@@ -307,7 +301,7 @@ def load_config() -> Dict[str, str]:
 
 
 _client_lock = threading.Lock()
-_client_instance: Optional[OdooClient] = None
+_client_instance: OdooClient | None = None
 
 
 def get_odoo_client() -> OdooClient:
