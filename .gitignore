@@ -35,6 +35,12 @@ ENV/
 .env
 .env.local
 
+# MCP client configuration (may contain secrets)
+.mcp.json
+
+# Odoo JSON config (may contain credentials)
+odoo_config.json
+
 # Logs
 *.log
 logs/

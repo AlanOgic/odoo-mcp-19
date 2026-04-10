@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -80,13 +81,16 @@ MODULE_KNOWLEDGE = load_module_knowledge()
 _DEFAULT_CONTEXT: Optional[Dict[str, Any]] = None
 _default_ctx_raw = os.environ.get("MCP_DEFAULT_CONTEXT")
 if _default_ctx_raw:
-    try:
-        _DEFAULT_CONTEXT = json.loads(_default_ctx_raw)
-        if not isinstance(_DEFAULT_CONTEXT, dict):
-            print(f"Warning: MCP_DEFAULT_CONTEXT must be a JSON object, ignoring", file=sys.stderr)
-            _DEFAULT_CONTEXT = None
-    except json.JSONDecodeError as e:
-        print(f"Warning: MCP_DEFAULT_CONTEXT invalid JSON: {e}", file=sys.stderr)
+    if len(_default_ctx_raw) > 4096:
+        print("Warning: MCP_DEFAULT_CONTEXT exceeds 4KB, ignoring", file=sys.stderr)
+    else:
+        try:
+            _DEFAULT_CONTEXT = json.loads(_default_ctx_raw)
+            if not isinstance(_DEFAULT_CONTEXT, dict):
+                print(f"Warning: MCP_DEFAULT_CONTEXT must be a JSON object, ignoring", file=sys.stderr)
+                _DEFAULT_CONTEXT = None
+        except json.JSONDecodeError as e:
+            print(f"Warning: MCP_DEFAULT_CONTEXT invalid JSON: {e}", file=sys.stderr)
 
 
 def _merge_context(explicit_context: Optional[Dict] = None) -> Optional[Dict]:
@@ -100,6 +104,30 @@ def _merge_context(explicit_context: Optional[Dict] = None) -> Optional[Dict]:
     merged = dict(_DEFAULT_CONTEXT)
     merged.update(explicit_context)
     return merged
+
+
+# ----- Input Validation -----
+
+_MODEL_RE = re.compile(r'^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$')
+_METHOD_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+
+def _validate_model(model: str) -> Optional[str]:
+    """Validate model name format. Returns error message or None if valid."""
+    if not model or len(model) > 128:
+        return "Model name is required and must be <= 128 characters"
+    if not _MODEL_RE.match(model):
+        return f"Invalid model name format: '{model}'. Expected dotted notation (e.g. 'res.partner')"
+    return None
+
+
+def _validate_method(method: str) -> Optional[str]:
+    """Validate method name format. Returns error message or None if valid."""
+    if not method or len(method) > 64:
+        return "Method name is required and must be <= 64 characters"
+    if not _METHOD_RE.match(method):
+        return f"Invalid method name format: '{method}'. Expected identifier (e.g. 'search_read')"
+    return None
 
 
 # ----- Compact Schema Builder -----
@@ -234,6 +262,7 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
 # Runtime tracking of models that triggered fallback mechanisms
 # Structure: {"model.name": {"method": {error_category: {...}}}}
 RUNTIME_MODEL_ISSUES: Dict[str, Dict[str, Dict[str, Any]]] = {}
+_RUNTIME_ISSUES_LOCK = threading.Lock()
 
 # Error categorization patterns and their solutions
 ERROR_CATEGORIES = {
@@ -308,6 +337,8 @@ ERROR_CATEGORIES = {
 # Cache for /doc-bearer/ responses: {model_name: (timestamp, data)}
 _DOC_CACHE: Dict[str, tuple] = {}
 _DOC_CACHE_TTL = 300  # 5 minutes
+_DOC_CACHE_MAX_ENTRIES = 100
+_DOC_CACHE_LOCK = threading.Lock()
 
 
 def _strip_html(html_str: str) -> str:
@@ -325,16 +356,21 @@ def _get_live_doc(model_name: str) -> Optional[Dict[str, Any]]:
     Failures are silent — the caller falls back to static data.
     """
     now = time.time()
-    if model_name in _DOC_CACHE:
-        ts, data = _DOC_CACHE[model_name]
-        if now - ts < _DOC_CACHE_TTL:
-            return data
+    with _DOC_CACHE_LOCK:
+        if model_name in _DOC_CACHE:
+            ts, data = _DOC_CACHE[model_name]
+            if now - ts < _DOC_CACHE_TTL:
+                return data
 
     try:
         odoo = get_odoo_client()
         doc = odoo.get_model_doc(model_name)
         if doc and isinstance(doc, dict) and "methods" in doc:
-            _DOC_CACHE[model_name] = (now, doc)
+            with _DOC_CACHE_LOCK:
+                _DOC_CACHE[model_name] = (now, doc)
+                if len(_DOC_CACHE) > _DOC_CACHE_MAX_ENTRIES:
+                    oldest = min(_DOC_CACHE, key=lambda k: _DOC_CACHE[k][0])
+                    del _DOC_CACHE[oldest]
             return doc
     except Exception as e:
         print(f"Warning: /doc-bearer/ unavailable for {model_name}: {e}", file=sys.stderr)
@@ -429,57 +465,60 @@ def _track_model_issue(model: str, method: str, error_msg: str, domain: List = N
     domain_patterns = _detect_domain_pattern(domain, model) if domain else []
     problematic_fields = _detect_problematic_fields(fields, model) if fields else []
 
-    if model not in RUNTIME_MODEL_ISSUES:
-        RUNTIME_MODEL_ISSUES[model] = {}
+    with _RUNTIME_ISSUES_LOCK:
+        if model not in RUNTIME_MODEL_ISSUES:
+            RUNTIME_MODEL_ISSUES[model] = {}
 
-    if method not in RUNTIME_MODEL_ISSUES[model]:
-        RUNTIME_MODEL_ISSUES[model][method] = {
-            "categories": {},
-            "first_seen": now,
-            "total_count": 0
-        }
+        if method not in RUNTIME_MODEL_ISSUES[model]:
+            RUNTIME_MODEL_ISSUES[model][method] = {
+                "categories": {},
+                "first_seen": now,
+                "total_count": 0
+            }
 
-    model_issues = RUNTIME_MODEL_ISSUES[model][method]
-    model_issues["total_count"] += 1
-    model_issues["last_seen"] = now
+        model_issues = RUNTIME_MODEL_ISSUES[model][method]
+        model_issues["total_count"] += 1
+        model_issues["last_seen"] = now
 
-    # Track by category
-    if category not in model_issues["categories"]:
-        model_issues["categories"][category] = {
-            "count": 0,
-            "domain_patterns": {},
-            "sample_errors": [],
-            "solutions": ERROR_CATEGORIES[category]["solutions"]
-        }
+        # Track by category
+        if category not in model_issues["categories"]:
+            model_issues["categories"][category] = {
+                "count": 0,
+                "domain_patterns": {},
+                "sample_errors": [],
+                "solutions": ERROR_CATEGORIES[category]["solutions"]
+            }
 
-    cat_info = model_issues["categories"][category]
-    cat_info["count"] += 1
+        cat_info = model_issues["categories"][category]
+        cat_info["count"] += 1
 
-    # Track domain patterns for this category
-    for pattern in domain_patterns:
-        cat_info["domain_patterns"][pattern] = cat_info["domain_patterns"].get(pattern, 0) + 1
+        # Track domain patterns for this category
+        for pattern in domain_patterns:
+            cat_info["domain_patterns"][pattern] = cat_info["domain_patterns"].get(pattern, 0) + 1
 
-    # Track problematic fields
-    if "problematic_fields" not in cat_info:
-        cat_info["problematic_fields"] = {}
-    for field_info in problematic_fields:
-        cat_info["problematic_fields"][field_info] = cat_info["problematic_fields"].get(field_info, 0) + 1
+        # Track problematic fields
+        if "problematic_fields" not in cat_info:
+            cat_info["problematic_fields"] = {}
+        for field_info in problematic_fields:
+            cat_info["problematic_fields"][field_info] = cat_info["problematic_fields"].get(field_info, 0) + 1
 
-    # Keep last 3 unique error samples
-    error_sample = error_msg[:300]
-    if error_sample not in cat_info["sample_errors"]:
-        cat_info["sample_errors"].append(error_sample)
-        if len(cat_info["sample_errors"]) > 3:
-            cat_info["sample_errors"].pop(0)
+        # Keep last 3 unique error samples
+        error_sample = error_msg[:300]
+        if error_sample not in cat_info["sample_errors"]:
+            cat_info["sample_errors"].append(error_sample)
+            if len(cat_info["sample_errors"]) > 3:
+                cat_info["sample_errors"].pop(0)
 
-    # Log detailed info
+        total_count = model_issues["total_count"]
+
+    # Log detailed info (outside lock)
     print(f"[MCP] Issue tracked: {model}.{method}", file=sys.stderr)
     print(f"  Category: {category} ({ERROR_CATEGORIES[category]['cause']})", file=sys.stderr)
     if domain_patterns:
         print(f"  Domain patterns: {domain_patterns}", file=sys.stderr)
     if problematic_fields:
         print(f"  Problematic fields: {problematic_fields}", file=sys.stderr)
-    print(f"  Total occurrences: {model_issues['total_count']}", file=sys.stderr)
+    print(f"  Total occurrences: {total_count}", file=sys.stderr)
 
     # Get model-specific recommendations from module_knowledge
     model_specific_advice = []
@@ -985,7 +1024,7 @@ def get_session_bootstrap() -> str:
     """
     odoo_client = get_odoo_client()
     models_csv = os.environ.get("MCP_BOOTSTRAP_MODELS", _DEFAULT_BOOTSTRAP_MODELS)
-    model_names = [m.strip() for m in models_csv.split(",") if m.strip()]
+    model_names = [m.strip() for m in models_csv.split(",") if m.strip()][:20]
 
     result = {"schemas": {}, "workflows": {}, "errors": {}}
 
@@ -1661,7 +1700,10 @@ def get_model_limitations() -> str:
     all_domain_patterns = {}
     all_categories = {}
 
-    for model, methods in RUNTIME_MODEL_ISSUES.items():
+    with _RUNTIME_ISSUES_LOCK:
+        runtime_snapshot = {k: dict(v) for k, v in RUNTIME_MODEL_ISSUES.items()}
+
+    for model, methods in runtime_snapshot.items():
         result["runtime_detected"][model] = {
             "source": "runtime detection",
             "first_seen": None,
@@ -2002,11 +2044,13 @@ def discover_actions_resource(model: str) -> str:
                     "params": method_info.get("params", {}),
                     "replaces": method_info.get("instead_of"),
                 })
+                if method_info.get("instead_of"):
+                    result["warnings"] = result.get("warnings", [])
+                    result["warnings"].append(
+                        f"Use {method_name}() instead of {method_info['instead_of']}()"
+                    )
             if module_info.get("notes"):
                 result["notes"] = module_info["notes"]
-            if method_info.get("instead_of"):
-                result["warnings"] = result.get("warnings", [])
-                result["warnings"].append(f"Use {method_name}() instead of {method_info['instead_of']}()")
 
     # 3. Get server actions from Odoo
     try:
@@ -2148,6 +2192,15 @@ def execute_method(
             resolve_json='{"user_id": {"model": "res.users", "search": "Administrator"}}'
     """
     start_time = time.time()
+
+    # Validate model and method names
+    model_err = _validate_model(model)
+    if model_err:
+        return ExecuteMethodResponse(success=False, error=model_err, execution_time_ms=0)
+    method_err = _validate_method(method)
+    if method_err:
+        return ExecuteMethodResponse(success=False, error=method_err, execution_time_ms=0)
+
     odoo = get_odoo_client()
 
     try:
@@ -2506,11 +2559,22 @@ async def batch_execute(
                 if not op.get('model') or not op.get('method'):
                     raise ValueError(f"Operation {idx}: 'model' and 'method' required")
 
+                model_err = _validate_model(op['model'])
+                if model_err:
+                    raise ValueError(f"Operation {idx}: {model_err}")
+                method_err = _validate_method(op['method'])
+                if method_err:
+                    raise ValueError(f"Operation {idx}: {method_err}")
+
                 args_json = op.get('args_json')
                 kwargs_json = op.get('kwargs_json')
 
                 args = json.loads(args_json) if args_json else []
+                if not isinstance(args, list):
+                    raise ValueError(f"Operation {idx}: args_json must be a JSON array")
                 kwargs = json.loads(kwargs_json) if kwargs_json else {}
+                if not isinstance(kwargs, dict):
+                    raise ValueError(f"Operation {idx}: kwargs_json must be a JSON object")
 
                 # Merge default context if configured
                 if _DEFAULT_CONTEXT:
@@ -3648,6 +3712,9 @@ def read_resource(uri: str, max_chars: int = _READ_RESOURCE_MAX_CHARS) -> str:
         uri: Resource URI (e.g. 'odoo://model/res.partner/fields')
         max_chars: Max output length in characters (default: 15000). Set to 0 for unlimited.
     """
+    if not uri.startswith("odoo://"):
+        return json.dumps({"error": "Invalid URI: must start with odoo://", "uri": uri})
+
     for pattern, handler, param_names in _RESOURCE_ROUTES:
         match = re.match(pattern, uri)
         if match:

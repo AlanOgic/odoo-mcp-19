@@ -18,7 +18,10 @@ Connect Claude and AI assistants to Odoo 19+ via the Model Context Protocol (MCP
 - **Safety layer** - Pre-execution risk classification, blocked models, cascade warnings
 - **DX optimizations** - Quick-schema, bundle, session-bootstrap, resolve_json for token-efficient AI operations
 - **MCP 2025-11-25** - Background tasks, progress tracking, icons, structured outputs
-- **FastMCP 3.1.0** - Latest stable SDK with providers, transforms, component versioning, OpenTelemetry
+- **FastMCP 3.2.0+** - Latest stable SDK with security fixes, providers, transforms, OpenTelemetry
+- **Input validation** - Regex-validated model/method names, URI scheme guards, JSON type checks
+- **Thread-safe** - Singleton client, locked global caches for concurrent HTTP transport
+- **Hardened Docker** - Non-root container, `--env-file` for secrets, mandatory HTTP auth
 
 ## Installation
 
@@ -432,7 +435,7 @@ curl -i -X POST http://localhost:8080/mcp \
 | `ODOO_TIMEOUT` | No | `30` | Request timeout in seconds |
 | `ODOO_VERIFY_SSL` | No | `true` | SSL certificate verification |
 | `MCP_TRANSPORT` | No | `stdio` | Transport: `stdio` or `streamable-http` |
-| `MCP_API_KEY` | No | — | Bearer token for HTTP auth |
+| `MCP_API_KEY` | **Yes** (HTTP) | — | Bearer token for HTTP auth (required for streamable-http) |
 | `MCP_HOST` | No | `0.0.0.0` | HTTP bind address |
 | `MCP_PORT` | No | `8080` | HTTP port |
 | `MCP_SAFETY_MODE` | No | `strict` | `strict` or `permissive` |
@@ -453,11 +456,23 @@ Full documentation in the **[Wiki](https://github.com/AlanOgic/odoo-mcp-19/wiki)
 - [Domain Syntax](https://github.com/AlanOgic/odoo-mcp-19/wiki/Domain-Syntax)
 - [Prompts](https://github.com/AlanOgic/odoo-mcp-19/wiki/Prompts)
 
+## Security
+
+- **HTTP transport requires `MCP_API_KEY`** — server refuses to start without it
+- **Docker runs as non-root user** (UID 1001)
+- **Input validation** — model names (dotted notation regex), method names (identifier regex), URI scheme (`odoo://` only)
+- **No traceback forwarding** — Odoo server tracebacks logged to stderr, never returned to clients
+- **Credential files gitignored** — `.env`, `.mcp.json`, `odoo_config.json`
+- **SSL warning** — visible warning on startup when `ODOO_VERIFY_SSL=false` with HTTPS
+- **Thread-safe caches** — doc cache (100 entries max, LRU eviction) and runtime issue tracker use locks
+- **`MCP_DEFAULT_CONTEXT`** — capped at 4KB, `MCP_BOOTSTRAP_MODELS` capped at 20 models
+
 ## Requirements
 
 - Python 3.10+
 - Odoo 19+
-- FastMCP 3.1.0+ (with tasks extra)
+- FastMCP 3.2.0+ (with tasks extra)
+- requests 2.32.4+
 
 ## License
 

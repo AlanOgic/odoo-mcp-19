@@ -70,15 +70,13 @@ def _generate_env(config: dict) -> str:
 
 
 def _generate_docker_cmd(config: dict) -> str:
-    """Generate docker run command."""
+    """Generate docker run command using --env-file for security."""
     parts = ["docker run --rm -i"]
 
     if config["transport"] == "streamable-http":
         parts.append(f"-p {config['mcp_port']}:{config['mcp_port']}")
 
-    for key, val in _build_env_dict(config).items():
-        parts.append(f"  -e {key}={val}")
-
+    parts.append("  --env-file .env")
     parts.append(f"  {DOCKER_IMAGE}")
     return " \\\n".join(parts)
 
@@ -210,10 +208,14 @@ def main():
 
     # Log auth status for HTTP transport
     if transport == "streamable-http":
-        if os.environ.get("MCP_API_KEY"):
-            print("🔐 Authentication enabled (Bearer token required)")
-        else:
-            print("⚠️  No MCP_API_KEY set - running without authentication")
+        if not os.environ.get("MCP_API_KEY"):
+            print(
+                "ERROR: MCP_API_KEY must be set when using streamable-http transport.\n"
+                "Set MCP_API_KEY environment variable or run --setup to configure.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print("🔐 Authentication enabled (Bearer token required)")
         mcp.run(transport="streamable-http", host=host, port=port)
     else:
         mcp.run()

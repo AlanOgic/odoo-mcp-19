@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import re
+import threading
 import urllib.parse
 from typing import Any, Dict, List, Optional
 
@@ -84,6 +85,13 @@ class OdooClient:
         print(f"Connecting to Odoo 19+ at: {self.url}", file=sys.stderr)
         print(f"  Database: {self.db}", file=sys.stderr)
         print(f"  Auth: {'API Key' if self.api_key else 'Password'}", file=sys.stderr)
+        if not self.verify_ssl and self.url.startswith("https://"):
+            print(
+                "  ⚠ WARNING: SSL verification is DISABLED. "
+                "Connections are vulnerable to MITM attacks. "
+                "Set ODOO_VERIFY_SSL=true for production.",
+                file=sys.stderr,
+            )
 
     def _execute(self, model: str, method: str, *args, **kwargs) -> Any:
         """
@@ -105,7 +113,25 @@ class OdooClient:
 
         try:
             response = self.session.post(url, json=payload, timeout=self.timeout)
-            response.raise_for_status()
+
+            # Extract Odoo error details from response body BEFORE raise_for_status
+            if response.status_code >= 400:
+                try:
+                    error_body = response.json()
+                    odoo_error = error_body.get('message', '') or error_body.get('name', '')
+                    odoo_debug = error_body.get('debug', '')
+                    # Build informative error message
+                    parts = [f"Request failed: {response.status_code} {response.reason} for url: {response.url}"]
+                    if odoo_error:
+                        parts.append(f"Odoo error: {odoo_error}")
+                    if odoo_debug:
+                        # Log full traceback server-side only — never forward to client
+                        print(f"[OdooClient] Server traceback for {url}:\n{odoo_debug}", file=sys.stderr)
+                    raise ValueError("\n".join(parts))
+                except (json.JSONDecodeError, KeyError, AttributeError):
+                    # If we can't parse the error body, fall back to raise_for_status
+                    response.raise_for_status()
+
             result = response.json()
 
             # Handle wrapped response format
@@ -277,21 +303,30 @@ def load_config() -> Dict[str, str]:
     )
 
 
+_client_lock = threading.Lock()
+_client_instance: Optional[OdooClient] = None
+
+
 def get_odoo_client() -> OdooClient:
-    """Get a configured Odoo client instance."""
-    config = load_config()
-
-    api_key = os.environ.get("ODOO_API_KEY")
-    password = os.environ.get("ODOO_PASSWORD") or config.get("password")
-    timeout = int(os.environ.get("ODOO_TIMEOUT", "30"))
-    verify_ssl = os.environ.get("ODOO_VERIFY_SSL", "1").lower() in ["1", "true", "yes"]
-
-    return OdooClient(
-        url=config["url"],
-        db=config["db"],
-        username=config["username"],
-        password=password,
-        api_key=api_key,
-        timeout=timeout,
-        verify_ssl=verify_ssl,
-    )
+    """Get a configured Odoo client singleton instance."""
+    global _client_instance
+    if _client_instance is not None:
+        return _client_instance
+    with _client_lock:
+        if _client_instance is not None:
+            return _client_instance
+        config = load_config()
+        api_key = os.environ.get("ODOO_API_KEY")
+        password = os.environ.get("ODOO_PASSWORD") or config.get("password")
+        timeout = int(os.environ.get("ODOO_TIMEOUT", "30"))
+        verify_ssl = os.environ.get("ODOO_VERIFY_SSL", "1").lower() in ["1", "true", "yes"]
+        _client_instance = OdooClient(
+            url=config["url"],
+            db=config["db"],
+            username=config["username"],
+            password=password,
+            api_key=api_key,
+            timeout=timeout,
+            verify_ssl=verify_ssl,
+        )
+        return _client_instance

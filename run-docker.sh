@@ -10,15 +10,5 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
 fi
 
 docker run --rm -i \
-  -e ODOO_URL="${ODOO_URL}" \
-  -e ODOO_DB="${ODOO_DB}" \
-  -e ODOO_USERNAME="${ODOO_USERNAME}" \
-  -e ODOO_API_KEY="${ODOO_API_KEY}" \
-  -e ODOO_PASSWORD="${ODOO_PASSWORD:-}" \
-  -e ODOO_TIMEOUT="${ODOO_TIMEOUT:-30}" \
-  -e ODOO_VERIFY_SSL="${ODOO_VERIFY_SSL:-true}" \
-  -e MCP_SAFETY_MODE="${MCP_SAFETY_MODE:-strict}" \
-  -e MCP_SAFETY_AUDIT="${MCP_SAFETY_AUDIT:-true}" \
-  -e MCP_DEFAULT_CONTEXT="${MCP_DEFAULT_CONTEXT:-}" \
-  -e MCP_BOOTSTRAP_MODELS="${MCP_BOOTSTRAP_MODELS:-}" \
+  --env-file "$SCRIPT_DIR/.env" \
   odoo-mcp-19:latest

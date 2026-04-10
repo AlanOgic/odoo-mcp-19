@@ -6,8 +6,8 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **Odoo MCP Server 19** - A standalone MCP server for Odoo 19+ using the v2 JSON-2 API.
 
-- **Version**: 1.12.0
-- **MCP Spec**: MCP 2025-11-25 (FastMCP 3.1.0+)
+- **Version**: 1.13.0
+- **MCP Spec**: MCP 2025-11-25 (FastMCP 3.2.0+)
 - **Odoo Support**: v19+ only (v2 JSON-2 API)
 
 ### MCP 2025-11-25 Features (v1.9.0)
@@ -51,13 +51,18 @@ odoo-mcp-19/
 - **Runtime issue tracking**: Detects and tracks problematic model/method combinations
 - **Background tasks**: batch_execute and execute_workflow support progress tracking
 - **Structured outputs**: All tools return typed Pydantic models with execution time
+- **Input validation**: Model names (dotted notation regex), method names (identifier regex), URI scheme (`odoo://` only), JSON type checks on args/kwargs
+- **Thread-safe caches**: `_DOC_CACHE` (100 entries max, LRU eviction) and `RUNTIME_MODEL_ISSUES` use `threading.Lock`
 - Smart limits: DEFAULT_LIMIT=100, MAX_LIMIT=1000
 
 **2. Odoo Client** (`odoo_client.py`)
 - v2 JSON-2 API only (Bearer token auth)
 - Endpoint: `/json/2/{model}/{method}`
+- Thread-safe singleton (`get_odoo_client()` with double-checked locking)
 - Automatic argument conversion via arg_mapping
 - Live model documentation via `/doc-bearer/<model>.json` (api_doc module)
+- Server tracebacks logged to stderr only — never forwarded to MCP clients
+- SSL disable warning on startup when `ODOO_VERIFY_SSL=false` + HTTPS
 
 **3. Argument Mapping** (`arg_mapping.py`)
 - Converts positional args to named args for v2 API
@@ -117,13 +122,13 @@ Optional:
 
 HTTP Transport (v1.8.0+):
 - `MCP_TRANSPORT` - Transport mode: `stdio` (default) or `streamable-http`
-- `MCP_API_KEY` - Bearer token for HTTP authentication
+- `MCP_API_KEY` - Bearer token for HTTP authentication (**required** for streamable-http — server refuses to start without it)
 - `MCP_HOST` - HTTP bind address (default: 0.0.0.0)
 - `MCP_PORT` - HTTP port (default: 8080)
 
 DX Configuration (v1.11.0+):
-- `MCP_DEFAULT_CONTEXT` - JSON object merged into all operation contexts (e.g. `{"lang": "fr_FR"}`)
-- `MCP_BOOTSTRAP_MODELS` - Comma-separated model names for session-bootstrap (default: `res.partner,sale.order,account.move,product.product,stock.picking`)
+- `MCP_DEFAULT_CONTEXT` - JSON object merged into all operation contexts (e.g. `{"lang": "fr_FR"}`). Max 4KB.
+- `MCP_BOOTSTRAP_MODELS` - Comma-separated model names for session-bootstrap (default: `res.partner,sale.order,account.move,product.product,stock.picking`). Max 20 models.
 
 ## v2 API Details
 
@@ -314,6 +319,42 @@ The `context` parameter is now correctly preserved when `search_read` falls back
 | `odoo://bundle/{models}` | Batch quick-schema (max 10) |
 | `odoo://session-bootstrap` | Bootstrap conversation |
 
+## Security Hardening (v1.13.0)
+
+### Input Validation
+- **Model names**: Regex `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`, max 128 chars. Applied in `execute_method` and `batch_execute`.
+- **Method names**: Regex `^[a-zA-Z_][a-zA-Z0-9_]*$`, max 64 chars. Blocks path traversal (`../`) and query injection (`?param=`).
+- **`read_resource` URI**: Must start with `odoo://`. Blocks `file://`, `http://`, etc.
+- **`batch_execute` args**: Each operation's `args_json` verified as list, `kwargs_json` verified as dict.
+
+### Thread Safety
+- `get_odoo_client()` uses double-checked locking singleton — one `OdooClient` + `requests.Session` per process
+- `_DOC_CACHE` and `RUNTIME_MODEL_ISSUES` protected by `threading.Lock` for concurrent HTTP transport
+- `_DOC_CACHE` limited to 100 entries with LRU eviction
+
+### Error Sanitization
+- Odoo server tracebacks (`debug` field) logged to stderr only — never included in MCP responses
+- Prevents leaking file paths, SQL fragments, ORM internals to AI clients
+
+### Docker
+- Container runs as non-root user `mcp` (UID 1001)
+- `run-docker.sh` uses `--env-file` instead of inline `-e` flags (prevents secret leakage in `ps`, shell history)
+- `docker-compose.yml` requires `MCP_API_KEY` with `${MCP_API_KEY:?required}` syntax
+
+### HTTP Transport
+- Server **refuses to start** in streamable-http mode without `MCP_API_KEY` (`sys.exit(1)`)
+- Setup wizard auto-generates cryptographically strong key (`secrets.token_urlsafe(32)`)
+
+### Resource Limits
+- `MCP_DEFAULT_CONTEXT`: 4KB max, rejected with warning if exceeded
+- `MCP_BOOTSTRAP_MODELS`: 20 model cap
+- `_DOC_CACHE`: 100 entry max with LRU eviction
+
+### Files Protected by .gitignore
+- `.env`, `.env.local` — environment variables
+- `.mcp.json` — MCP client config (may contain API keys)
+- `odoo_config.json` — legacy JSON config (may contain credentials)
+
 ## Notes for Claude Code
 
 - This is a v2-only server - no v1 fallback code
@@ -325,7 +366,7 @@ The `context` parameter is now correctly preserved when `search_read` falls back
 - `read_group` is deprecated in v19; `formatted_read_group` is the replacement (different param: `aggregates` instead of `fields`)
 - `odoo://methods/{model}` is enriched with live data from `/doc-bearer/<model>.json` (signatures, return types, API decorators, exceptions, module attribution). Falls back to static data silently if unavailable.
 - Live doc data requires the `api_doc.group_allow_doc` group on the API user. The `api_doc` module is auto-installed (depends: `web`).
-- Live doc responses are cached in-memory for 5 minutes (`_DOC_CACHE_TTL`)
+- Live doc responses are cached in-memory for 5 minutes (`_DOC_CACHE_TTL`), max 100 entries
 
 ## Odoo MCP Best Practices
 

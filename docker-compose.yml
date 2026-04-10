@@ -17,7 +17,7 @@ services:
       - MCP_TRANSPORT=${MCP_TRANSPORT:-streamable-http}
       - MCP_HOST=0.0.0.0
       - MCP_PORT=${MCP_PORT:-8080}
-      - MCP_API_KEY=${MCP_API_KEY:-}
+      - MCP_API_KEY=${MCP_API_KEY:?MCP_API_KEY is required for HTTP transport}
       # Safety & DX
       - MCP_SAFETY_MODE=${MCP_SAFETY_MODE:-strict}
       - MCP_SAFETY_AUDIT=${MCP_SAFETY_AUDIT:-}
