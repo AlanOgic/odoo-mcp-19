@@ -1250,11 +1250,14 @@
 
     "crm": {
       "model": "crm.lead",
+      "write_restrictions": "write() may 404 via JSON API for stage/state changes. Use action methods: action_set_won (won), action_set_lost (lost), action_restore (reopen). For non-terminal stage changes, write({stage_id: X}) may work but test first.",
       "special_methods": {
         "action_set_won": {
           "params": {},
           "description": "Mark opportunity as won",
-          "requires_ids": true
+          "requires_ids": true,
+          "instead_of": "write with stage_id to won stage",
+          "example": "args_json='[[lead_id]]'"
         },
         "action_set_won_rainbowman": {
           "params": {},
@@ -1262,8 +1265,11 @@
           "requires_ids": true
         },
         "action_set_lost": {
-          "params": {"lost_reason_id": "integer", "lost_feedback": "string"},
-          "description": "Mark opportunity as lost"
+          "params": {"lost_reason_id": "integer|false", "lost_feedback": "string"},
+          "description": "Mark opportunity as lost",
+          "requires_ids": true,
+          "instead_of": "write with stage_id to lost stage",
+          "example": "args_json='[[lead_id]]', kwargs_json='{\"additional_values\": {\"lost_reason_id\": false, \"lost_feedback\": \"Reason text\"}}'"
         },
         "action_set_automated_probability": {
           "params": {},
@@ -1840,7 +1846,7 @@
           "suggestion": "Live documentation unavailable. The api_doc module may not be installed, or the user lacks the group_allow_doc group"
         }
       ],
-      "suggestion": "Not found. Verify the model name and record ID exist on {model}. Use odoo://find-model to search by concept."
+      "suggestion": "Not found. Verify the model name and record ID exist on {model}. If this was a write() call, the model may require action methods for state changes — read odoo://methods/{model} to find them."
     },
     "_fallback_patterns": {
       "_note": "Generic patterns matched against any error message regardless of HTTP status code",
@@ -1856,6 +1862,18 @@
         {
           "match": "readonly field",
           "suggestion": "Cannot write to a readonly/computed field on {model}. Exclude it from write values"
+        },
+        {
+          "match": "Command",
+          "suggestion": "Relational field write syntax error. Many2many: [(4, id)] to link, [(6, 0, [ids])] to replace. One2many: [(0, 0, {vals})] to create child, [(1, id, {vals})] to update"
+        },
+        {
+          "match": "Invalid date",
+          "suggestion": "Date format error. Use 'YYYY-MM-DD' for date fields, 'YYYY-MM-DD HH:MM:SS' (UTC) for datetime fields"
+        },
+        {
+          "match": "time data",
+          "suggestion": "Datetime format error. Use 'YYYY-MM-DD HH:MM:SS' (UTC) for datetime fields, 'YYYY-MM-DD' for date fields"
         }
       ]
     }

@@ -586,7 +586,13 @@ def get_error_suggestion(error_msg: str, model: str = None, method: str = None) 
                 special_methods = module_info.get("special_methods", {})
                 for special_method, method_info in special_methods.items():
                     if method_info.get("instead_of") == method:
-                        return f"Use {special_method}() instead of {method}() for {model}. {module_info.get('notes', '')}"
+                        example = method_info.get("example", "")
+                        example_hint = f" Example: {example}" if example else ""
+                        return f"Use {special_method}() instead of {method}() for {model}. {module_info.get('notes', '')}{example_hint}"
+
+                # Check write_restrictions when write/create fails
+                if method in ("write", "create") and module_info.get("write_restrictions"):
+                    return module_info["write_restrictions"]
 
     return None
 
@@ -2114,13 +2120,23 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
 
     Common patterns:
     - search_read: kwargs_json='{"domain": [...], "fields": [...], "limit": 100}'
-    - create: args_json='[{"field": "value"}]'
+    - create: kwargs_json='{"values": {"field": "value"}}'
     - write: args_json='[[ids], {"field": "value"}]'
     - unlink: args_json='[[ids]]'
-    - One2many: (0,0,{}) create, (1,id,{}) update, (2,id,0) delete
+    - formatted_read_group (v19): kwargs_json='{"domain": [...], "groupby": ["field"], "aggregates": ["field:sum"]}'
 
-    CRITICAL: Many2one fields = ALWAYS numeric ID, never the name!
-    Use resolve_json to auto-resolve names to IDs.
+    RELATIONAL FIELD WRITES (critical — wrong syntax = silent failure):
+    - Many2one: ALWAYS numeric ID, never name. Use resolve_json to auto-resolve.
+    - Many2many: (4, id) link, (3, id) unlink, (6, 0, [ids]) replace all, (5, 0, 0) clear
+    - One2many: (0, 0, {vals}) create child, (1, id, {vals}) update, (2, id, 0) delete
+
+    DATE/DATETIME FORMATS (wrong format = 500 or silent failure):
+    - date fields: "YYYY-MM-DD" (e.g. "2026-04-10")
+    - datetime fields: "YYYY-MM-DD HH:MM:SS" in UTC (e.g. "2026-04-10 14:30:00")
+
+    STATE CHANGES: Never use write() to change state fields directly.
+    Use action methods instead (action_confirm, action_set_won, action_post, etc.).
+    Read odoo://methods/{model} to find the correct action method.
 
     Smart limits: Default 100, Max 1000 records
 
