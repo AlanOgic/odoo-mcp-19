@@ -64,7 +64,10 @@ class OdooClient:
         self.session = requests.Session()
         self.session.verify = verify_ssl
         self.session.headers['Content-Type'] = 'application/json'
-        self.session.headers['X-Odoo-Database'] = db
+        # Only set X-Odoo-Database for multi-DB instances.
+        # Odoo.com SaaS identifies the DB via subdomain — sending this header causes 404.
+        if db and not self.url.endswith(".odoo.com"):
+            self.session.headers['X-Odoo-Database'] = db
 
         if api_key:
             self.session.headers['Authorization'] = f'Bearer {api_key}'
