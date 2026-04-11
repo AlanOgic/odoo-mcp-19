@@ -13,7 +13,9 @@ MCP 2025-11-25 Features:
 import asyncio
 import json
 import re
+import secrets
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -44,6 +46,7 @@ from .models import (
 )
 from .odoo_client import get_odoo_client
 from .safety import (
+    BLOCKED_MODELS,
     RiskLevel,
     SafetyClassification,
     audit_log,
@@ -56,6 +59,44 @@ from .utils import (
     _track_model_issue,
     get_error_suggestion,
 )
+
+
+# ----- Confirmation Token Store -----
+# Stateful nonces that tie a confirmed=True re-call to the original safety classification.
+# Prevents an agent from bypassing the gate by always passing confirmed=True.
+
+_CONFIRMATION_TOKENS: dict[str, tuple[float, str, str]] = {}  # token → (timestamp, model, method)
+_CONFIRMATION_LOCK = threading.Lock()
+_CONFIRMATION_TTL = 120  # seconds
+
+
+def _issue_confirmation_token(model: str, method: str) -> str:
+    """Issue a short-lived nonce for a pending confirmation."""
+    token = secrets.token_urlsafe(16)
+    now = time.time()
+    with _CONFIRMATION_LOCK:
+        # Evict expired tokens
+        expired = [k for k, (ts, _, _) in _CONFIRMATION_TOKENS.items() if now - ts > _CONFIRMATION_TTL]
+        for k in expired:
+            del _CONFIRMATION_TOKENS[k]
+        _CONFIRMATION_TOKENS[token] = (now, model, method)
+    return token
+
+
+def _validate_confirmation_token(token: str | None, model: str, method: str) -> str | None:
+    """Validate and consume a confirmation token. Returns error message or None if valid."""
+    if not token:
+        return "confirmed=true requires a confirmation_token from the safety gate response."
+    with _CONFIRMATION_LOCK:
+        entry = _CONFIRMATION_TOKENS.pop(token, None)
+    if not entry:
+        return "Confirmation token is invalid or already used."
+    ts, stored_model, stored_method = entry
+    if time.time() - ts > _CONFIRMATION_TTL:
+        return f"Confirmation token expired (>{_CONFIRMATION_TTL}s). Re-call without confirmed=true to get a new token."
+    if stored_model != model or stored_method != method:
+        return f"Confirmation token was issued for {stored_model}.{stored_method}, not {model}.{method}."
+    return None
 
 
 # ----- MCP Tools (execute_method, batch_execute, execute_workflow, configure_odoo, read_resource) -----
@@ -136,6 +177,7 @@ def execute_method(
     args_json: str = None,
     kwargs_json: str = None,
     confirmed: bool = False,
+    confirmation_token: str = None,
     resolve_json: str = None,
 ) -> ExecuteMethodResponse:
     """
@@ -226,6 +268,19 @@ def execute_method(
                         success=False,
                         error=f"resolve_json['{field_name}'] requires 'model' and 'search' keys",
                     )
+                # Validate target model name format
+                model_err = _validate_model(target_model)
+                if model_err:
+                    return ExecuteMethodResponse(
+                        success=False,
+                        error=f"resolve_json['{field_name}']: {model_err}",
+                    )
+                # Block reads against security-critical models
+                if target_model in BLOCKED_MODELS:
+                    return ExecuteMethodResponse(
+                        success=False,
+                        error=f"resolve_json['{field_name}']: model '{target_model}' is blocked for safety.",
+                    )
                 try:
                     matches = odoo.execute_method(
                         target_model, "name_search", name=search_term, limit=5
@@ -305,20 +360,33 @@ def execute_method(
                 execution_time_ms=round(elapsed_ms, 2),
             )
 
-        if classification.requires_confirmation and not confirmed:
-            audit_log(classification, confirmed=False, executed=False)
-            message = classification.reason
-            if classification.cascade_warning:
-                message += f"\n\nWARNING: {classification.cascade_warning}"
-            elapsed_ms = (time.time() - start_time) * 1000
-            return ExecuteMethodResponse(
-                success=False,
-                pending_confirmation=True,
-                safety=classification,
-                error=message,
-                hint="Re-call execute_method with confirmed=true to proceed.",
-                execution_time_ms=round(elapsed_ms, 2),
-            )
+        if classification.requires_confirmation:
+            if not confirmed:
+                # Issue a nonce token for the confirmation re-call
+                token = _issue_confirmation_token(model, method)
+                audit_log(classification, confirmed=False, executed=False)
+                message = classification.reason
+                if classification.cascade_warning:
+                    message += f"\n\nWARNING: {classification.cascade_warning}"
+                elapsed_ms = (time.time() - start_time) * 1000
+                return ExecuteMethodResponse(
+                    success=False,
+                    pending_confirmation=True,
+                    safety=classification,
+                    error=message,
+                    hint=f"Re-call execute_method with confirmed=true and confirmation_token='{token}' to proceed.",
+                    execution_time_ms=round(elapsed_ms, 2),
+                )
+            else:
+                # Validate the confirmation token
+                token_err = _validate_confirmation_token(confirmation_token, model, method)
+                if token_err:
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    return ExecuteMethodResponse(
+                        success=False,
+                        error=f"Confirmation rejected: {token_err}",
+                        execution_time_ms=round(elapsed_ms, 2),
+                    )
 
         if classification.risk_level != RiskLevel.SAFE:
             audit_log(classification, confirmed=confirmed, executed=True)
@@ -445,6 +513,7 @@ async def batch_execute(
     operations: List[Dict[str, Any]],
     atomic: bool = True,
     confirmed: bool = False,
+    confirmation_token: str = None,
     progress: Progress = Progress(),
 ) -> BatchExecuteResponse:
     """
@@ -493,23 +562,38 @@ async def batch_execute(
         )
 
     # Operations needing confirmation
-    if any_needs_confirmation and not confirmed:
-        for c in classifications:
-            if c.requires_confirmation:
-                audit_log(c, confirmed=False, executed=False)
-        elapsed_ms = (time.time() - start_time) * 1000
-        return BatchExecuteResponse(
-            success=False,
-            results=[],
-            total_operations=len(operations),
-            successful_operations=0,
-            failed_operations=0,
-            error="Batch contains operations that require confirmation. Review safety_preview and re-call with confirmed=true.",
-            pending_confirmation=True,
-            safety_preview=classifications,
-            overall_risk=overall_risk.value,
-            execution_time_ms=round(elapsed_ms, 2),
-        )
+    if any_needs_confirmation:
+        if not confirmed:
+            token = _issue_confirmation_token("__batch__", f"batch_{len(operations)}")
+            for c in classifications:
+                if c.requires_confirmation:
+                    audit_log(c, confirmed=False, executed=False)
+            elapsed_ms = (time.time() - start_time) * 1000
+            return BatchExecuteResponse(
+                success=False,
+                results=[],
+                total_operations=len(operations),
+                successful_operations=0,
+                failed_operations=0,
+                error=f"Batch contains operations that require confirmation. Review safety_preview and re-call with confirmed=true and confirmation_token='{token}'.",
+                pending_confirmation=True,
+                safety_preview=classifications,
+                overall_risk=overall_risk.value,
+                execution_time_ms=round(elapsed_ms, 2),
+            )
+        else:
+            token_err = _validate_confirmation_token(confirmation_token, "__batch__", f"batch_{len(operations)}")
+            if token_err:
+                elapsed_ms = (time.time() - start_time) * 1000
+                return BatchExecuteResponse(
+                    success=False,
+                    results=[],
+                    total_operations=len(operations),
+                    successful_operations=0,
+                    failed_operations=0,
+                    error=f"Confirmation rejected: {token_err}",
+                    execution_time_ms=round(elapsed_ms, 2),
+                )
 
     # Audit non-safe operations that will proceed
     for c in classifications:
@@ -761,6 +845,7 @@ async def execute_workflow(
     workflow: str,
     params_json: str = None,
     confirmed: bool = False,
+    confirmation_token: str = None,
     progress: Progress = Progress(),
 ) -> ExecuteWorkflowResponse:
     """
@@ -789,29 +874,41 @@ async def execute_workflow(
 
     # --- Safety Classification for workflow ---
     safety_preview = classify_workflow(workflow, params)
-    if safety_preview is not None and not confirmed:
-        elapsed_ms = (time.time() - start_time) * 1000
-        return ExecuteWorkflowResponse(
-            workflow=workflow,
-            success=False,
-            pending_confirmation=True,
-            safety_preview=[
-                SafetyClassification(
-                    risk_level=step.risk_level,
-                    model=step.model,
-                    method=step.method,
-                    record_count=None,
-                    requires_confirmation=step.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED),
-                    reason=f"Step '{step.step}': {step.risk_level.value} risk",
-                    cascade_warning=step.cascade_warning,
+    if safety_preview is not None:
+        if not confirmed:
+            token = _issue_confirmation_token("__workflow__", workflow.lower().strip())
+            elapsed_ms = (time.time() - start_time) * 1000
+            return ExecuteWorkflowResponse(
+                workflow=workflow,
+                success=False,
+                pending_confirmation=True,
+                safety_preview=[
+                    SafetyClassification(
+                        risk_level=step.risk_level,
+                        model=step.model,
+                        method=step.method,
+                        record_count=None,
+                        requires_confirmation=step.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED),
+                        reason=f"Step '{step.step}': {step.risk_level.value} risk",
+                        cascade_warning=step.cascade_warning,
+                    )
+                    for step in safety_preview.steps
+                ],
+                overall_risk=safety_preview.overall_risk.value,
+                error=safety_preview.message,
+                tip=f"Re-call execute_workflow with confirmed=true and confirmation_token='{token}' to proceed.",
+                execution_time_ms=round(elapsed_ms, 2),
+            )
+        else:
+            token_err = _validate_confirmation_token(confirmation_token, "__workflow__", workflow.lower().strip())
+            if token_err:
+                elapsed_ms = (time.time() - start_time) * 1000
+                return ExecuteWorkflowResponse(
+                    workflow=workflow,
+                    success=False,
+                    error=f"Confirmation rejected: {token_err}",
+                    execution_time_ms=round(elapsed_ms, 2),
                 )
-                for step in safety_preview.steps
-            ],
-            overall_risk=safety_preview.overall_risk.value,
-            error=safety_preview.message,
-            tip="Re-call execute_workflow with confirmed=true to proceed.",
-            execution_time_ms=round(elapsed_ms, 2),
-        )
 
     workflow_lower = workflow.lower().strip()
     steps: List[WorkflowStepResult] = []
