@@ -233,16 +233,34 @@ Pre-execution safety classification that gates dangerous operations behind confi
 | `MCP_SAFETY_MODE` | `strict` | `strict` = MEDIUM batch writes confirm; `permissive` = only HIGH/BLOCKED |
 | `MCP_SAFETY_AUDIT` | (disabled) | `true` to log audit entries to stderr |
 
-### Confirmation Flow
+### Confirmation Flow (Token-Based, v1.14.0)
+
+Confirmation uses a cryptographic nonce token to prevent bypass. An agent cannot skip the safety gate by always passing `confirmed=true` — it must present a valid, single-use token from the gate response.
 
 1. Caller sends `execute_method(model, method, args_json, kwargs_json)`
 2. Safety layer classifies the operation
-3. If confirmation needed → returns `pending_confirmation=true` with `safety` classification
-4. Caller reviews, then re-calls with `confirmed=true` to proceed
+3. If confirmation needed → returns `pending_confirmation=true` with `safety` classification and a `confirmation_token` in the `hint` field
+4. Caller reviews, then re-calls with `confirmed=true` AND `confirmation_token='<token>'` to proceed
+
+```python
+# Step 1: Call triggers safety gate
+result = execute_method("sale.order", "action_confirm", args_json='[[15]]')
+# → pending_confirmation=true, hint contains token
+
+# Step 2: Confirm with the token from step 1
+execute_method("sale.order", "action_confirm", args_json='[[15]]',
+    confirmed=true, confirmation_token='ymzyOtsZTDTJpKKysu_xWQ')
+```
+
+**Token rules:**
+- Single-use: consumed on validation
+- Time-limited: expires after 120 seconds
+- Operation-bound: tied to the specific model+method from the original classification
+- Same flow applies to `batch_execute` and `execute_workflow`
 
 ### Blocked Models (write always refused)
 
-`ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `res.users`
+`ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `ir.model.fields`, `res.users`, `res.groups`
 
 ### Sensitive Models (write always confirms)
 
@@ -259,7 +277,11 @@ Known side effects are surfaced for:
 
 ### Integration
 
-Safety checks are integrated in `execute_method`, `batch_execute`, and `execute_workflow`. The `confirmed` parameter (default `False`) is backward-compatible.
+Safety checks are integrated in `execute_method`, `batch_execute`, and `execute_workflow`. The `confirmed` parameter requires a `confirmation_token` from the safety gate response (v1.14.0+).
+
+### resolve_json Security
+
+The `resolve_json` parameter validates target models against both `_validate_model()` regex and `BLOCKED_MODELS`. An agent cannot use `resolve_json` to read from security-critical models like `res.users`, `ir.config_parameter`, etc.
 
 ## DX Improvements (v1.11.0)
 

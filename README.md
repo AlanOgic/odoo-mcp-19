@@ -212,8 +212,12 @@ execute_method("res.partner", "write",
     args_json='[[42], {"name": "ACME Corp Updated"}]',
     resolve_json='{"user_id": {"model": "res.users", "search": "John"}}')
 
-# Confirm a sale order (with safety confirmation)
-execute_method("sale.order", "action_confirm", args_json='[[15]]', confirmed=true)
+# Confirm a sale order (2-step safety confirmation with token)
+# Step 1: triggers safety gate, returns confirmation_token in hint
+result = execute_method("sale.order", "action_confirm", args_json='[[15]]')
+# Step 2: confirm with the token from step 1
+execute_method("sale.order", "action_confirm", args_json='[[15]]',
+    confirmed=true, confirmation_token='<token from step 1>')
 
 # Multi-step workflow in one call
 execute_workflow("quote_to_cash", '{"order_id": 123}')
@@ -296,7 +300,7 @@ Pre-execution safety classification gates dangerous operations behind confirmati
 
 ### Blocked models (write always refused)
 
-`ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `res.users`
+`ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `ir.model.fields`, `res.users`, `res.groups`
 
 ### Sensitive models (write always confirms)
 
@@ -311,12 +315,14 @@ Side effects are surfaced for workflow actions:
 - `purchase.order` + `button_confirm` → creates incoming receipts
 - `account.payment` + `action_post` → creates journal entries + reconciliation
 
-### Confirmation flow
+### Confirmation flow (token-based, v1.14.0)
 
 1. Caller sends `execute_method(model, method, args_json)`
 2. Safety layer classifies the operation
-3. If confirmation needed: returns `pending_confirmation=true` with `safety` classification
-4. Caller reviews, then re-calls with `confirmed=true` to proceed
+3. If confirmation needed: returns `pending_confirmation=true` with `safety` classification and a `confirmation_token` in the `hint` field
+4. Caller reviews, then re-calls with `confirmed=true` AND `confirmation_token='<token>'`
+
+Tokens are single-use, expire after 120s, and are bound to the specific model+method. This prevents agents from bypassing the safety gate by always passing `confirmed=true`.
 
 ## DX Improvements (v1.11.0)
 
