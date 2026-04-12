@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 **Odoo MCP Server 19** - A standalone MCP server for Odoo 19+ using the v2 JSON-2 API.
 
-- **Version**: 1.13.0
+- **Version**: 1.14.0
 - **MCP Spec**: MCP 2025-11-25 (FastMCP 3.2.0+)
 - **Odoo Support**: v19+ only (v2 JSON-2 API)
 
@@ -25,35 +25,41 @@ This file provides guidance to Claude Code when working with code in this reposi
 odoo-mcp-19/
 ├── src/odoo_mcp/
 │   ├── __init__.py              # Package initialization
-│   ├── __main__.py              # CLI entry point
-│   ├── server.py                # MCP server (tools, resources, prompts)
-│   ├── safety.py                # Safety classification engine (v1.10.0)
-│   ├── odoo_client.py           # Odoo v2 API client
-│   ├── arg_mapping.py           # Positional to named args conversion
+│   ├── __main__.py              # CLI entry point (STDIO / HTTP bootstrap, setup wizard)
+│   ├── app.py                   # FastMCP instance + icon (imported first for tool registration)
+│   ├── server.py                # MCP tool implementations (execute_method, batch_execute, ...)
+│   ├── resources.py             # odoo:// resource handlers (schema, workflow, bundle, ...)
+│   ├── prompts.py               # Guided MCP prompts (13 workflows)
+│   ├── safety.py                # Safety classification engine (v1.10.0) + token gate (v1.14.0)
+│   ├── odoo_client.py           # Odoo v2 JSON-2 API client (thread-safe singleton)
+│   ├── arg_mapping.py           # Positional → named args conversion (30 ORM methods)
+│   ├── constants.py             # Limits, validators, state machines, default context
+│   ├── models.py                # Pydantic response schemas (structured output)
+│   ├── utils.py                 # Compact schema builder, error suggestions, /doc-bearer cache
 │   ├── module_knowledge.json    # Module-specific methods knowledge base
 │   └── assets/
 │       └── odoo_icon.svg        # Odoo brand icon for MCP clients
-├── Dockerfile                   # Docker build
-├── docker-compose.yml           # Docker compose config
-├── run-docker.sh                # Docker wrapper for Claude Desktop
+├── tests/
+│   ├── test_safety.py           # Unit tests for safety layer
+│   └── live/                    # Live integration tests (require .env + real Odoo)
+├── Dockerfile                   # Docker build (non-root user)
+├── docker-compose.yml           # Docker compose config (mandatory MCP_API_KEY)
+├── run-docker.sh                # Docker wrapper for Claude Desktop (--env-file)
 ├── pyproject.toml               # Package configuration
 └── README.md                    # User documentation
 ```
 
 ### Key Components
 
-**1. MCP Server** (`server.py`)
-- **5 tools**: execute_method, batch_execute, execute_workflow, configure_odoo, read_resource
-- **27 resources** for discovery (models, schema, quick-schema, fields, methods, workflow, bundle, session-bootstrap, actions, tools, domain-syntax, model-limitations, templates, etc.)
-- **13 prompts** for guided workflows
-- Module knowledge loading and error suggestions
-- **Automatic fallback**: search_read → search+read on 500 errors with error categorization
-- **Runtime issue tracking**: Detects and tracks problematic model/method combinations
-- **Background tasks**: batch_execute and execute_workflow support progress tracking
-- **Structured outputs**: All tools return typed Pydantic models with execution time
-- **Input validation**: Model names (dotted notation regex), method names (identifier regex), URI scheme (`odoo://` only), JSON type checks on args/kwargs
-- **Thread-safe caches**: `_DOC_CACHE` (100 entries max, LRU eviction) and `RUNTIME_MODEL_ISSUES` use `threading.Lock`
-- Smart limits: DEFAULT_LIMIT=100, MAX_LIMIT=1000
+**1. MCP Server Core** — the former 3762-line `server.py` was split in v1.14.0 (commit `ea10d79`) into focused modules. Each module has one responsibility:
+
+- **`app.py`** (~90 lines) — creates the `FastMCP` instance and registers the Odoo brand icon. Imported first so that the `mcp` decorator is available when `server.py`, `resources.py`, and `prompts.py` register their handlers.
+- **`server.py`** (~1226 lines) — implements the **5 tools**: `execute_method`, `batch_execute`, `execute_workflow`, `configure_odoo`, `read_resource`. Contains the `_RESOURCE_ROUTES` table for clients that don't speak resource templates, automatic `search_read → search+read` fallback, runtime issue tracking, safety-layer integration, and background-task progress reporting.
+- **`resources.py`** (~1244 lines) — implements all **27 `odoo://` resources**: models/schema/quick-schema/fields/methods/workflow/bundle/session-bootstrap/actions/tools/domain-syntax/model-limitations/templates.
+- **`prompts.py`** (~443 lines) — registers the **13 guided prompts** (odoo-exploration, search-records, quote-to-cash, crm-pipeline, customer-360, etc.).
+- **`constants.py`** (~471 lines) — limits (`DEFAULT_LIMIT=100`, `MAX_LIMIT=1000`), regex validators (`_validate_model`, `_validate_method`), `MODEL_STATE_MACHINES`, `PRIVATE_METHOD_HINTS`, and the `MCP_DEFAULT_CONTEXT` loader + `_merge_context` helper.
+- **`models.py`** (~83 lines) — Pydantic response schemas: `ExecuteMethodResponse`, `BatchExecuteResponse`, `BatchOperationResult`, `ExecuteWorkflowResponse`, `WorkflowStepResult`, `IssueAnalysis`.
+- **`utils.py`** (~421 lines) — `_build_compact_schema`, `get_error_suggestion` (~25 expanded error patterns with `{model}` templating), `_get_live_doc` + thread-safe `_DOC_CACHE` (100 entries, LRU), `_track_model_issue` + thread-safe `RUNTIME_MODEL_ISSUES`.
 
 **2. Odoo Client** (`odoo_client.py`)
 - v2 JSON-2 API only (Bearer token auth)
@@ -64,17 +70,25 @@ odoo-mcp-19/
 - Server tracebacks logged to stderr only — never forwarded to MCP clients
 - SSL disable warning on startup when `ODOO_VERIFY_SSL=false` + HTTPS
 
-**3. Argument Mapping** (`arg_mapping.py`)
+**3. Safety Layer** (`safety.py`, ~501 lines)
+- Pre-execution risk classification: `SAFE` / `MEDIUM` / `HIGH` / `BLOCKED`
+- `BLOCKED_MODELS`: `ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `ir.model.fields`, `res.users`, `res.groups` (writes always refused)
+- `SENSITIVE_MODELS`: `account.move`, `account.payment`, `account.bank.statement`, `hr.payslip`, `ir.cron` (writes always confirm)
+- Cascade warnings for `action_confirm`, `action_post`, `button_validate`, `button_confirm`
+- **v1.14.0 token-based confirmation**: `_issue_confirmation_token()` creates a single-use, time-limited (120s), operation-bound cryptographic nonce. Agents cannot bypass the gate by passing `confirmed=true` — they must present a valid token from the gate response.
+- `classify_operation`, `classify_batch`, `classify_workflow`, `audit_log` (to stderr when `MCP_SAFETY_AUDIT=true`)
+
+**4. Argument Mapping** (`arg_mapping.py`)
 - Converts positional args to named args for v2 API
 - Supports 30 ORM methods (search, create, write, formatted_read_group, has_access, action_*, button_*, etc.)
 
-**4. Module Knowledge** (`module_knowledge.json`)
+**5. Module Knowledge** (`module_knowledge.json`)
 - Special methods for 13 Odoo modules (including AI module)
 - 30 ORM methods documented
 - Error patterns with suggestions
 - Validated against Odoo 19 source code
 
-**5. AI Module** (Enterprise only)
+**6. AI Module** (Enterprise only)
 - Models: ai.agent, ai.topic, ai.agent.source, ai.embedding
 - LLM support: OpenAI (gpt-4o, gpt-5), Google (gemini-2.5-pro/flash)
 - RAG system with pgvector embeddings
