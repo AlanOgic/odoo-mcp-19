@@ -49,3 +49,13 @@ logs/
 .DS_Store
 Thumbs.db
 wiki/
+
+# Claude Code / tooling scratch
+.claude/
+.superpowers/
+
+# uv lockfile (project uses pip + pyproject.toml)
+uv.lock
+
+# Unrelated scratch files
+cyanview-*.html
