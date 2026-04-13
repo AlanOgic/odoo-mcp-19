@@ -1,15 +1,19 @@
 """
 Live integration test for the safety layer.
 
-Requires Odoo connection (.env file with ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_API_KEY).
-Tests the full flow through execute_method including safety classification.
+Requires Odoo connection (.env file with ODOO_URL, ODOO_DB, ODOO_USERNAME,
+ODOO_API_KEY). Tests the full flow through execute_method including safety
+classification.
 
-Usage:
-    python3 test_safety_live.py
+Run as a script:
+    python3 tests/live/test_safety_live.py
+
+Note: this file is a script-style runner, not a pytest module. It mutates
+os.environ at startup but restores it on exit so it can coexist with other
+tests if the directory is later collected by pytest.
 """
 
 import asyncio
-import json
 import os
 import sys
 
@@ -17,10 +21,6 @@ import sys
 from dotenv import load_dotenv
 load_dotenv()
 
-# Enable audit logging for this test
-os.environ["MCP_SAFETY_AUDIT"] = "true"
-
-from odoo_mcp.server import mcp
 from odoo_mcp.odoo_client import get_odoo_client
 
 
@@ -63,10 +63,10 @@ async def run_tests():
     def check(name, condition, detail=""):
         nonlocal passed, failed
         if condition:
-            print(f"  ✅ {name}")
+            print(f"  [PASS] {name}")
             passed += 1
         else:
-            print(f"  ❌ {name} — {detail}")
+            print(f"  [FAIL] {name} -- {detail}")
             failed += 1
 
     # ---- Test 1: Safe read ----
@@ -197,12 +197,23 @@ async def run_tests():
     total = passed + failed
     print(f"  {passed}/{total} passed, {failed}/{total} failed")
     if failed == 0:
-        print("  🎉 All tests passed!")
+        print("  All tests passed!")
     else:
-        print("  ⚠️  Some tests failed — review output above")
+        print("  Some tests failed -- review output above")
     return failed == 0
 
 
 if __name__ == "__main__":
-    success = asyncio.run(run_tests())
+    # Enable audit logging for this run only -- restored on exit so the
+    # mutation doesn't leak into other test modules if pytest later
+    # collects this directory.
+    _prev_audit = os.environ.get("MCP_SAFETY_AUDIT")
+    os.environ["MCP_SAFETY_AUDIT"] = "true"
+    try:
+        success = asyncio.run(run_tests())
+    finally:
+        if _prev_audit is None:
+            os.environ.pop("MCP_SAFETY_AUDIT", None)
+        else:
+            os.environ["MCP_SAFETY_AUDIT"] = _prev_audit
     sys.exit(0 if success else 1)

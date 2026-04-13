@@ -1,16 +1,15 @@
 """
 Live integration test for v1.11.0 DX improvements.
 
-Requires Odoo connection (.env file with ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_API_KEY).
-Tests: quick-schema, bundle, session-bootstrap, workflow, resolve_json, error patterns, context merge.
+Requires Odoo connection (.env file with ODOO_URL, ODOO_DB, ODOO_USERNAME,
+ODOO_API_KEY). Tests: quick-schema, bundle, session-bootstrap, workflow,
+resolve_json, error patterns, context merge.
 
-Usage:
-    python3 test_v1110_live.py
+Run as a script:
+    python3 tests/live/test_v1110_live.py
 """
 
-import asyncio
 import json
-import os
 import sys
 import time
 
@@ -18,7 +17,6 @@ import time
 from dotenv import load_dotenv
 load_dotenv()
 
-from odoo_mcp.app import mcp
 from odoo_mcp.utils import _build_compact_schema, get_error_suggestion
 from odoo_mcp.constants import _merge_context, MODEL_STATE_MACHINES
 from odoo_mcp.resources import (
@@ -44,10 +42,10 @@ failed = 0
 def check(name, condition, detail=""):
     global passed, failed
     if condition:
-        print(f"  ✅ {name}")
+        print(f"  [PASS] {name}")
         passed += 1
     else:
-        print(f"  ❌ {name} — {detail}")
+        print(f"  [FAIL] {name} -- {detail}")
         failed += 1
 
 
@@ -283,7 +281,7 @@ def run_tests():
         if matches and len(matches) > 1:
             check(f"multiple matches detected ({len(matches)})", len(matches) > 1)
         else:
-            print("  ⚠️  Only 1 or 0 matches for 'a' — can't test ambiguity")
+            print("  [SKIP] Only 1 or 0 matches for 'a' -- can't test ambiguity")
     except Exception as e:
         check("broad name_search works", False, str(e))
 
@@ -358,9 +356,9 @@ def run_tests():
     total = passed + failed
     print(f"  {passed}/{total} passed, {failed}/{total} failed")
     if failed == 0:
-        print("  🎉 All tests passed!")
+        print("  All tests passed!")
     else:
-        print("  ⚠️  Some tests failed — review output above")
+        print("  Some tests failed -- review output above")
     return failed == 0
 
 

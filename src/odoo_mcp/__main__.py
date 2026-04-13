@@ -198,20 +198,63 @@ def run_setup_wizard():
     print("✅ Setup complete!")
 
 
-def _mask(value: str, keep: int = 4) -> str:
-    """Mask a secret, keeping only the first `keep` chars."""
+def _mask_secret(value: str) -> str:
+    """Mask a credential as a fixed-width string.
+
+    Returns either '(unset)', 'set' (for API tokens, where any prefix is
+    sensitive), or a fixed-width 'prefix…********' for Odoo creds where
+    confirming the right key is loaded matters.
+    """
     if not value:
         return "(unset)"
+    keep = 3
     if len(value) <= keep:
-        return "*" * len(value)
-    return value[:keep] + "…" + "*" * max(0, len(value) - keep - 1)
+        return "********"
+    return value[:keep] + "…********"
+
+
+def _api_key_status(value: str) -> str:
+    """Return a no-disclosure status string for the MCP bearer token."""
+    return "set" if value else "(unset)"
+
+
+def _capability_counts() -> tuple[str, str, str]:
+    """Introspect tool / resource / prompt counts from the FastMCP instance.
+
+    Returns string counts to be embedded in the banner. Falls back to '?' if
+    introspection fails (so the banner never crashes startup).
+    """
+    try:
+        import asyncio
+
+        from .app import mcp as _mcp
+
+        async def _gather():
+            tools = await _mcp.list_tools()
+            resources = await _mcp.list_resources()
+            templates = await _mcp.list_resource_templates()
+            prompts = await _mcp.list_prompts()
+            return len(tools), len(resources) + len(templates), len(prompts)
+
+        loop = asyncio.new_event_loop()
+        try:
+            t, r, p = loop.run_until_complete(_gather())
+        finally:
+            loop.close()
+        return str(t), str(r), str(p)
+    except Exception:
+        return "?", "?", "?"
 
 
 def _print_startup_banner(transport: str, host: str, port: int) -> None:
-    """Print a verbose startup banner to stderr.
+    """Print a verbose startup banner to stderr in a single write.
 
-    Stderr is used so STDIO transport can stay clean for the MCP protocol.
-    Gated by MCP_VERBOSE — defaults to on for HTTP, off for STDIO.
+    Built as one string and emitted with one sys.stderr.write to avoid
+    interleaving with FastMCP's own log output (which can race a
+    multi-print banner emitted from a background Timer thread).
+
+    Stderr is used so STDIO transport stays clean for the MCP protocol.
+    Gated by MCP_VERBOSE.
     """
     try:
         from importlib.metadata import version as _pkg_version
@@ -226,6 +269,10 @@ def _print_startup_banner(transport: str, host: str, port: int) -> None:
     odoo_key = os.environ.get("ODOO_API_KEY") or os.environ.get("ODOO_PASSWORD", "")
     odoo_timeout = os.environ.get("ODOO_TIMEOUT", "30")
     odoo_ssl = os.environ.get("ODOO_VERIFY_SSL", "true")
+    ssl_disabled = (
+        odoo_ssl.lower() in ("0", "false", "no", "off")
+        and odoo_url.startswith("https://")
+    )
 
     safety_mode = os.environ.get("MCP_SAFETY_MODE", "strict")
     safety_audit = os.environ.get("MCP_SAFETY_AUDIT", "false")
@@ -235,53 +282,59 @@ def _print_startup_banner(transport: str, host: str, port: int) -> None:
         "res.partner,sale.order,account.move,product.product,stock.picking",
     )
 
+    n_tools, n_resources, n_prompts = _capability_counts()
+
     line = "─" * 60
-    out = sys.stderr
-    print(file=out)
-    print(r"   ____      __               __  _____________     _______", file=out)
-    print(r"  / __ \____/ /___  ____     /  |/  / ____/ __ \   <  / __ \  __", file=out)
-    print(r" / / / / __  / __ \/ __ \   / /|_/ / /   / /_/ /   / / /_/ /_/ /_", file=out)
-    print(r"/ /_/ / /_/ / /_/ / /_/ /  / /  / / /___/ ____/   / /\__, /_  __/", file=out)
-    print(r"\____/\__,_/\____/\____/  /_/  /_/\____/_/       /_//____/ /_/", file=out)
-    print(file=out)
-    print(f"  Odoo MCP Server  v{pkg_version}", file=out)
-    print(line, file=out)
-    print(f"  Transport     : {transport}", file=out)
+    parts: list[str] = [
+        "",
+        r"   ____      __               __  _____________     _______",
+        r"  / __ \____/ /___  ____     /  |/  / ____/ __ \   <  / __ \  __",
+        r" / / / / __  / __ \/ __ \   / /|_/ / /   / /_/ /   / / /_/ /_/ /_",
+        r"/ /_/ / /_/ / /_/ / /_/ /  / /  / / /___/ ____/   / /\__, /_  __/",
+        r"\____/\__,_/\____/\____/  /_/  /_/\____/_/       /_//____/ /_/",
+        "",
+        f"  Odoo MCP Server  v{pkg_version}",
+        line,
+        f"  Transport     : {transport}",
+    ]
     if transport == "streamable-http":
-        print(f"  Bind          : http://{host}:{port}", file=out)
-        print(
-            f"  Auth          : Bearer (MCP_API_KEY={_mask(os.environ.get('MCP_API_KEY', ''))})",
-            file=out,
+        parts.append(f"  Bind          : http://{host}:{port}")
+        parts.append(
+            f"  Auth          : Bearer (MCP_API_KEY={_api_key_status(os.environ.get('MCP_API_KEY', ''))})"
         )
-    print(file=out)
-    print("  ── Odoo connection ──", file=out)
-    print(f"  URL           : {odoo_url}", file=out)
-    print(f"  Database      : {odoo_db}", file=out)
-    print(f"  User          : {odoo_user}", file=out)
-    print(f"  Credential    : {_mask(odoo_key)}", file=out)
-    print(f"  Timeout       : {odoo_timeout}s", file=out)
-    print(f"  Verify SSL    : {odoo_ssl}", file=out)
-    if odoo_ssl.lower() in ("0", "false", "no", "off") and odoo_url.startswith("https://"):
-        print(
-            "  ⚠ WARNING    : SSL verification is DISABLED — vulnerable to MITM",
-            file=out,
+    parts += [
+        "",
+        "  -- Odoo connection --",
+        f"  URL           : {odoo_url}",
+        f"  Database      : {odoo_db}",
+        f"  User          : {odoo_user}",
+        f"  Credential    : {_mask_secret(odoo_key)}",
+        f"  Timeout       : {odoo_timeout}s",
+        f"  Verify SSL    : {odoo_ssl}",
+    ]
+    if ssl_disabled:
+        parts.append(
+            "  WARNING       : SSL verification is DISABLED -- vulnerable to MITM"
         )
-    print(file=out)
-    print("  ── Safety layer ──", file=out)
-    print(f"  Mode          : {safety_mode}", file=out)
-    print(f"  Audit log     : {safety_audit}", file=out)
-    print(file=out)
-    print("  ── DX defaults ──", file=out)
-    print(f"  Default ctx   : {default_ctx}", file=out)
-    print(f"  Bootstrap     : {bootstrap}", file=out)
-    print(file=out)
-    print("  ── Capabilities ──", file=out)
-    print("  Tools         : 5  (execute_method, batch_execute, execute_workflow,", file=out)
-    print("                      configure_odoo, read_resource)", file=out)
-    print("  Resources     : 27 (odoo:// schemas, workflows, bundles, methods, ...)", file=out)
-    print("  Prompts       : 13 (quote-to-cash, customer-360, daily-operations, ...)", file=out)
-    print(line, file=out)
-    out.flush()
+    parts += [
+        "",
+        "  -- Safety layer --",
+        f"  Mode          : {safety_mode}",
+        f"  Audit log     : {safety_audit}",
+        "",
+        "  -- DX defaults --",
+        f"  Default ctx   : {default_ctx}",
+        f"  Bootstrap     : {bootstrap}",
+        "",
+        "  -- Capabilities (introspected from FastMCP) --",
+        f"  Tools         : {n_tools}",
+        f"  Resources     : {n_resources}  (concrete + templates)",
+        f"  Prompts       : {n_prompts}",
+        line,
+        "",
+    ]
+    sys.stderr.write("\n".join(parts))
+    sys.stderr.flush()
 
 
 def main():
@@ -302,9 +355,13 @@ def main():
     if os.environ.get("MCP_VERBOSE", "true").lower() in ("1", "true", "yes", "on"):
         import threading
 
-        threading.Timer(
+        # daemon=True so the timer never blocks Python shutdown if mcp.run()
+        # exits early (fast STDIO disconnect, --help, misconfiguration, ...).
+        timer = threading.Timer(
             0.4, _print_startup_banner, args=(transport, host, port)
-        ).start()
+        )
+        timer.daemon = True
+        timer.start()
 
     # Log auth status for HTTP transport
     if transport == "streamable-http":
