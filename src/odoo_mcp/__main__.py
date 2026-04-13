@@ -289,11 +289,12 @@ def main():
     host = os.environ.get("MCP_HOST", "0.0.0.0")
     port = int(os.environ.get("MCP_PORT", "8080"))
 
-    # Verbose startup: on by default for HTTP, off by default for STDIO.
-    # STDIO must keep stdout silent for the MCP protocol; banner goes to stderr.
-    # We delay the banner so it lands AFTER FastMCP's own startup card.
-    verbose_default = "true" if transport == "streamable-http" else "false"
-    if os.environ.get("MCP_VERBOSE", verbose_default).lower() in ("1", "true", "yes", "on"):
+    # Verbose startup banner. On by default for both transports — the banner
+    # writes only to stderr, so STDIO transport stays clean (stdout is reserved
+    # for the MCP protocol). Set MCP_VERBOSE=false to silence.
+    # The banner is delayed so it lands AFTER FastMCP's own "Starting MCP
+    # server" log line rather than racing it.
+    if os.environ.get("MCP_VERBOSE", "true").lower() in ("1", "true", "yes", "on"):
         import threading
 
         threading.Timer(
