@@ -82,14 +82,16 @@ class OdooClient:
         self._log_connection()
 
     def _log_connection(self):
-        """Log connection details"""
-        print(f"Connecting to Odoo 19+ at: {self.url}", file=sys.stderr)
-        if self.db:
-            print(f"  Database: {self.db}", file=sys.stderr)
-        print(f"  Auth: {'API Key' if self.api_key else 'Password'}", file=sys.stderr)
+        """Log connection details.
+
+        Connection summary (URL / Database / Auth) is now part of the verbose
+        startup banner in `__main__._print_startup_banner`. Only the SSL
+        warning remains here because it must fire whenever SSL verification is
+        disabled, regardless of MCP_VERBOSE.
+        """
         if not self.verify_ssl and self.url.startswith("https://"):
             print(
-                "  ⚠ WARNING: SSL verification is DISABLED. "
+                "⚠ WARNING: SSL verification is DISABLED. "
                 "Connections are vulnerable to MITM attacks. "
                 "Set ODOO_VERIFY_SSL=true for production.",
                 file=sys.stderr,

@@ -261,6 +261,11 @@ def _print_startup_banner(transport: str, host: str, port: int) -> None:
     print(f"  Credential    : {_mask(odoo_key)}", file=out)
     print(f"  Timeout       : {odoo_timeout}s", file=out)
     print(f"  Verify SSL    : {odoo_ssl}", file=out)
+    if odoo_ssl.lower() in ("0", "false", "no", "off") and odoo_url.startswith("https://"):
+        print(
+            "  ⚠ WARNING    : SSL verification is DISABLED — vulnerable to MITM",
+            file=out,
+        )
     print(file=out)
     print("  ── Safety layer ──", file=out)
     print(f"  Mode          : {safety_mode}", file=out)
