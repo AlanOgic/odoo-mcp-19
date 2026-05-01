@@ -71,6 +71,14 @@ class OdooClient:
         self.session.verify = verify_ssl
         self.session.headers['Content-Type'] = 'application/json'
 
+        # Lift the default per-host connection pool from 10 to 20. Bundle and
+        # session-bootstrap fan out up to 10 concurrent fetches; without this,
+        # any concurrent execute_method call would block waiting for a free
+        # connection.
+        _adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+        self.session.mount("https://", _adapter)
+        self.session.mount("http://", _adapter)
+
         # Only set X-Odoo-Database for non-SaaS instances.
         # Odoo.com SaaS identifies the DB via subdomain — sending this header causes 404.
         hostname_lower = (parsed_url.hostname or "").lower()

@@ -680,8 +680,10 @@ async def batch_execute(
                     )
 
             await progress.increment()
-            # Small delay to allow progress updates to propagate
-            await asyncio.sleep(0.01)
+            # Yield to let the event loop flush progress notifications.
+            # Was sleep(0.01) — that added ~1s of dead wall-time to a 100-op batch
+            # without buying anything; sleep(0) is enough to schedule pending sends.
+            await asyncio.sleep(0)
 
         elapsed_ms = (time.time() - start_time) * 1000
         return BatchExecuteResponse(
@@ -1151,37 +1153,42 @@ async def execute_workflow(
 
 
 # ----- URI Routing for read_resource tool -----
-# Maps odoo:// URIs to their handler functions.
+# Maps odoo:// URIs to their handler functions. Patterns are compiled once at
+# import time (re.Pattern objects) so read_resource doesn't depend on Python's
+# implicit re._MAXCACHE for its dispatch path.
 # More specific patterns (e.g. /schema, /fields, /docs) MUST come before generic /model/{name}.
 
-_RESOURCE_ROUTES: list[tuple[str, callable, list[str]]] = [
-    (r"^odoo://models$", _resources.get_models, []),
-    (r"^odoo://session-bootstrap$", _resources.get_session_bootstrap, []),
-    (r"^odoo://bundle/(.+)$", _resources.get_bundle, ["models_csv"]),
-    (r"^odoo://model/([^/]+)/quick-schema$", _resources.get_model_quick_schema, ["model_name"]),
-    (r"^odoo://model/([^/]+)/workflow$", _resources.get_model_workflow, ["model_name"]),
-    (r"^odoo://model/([^/]+)/schema$", _resources.get_model_schema, ["model_name"]),
-    (r"^odoo://model/([^/]+)/fields$", _resources.get_model_fields_light, ["model_name"]),
-    (r"^odoo://model/([^/]+)/docs$", _resources.get_model_docs, ["model_name"]),
-    (r"^odoo://model/([^/]+)$", _resources.get_model_info, ["model_name"]),
-    (r"^odoo://record/([^/]+)/(\d+)$", _resources.get_record, ["model_name", "record_id"]),
-    (r"^odoo://methods/([^/]+)$", _resources.get_methods, ["model_name"]),
-    (r"^odoo://find-model/(.+)$", _resources.find_model_resource, ["concept"]),
-    (r"^odoo://actions/([^/]+)$", _resources.discover_actions_resource, ["model"]),
-    (r"^odoo://tools/(.+)$", _resources.search_tools_resource, ["query"]),
-    (r"^odoo://docs/(.+)$", _resources.get_documentation_urls, ["target"]),
-    (r"^odoo://module-knowledge/(.+)$", _resources.get_module_knowledge_by_name, ["module_name"]),
-    (r"^odoo://module-knowledge$", _resources.get_module_knowledge, []),
-    (r"^odoo://concepts$", _resources.get_concept_mappings, []),
-    (r"^odoo://templates$", _resources.get_resource_templates, []),
-    (r"^odoo://workflows$", _resources.get_workflows, []),
-    (r"^odoo://server/info$", _resources.get_server_info, []),
-    (r"^odoo://domain-syntax$", _resources.get_domain_syntax, []),
-    (r"^odoo://model-limitations$", _resources.get_model_limitations, []),
-    (r"^odoo://pagination$", _resources.get_pagination_guide, []),
-    (r"^odoo://hierarchical$", _resources.get_hierarchical_guide, []),
-    (r"^odoo://aggregation$", _resources.get_aggregation_guide, []),
-    (r"^odoo://tool-registry$", _resources.get_tool_registry, []),
+_RESOURCE_ROUTES: list[tuple[re.Pattern[str], Any, list[str]]] = [
+    (re.compile(pattern), handler, param_names)
+    for pattern, handler, param_names in [
+        (r"^odoo://models$", _resources.get_models, []),
+        (r"^odoo://session-bootstrap$", _resources.get_session_bootstrap, []),
+        (r"^odoo://bundle/(.+)$", _resources.get_bundle, ["models_csv"]),
+        (r"^odoo://model/([^/]+)/quick-schema$", _resources.get_model_quick_schema, ["model_name"]),
+        (r"^odoo://model/([^/]+)/workflow$", _resources.get_model_workflow, ["model_name"]),
+        (r"^odoo://model/([^/]+)/schema$", _resources.get_model_schema, ["model_name"]),
+        (r"^odoo://model/([^/]+)/fields$", _resources.get_model_fields_light, ["model_name"]),
+        (r"^odoo://model/([^/]+)/docs$", _resources.get_model_docs, ["model_name"]),
+        (r"^odoo://model/([^/]+)$", _resources.get_model_info, ["model_name"]),
+        (r"^odoo://record/([^/]+)/(\d+)$", _resources.get_record, ["model_name", "record_id"]),
+        (r"^odoo://methods/([^/]+)$", _resources.get_methods, ["model_name"]),
+        (r"^odoo://find-model/(.+)$", _resources.find_model_resource, ["concept"]),
+        (r"^odoo://actions/([^/]+)$", _resources.discover_actions_resource, ["model"]),
+        (r"^odoo://tools/(.+)$", _resources.search_tools_resource, ["query"]),
+        (r"^odoo://docs/(.+)$", _resources.get_documentation_urls, ["target"]),
+        (r"^odoo://module-knowledge/(.+)$", _resources.get_module_knowledge_by_name, ["module_name"]),
+        (r"^odoo://module-knowledge$", _resources.get_module_knowledge, []),
+        (r"^odoo://concepts$", _resources.get_concept_mappings, []),
+        (r"^odoo://templates$", _resources.get_resource_templates, []),
+        (r"^odoo://workflows$", _resources.get_workflows, []),
+        (r"^odoo://server/info$", _resources.get_server_info, []),
+        (r"^odoo://domain-syntax$", _resources.get_domain_syntax, []),
+        (r"^odoo://model-limitations$", _resources.get_model_limitations, []),
+        (r"^odoo://pagination$", _resources.get_pagination_guide, []),
+        (r"^odoo://hierarchical$", _resources.get_hierarchical_guide, []),
+        (r"^odoo://aggregation$", _resources.get_aggregation_guide, []),
+        (r"^odoo://tool-registry$", _resources.get_tool_registry, []),
+    ]
 ]
 
 
@@ -1225,7 +1232,7 @@ def read_resource(uri: str, max_chars: int = _READ_RESOURCE_MAX_CHARS) -> str:
         return json.dumps({"error": "Invalid URI: must start with odoo://", "uri": uri})
 
     for pattern, handler, param_names in _RESOURCE_ROUTES:
-        match = re.match(pattern, uri)
+        match = pattern.match(uri)
         if match:
             args = dict(zip(param_names, match.groups()))
             result = handler(**args)

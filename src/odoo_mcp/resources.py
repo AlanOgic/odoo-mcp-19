@@ -8,6 +8,7 @@ registers all resources with the FastMCP instance.
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
 from .app import mcp
@@ -237,21 +238,33 @@ def get_bundle(models_csv: str) -> str:
 
     URI format: odoo://bundle/res.partner,sale.order,stock.picking
     Max 10 models per request to keep response size reasonable.
+
+    Schema fetches run in parallel (one thread per model, capped at 10) so
+    bundle latency is bounded by the slowest fetch, not their sum.
     """
     odoo_client = get_odoo_client()
     model_names = [m.strip() for m in models_csv.split(",") if m.strip()]
     if len(model_names) > 10:
         return json.dumps({"error": "Maximum 10 models per bundle request", "requested": len(model_names)})
 
-    bundle = {"models": {}, "errors": {}}
-    for model_name in model_names:
+    bundle: Dict[str, Any] = {"models": {}, "errors": {}}
+
+    def _fetch(name: str) -> tuple[str, Any]:
         try:
-            fields = odoo_client.get_model_fields(model_name)
+            fields = odoo_client.get_model_fields(name)
             schema = _build_compact_schema(fields)
             schema["field_count"] = len(schema["fields"])
-            bundle["models"][model_name] = schema
-        except Exception as e:
-            bundle["errors"][model_name] = str(e)
+            return name, schema
+        except Exception as exc:
+            return name, exc
+
+    if model_names:
+        with ThreadPoolExecutor(max_workers=min(len(model_names), 10)) as executor:
+            for name, payload in executor.map(_fetch, model_names):
+                if isinstance(payload, Exception):
+                    bundle["errors"][name] = str(payload)
+                else:
+                    bundle["models"][name] = payload
 
     bundle["total"] = len(bundle["models"])
     return json.dumps(bundle, separators=(",", ":"))
@@ -272,19 +285,29 @@ def get_session_bootstrap() -> str:
     models_csv = os.environ.get("MCP_BOOTSTRAP_MODELS", _DEFAULT_BOOTSTRAP_MODELS)
     model_names = [m.strip() for m in models_csv.split(",") if m.strip()][:20]
 
-    result = {"schemas": {}, "workflows": {}, "errors": {}}
+    result: Dict[str, Any] = {"schemas": {}, "workflows": {}, "errors": {}}
 
-    for model_name in model_names:
-        # Get compact schema
+    def _fetch(name: str) -> tuple[str, Any]:
         try:
-            fields = odoo_client.get_model_fields(model_name)
+            fields = odoo_client.get_model_fields(name)
             schema = _build_compact_schema(fields)
             schema["field_count"] = len(schema["fields"])
-            result["schemas"][model_name] = schema
-        except Exception as e:
-            result["errors"][model_name] = str(e)
+            return name, schema
+        except Exception as exc:
+            return name, exc
 
-        # Get workflow if available
+    # Schema fetches run in parallel (capped at 10 workers, well within the
+    # OdooClient session's 20-conn pool so a concurrent execute_method still
+    # has headroom). Workflows are read from the in-memory state-machine table.
+    if model_names:
+        with ThreadPoolExecutor(max_workers=min(len(model_names), 10)) as executor:
+            for name, payload in executor.map(_fetch, model_names):
+                if isinstance(payload, Exception):
+                    result["errors"][name] = str(payload)
+                else:
+                    result["schemas"][name] = payload
+
+    for model_name in model_names:
         if model_name in MODEL_STATE_MACHINES:
             result["workflows"][model_name] = MODEL_STATE_MACHINES[model_name]
 
