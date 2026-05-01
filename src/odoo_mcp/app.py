@@ -6,8 +6,8 @@ Other modules import `mcp` from here to register resources, tools, and prompts.
 """
 
 import base64
+import logging
 import os
-import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +17,8 @@ from fastmcp import FastMCP
 from mcp.types import Icon
 
 from .odoo_client import OdooClient, get_odoo_client
+
+logger = logging.getLogger(__name__)
 
 
 # ----- Icon Loading -----
@@ -32,7 +34,7 @@ def _load_icon() -> Optional[Icon]:
                 mimeType="image/svg+xml",
             )
     except Exception as e:
-        print(f"Warning: Could not load icon: {e}", file=sys.stderr)
+        logger.warning("Could not load icon: %s", e)
     return None
 
 

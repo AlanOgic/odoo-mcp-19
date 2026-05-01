@@ -376,21 +376,22 @@ class TestBatchClassification:
 
 
 class TestAuditLogging:
-    def test_audit_disabled_by_default(self, capsys):
+    def test_audit_disabled_by_default(self, caplog):
         with patch.dict(os.environ, {}, clear=True):
-            classification = classify_operation("res.partner", "unlink", [[1]])
-            audit_log(classification, confirmed=False, executed=False)
-            captured = capsys.readouterr()
-            assert captured.err == ""
+            with caplog.at_level("INFO", logger="odoo_mcp.safety"):
+                classification = classify_operation("res.partner", "unlink", [[1]])
+                audit_log(classification, confirmed=False, executed=False)
+            assert not any("[SAFETY AUDIT]" in r.message for r in caplog.records)
 
-    def test_audit_enabled(self, capsys):
+    def test_audit_enabled(self, caplog):
         with patch.dict(os.environ, {"MCP_SAFETY_AUDIT": "true"}):
-            classification = classify_operation("res.partner", "unlink", [[1]])
-            audit_log(classification, confirmed=True, executed=True)
-            captured = capsys.readouterr()
-            assert "[SAFETY AUDIT]" in captured.err
-            # Parse the JSON part
-            json_str = captured.err.split("[SAFETY AUDIT] ")[1].strip()
+            with caplog.at_level("INFO", logger="odoo_mcp.safety"):
+                classification = classify_operation("res.partner", "unlink", [[1]])
+                audit_log(classification, confirmed=True, executed=True)
+            audit_records = [r for r in caplog.records if "[SAFETY AUDIT]" in r.message]
+            assert len(audit_records) == 1
+            # The message format is "[SAFETY AUDIT] {json}" — parse the JSON
+            json_str = audit_records[0].message.split("[SAFETY AUDIT] ", 1)[1]
             entry = json.loads(json_str)
             assert entry["model"] == "res.partner"
             assert entry["method"] == "unlink"

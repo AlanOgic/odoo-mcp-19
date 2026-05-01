@@ -5,8 +5,8 @@ This client uses the v2 JSON-2 API exclusively.
 """
 
 import json
+import logging
 import os
-import sys
 import re
 import threading
 import urllib.parse
@@ -16,6 +16,8 @@ import requests
 from dotenv import load_dotenv
 
 from .arg_mapping import convert_args_to_v2
+
+logger = logging.getLogger(__name__)
 
 
 class OdooClient:
@@ -90,11 +92,9 @@ class OdooClient:
         verification is off regardless of MCP_VERBOSE.
         """
         if not self.verify_ssl and self.url.startswith("https://"):
-            print(
-                "WARNING: SSL verification is DISABLED. "
-                "Connections are vulnerable to MITM attacks. "
-                "Set ODOO_VERIFY_SSL=true for production.",
-                file=sys.stderr,
+            logger.warning(
+                "SSL verification is DISABLED. Connections are vulnerable to MITM attacks. "
+                "Set ODOO_VERIFY_SSL=true for production."
             )
 
     def _execute(self, model: str, method: str, *args, **kwargs) -> Any:
@@ -130,7 +130,7 @@ class OdooClient:
                         parts.append(f"Odoo error: {odoo_error}")
                     if odoo_debug:
                         # Log full traceback server-side only — never forward to client
-                        print(f"[OdooClient] Server traceback for {url}:\n{odoo_debug}", file=sys.stderr)
+                        logger.debug("Server traceback for %s:\n%s", url, odoo_debug)
                     raise ValueError("\n".join(parts))
                 except (json.JSONDecodeError, KeyError, AttributeError):
                     # If we can't parse the error body, fall back to raise_for_status
@@ -170,7 +170,7 @@ class OdooClient:
                 },
             }
         except Exception as e:
-            print(f"Error retrieving models: {e}", file=sys.stderr)
+            logger.error("Error retrieving models: %s", e)
             return {"model_names": [], "models_details": {}, "error": str(e)}
 
     def get_model_info(self, model_name: str) -> dict[str, Any]:
@@ -213,7 +213,7 @@ class OdooClient:
                 return data["result"]
             return data
         except Exception as e:
-            print(f"[OdooClient] get_model_doc failed for {model_name}: {type(e).__name__}: {e}", file=sys.stderr)
+            logger.debug("get_model_doc failed for %s: %s: %s", model_name, type(e).__name__, e)
             return None
 
     def search_read(
@@ -265,7 +265,7 @@ def load_config() -> dict[str, str]:
 
     for env_path in env_paths:
         if os.path.exists(env_path):
-            print(f"Loading config from: {env_path}", file=sys.stderr)
+            logger.info("Loading config from: %s", env_path)
             load_dotenv(dotenv_path=env_path, override=True)
             break
 
@@ -288,7 +288,7 @@ def load_config() -> dict[str, str]:
 
     for path in config_paths:
         if os.path.exists(path):
-            print(f"Loading config from: {path}", file=sys.stderr)
+            logger.info("Loading config from: %s", path)
             try:
                 with open(path, "r") as f:
                     return json.load(f)

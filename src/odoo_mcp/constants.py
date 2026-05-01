@@ -4,14 +4,16 @@ Pure data constants and validation functions for the Odoo MCP Server.
 No local module imports except odoo_client (for module knowledge loading).
 """
 
+import functools
 import json
+import logging
 import os
 import re
-import sys
 import threading
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # ----- Module Knowledge Base -----
@@ -23,7 +25,7 @@ def load_module_knowledge() -> Dict[str, Any]:
         with open(knowledge_path, "r") as f:
             return json.load(f)
     except Exception as e:
-        print(f"Warning: Could not load module knowledge: {e}", file=sys.stderr)
+        logger.warning("Could not load module knowledge: %s", e)
         return {"modules": {}, "error_patterns": {}}
 
 
@@ -31,30 +33,45 @@ MODULE_KNOWLEDGE = load_module_knowledge()
 
 # ----- Default Context from env -----
 
-_DEFAULT_CONTEXT: Optional[Dict[str, Any]] = None
-_default_ctx_raw = os.environ.get("MCP_DEFAULT_CONTEXT")
-if _default_ctx_raw:
-    if len(_default_ctx_raw) > 4096:
-        print("Warning: MCP_DEFAULT_CONTEXT exceeds 4KB, ignoring", file=sys.stderr)
-    else:
-        try:
-            _DEFAULT_CONTEXT = json.loads(_default_ctx_raw)
-            if not isinstance(_DEFAULT_CONTEXT, dict):
-                print(f"Warning: MCP_DEFAULT_CONTEXT must be a JSON object, ignoring", file=sys.stderr)
-                _DEFAULT_CONTEXT = None
-        except json.JSONDecodeError as e:
-            print(f"Warning: MCP_DEFAULT_CONTEXT invalid JSON: {e}", file=sys.stderr)
+
+@functools.lru_cache(maxsize=1)
+def _parse_default_context(raw: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Parse MCP_DEFAULT_CONTEXT once per unique raw value.
+
+    Cached on the raw string so a stable env var doesn't re-parse on every call,
+    but a changed env var (e.g. in tests) does.
+    """
+    if not raw:
+        return None
+    if len(raw) > 4096:
+        logger.warning("MCP_DEFAULT_CONTEXT exceeds 4KB, ignoring")
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("MCP_DEFAULT_CONTEXT invalid JSON: %s", e)
+        return None
+    if not isinstance(parsed, dict):
+        logger.warning("MCP_DEFAULT_CONTEXT must be a JSON object, ignoring")
+        return None
+    return parsed
+
+
+def get_default_context() -> Optional[Dict[str, Any]]:
+    """Return the parsed MCP_DEFAULT_CONTEXT (read from env on each call)."""
+    return _parse_default_context(os.environ.get("MCP_DEFAULT_CONTEXT"))
 
 
 def _merge_context(explicit_context: Optional[Dict] = None) -> Optional[Dict]:
     """Merge MCP_DEFAULT_CONTEXT with explicit context. Explicit takes priority."""
-    if not _DEFAULT_CONTEXT and not explicit_context:
+    default_ctx = get_default_context()
+    if not default_ctx and not explicit_context:
         return None
-    if not _DEFAULT_CONTEXT:
+    if not default_ctx:
         return explicit_context
     if not explicit_context:
-        return dict(_DEFAULT_CONTEXT)
-    merged = dict(_DEFAULT_CONTEXT)
+        return dict(default_ctx)
+    merged = dict(default_ctx)
     merged.update(explicit_context)
     return merged
 

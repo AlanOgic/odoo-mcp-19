@@ -6,11 +6,13 @@ schema building, and issue tracking.
 """
 
 import json
+import logging
 import re
-import sys
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from .constants import (
     _DOC_CACHE,
@@ -88,7 +90,7 @@ def _get_live_doc(model_name: str) -> Optional[Dict[str, Any]]:
                     del _DOC_CACHE[oldest]
             return doc
     except Exception as e:
-        print(f"Warning: /doc-bearer/ unavailable for {model_name}: {e}", file=sys.stderr)
+        logger.warning("/doc-bearer/ unavailable for %s: %s", model_name, e)
 
     return None
 
@@ -227,13 +229,17 @@ def _track_model_issue(model: str, method: str, error_msg: str, domain: List = N
         total_count = model_issues["total_count"]
 
     # Log detailed info (outside lock)
-    print(f"[MCP] Issue tracked: {model}.{method}", file=sys.stderr)
-    print(f"  Category: {category} ({ERROR_CATEGORIES[category]['cause']})", file=sys.stderr)
-    if domain_patterns:
-        print(f"  Domain patterns: {domain_patterns}", file=sys.stderr)
-    if problematic_fields:
-        print(f"  Problematic fields: {problematic_fields}", file=sys.stderr)
-    print(f"  Total occurrences: {total_count}", file=sys.stderr)
+    logger.info(
+        "Issue tracked: %s.%s | category=%s (%s) | domain_patterns=%s | "
+        "problematic_fields=%s | total_occurrences=%d",
+        model,
+        method,
+        category,
+        ERROR_CATEGORIES[category]["cause"],
+        domain_patterns or "none",
+        problematic_fields or "none",
+        total_count,
+    )
 
     # Get model-specific recommendations from module_knowledge
     model_specific_advice = []

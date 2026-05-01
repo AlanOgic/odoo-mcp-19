@@ -10,13 +10,15 @@ Environment variables:
 """
 
 import json
+import logging
 import os
-import sys
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 # ----- Risk Levels -----
@@ -142,11 +144,6 @@ class WorkflowSafetyPreview(BaseModel):
     message: str = Field(description="User-facing summary")
 
 
-# ----- Cached Configuration -----
-
-_SAFETY_MODE: str = os.environ.get("MCP_SAFETY_MODE", "strict").lower()
-_AUDIT_ENABLED: bool = os.environ.get("MCP_SAFETY_AUDIT", "").lower() == "true"
-
 _RISK_ORDER: dict[RiskLevel, int] = {
     RiskLevel.SAFE: 0,
     RiskLevel.MEDIUM: 1,
@@ -158,8 +155,8 @@ _RISK_ORDER: dict[RiskLevel, int] = {
 # ----- Helpers -----
 
 def _get_safety_mode() -> str:
-    """Get the configured safety mode."""
-    return _SAFETY_MODE
+    """Get the configured safety mode (read from env on each call)."""
+    return os.environ.get("MCP_SAFETY_MODE", "strict").lower()
 
 
 def _estimate_record_count(method: str, args: list, kwargs: dict) -> int | None:
@@ -456,8 +453,8 @@ def classify_workflow(
 # ----- Audit Logger -----
 
 def _is_audit_enabled() -> bool:
-    """Check if audit logging is enabled."""
-    return _AUDIT_ENABLED
+    """Check if audit logging is enabled (read from env on each call)."""
+    return os.environ.get("MCP_SAFETY_AUDIT", "").lower() == "true"
 
 
 def audit_log(
@@ -490,12 +487,9 @@ def audit_log(
         if classification.blocked_reason:
             entry["blocked_reason"] = classification.blocked_reason
 
-        print(
-            f"[SAFETY AUDIT] {json.dumps(entry)}",
-            file=sys.stderr,
-        )
+        logger.info("[SAFETY AUDIT] %s", json.dumps(entry))
     except Exception as exc:
         try:
-            print(f"[SAFETY AUDIT ERROR] {exc}", file=sys.stderr)
+            logger.error("[SAFETY AUDIT ERROR] %s", exc)
         except Exception:
             pass
