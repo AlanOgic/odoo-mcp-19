@@ -26,7 +26,7 @@ MCP_TRANSPORT=streamable-http MCP_API_KEY=<token> python -m odoo_mcp
 python -m odoo_mcp --setup
 
 # Tests — unit (no Odoo needed)
-pytest tests/test_safety.py
+pytest tests/test_safety.py tests/test_token_gate.py
 pytest tests/test_safety.py::TestClassifyOperation::test_safe_methods_are_safe   # single test
 
 # Tests — live (requires .env with real Odoo creds; script-style runners)
@@ -96,7 +96,7 @@ src/odoo_mcp/
 - **BLOCKED_MODELS** (writes always refused): `ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `ir.model.fields`, `res.users`, `res.groups`. The `resolve_json` parameter also rejects these as targets — agents cannot use it to read security-critical data.
 - **SENSITIVE_MODELS** (writes always confirm): `account.move`, `account.payment`, `account.bank.statement`, `hr.payslip`, `ir.cron`.
 - **Cascade warnings** are surfaced for: `sale.order.action_confirm` (creates deliveries), `account.move.action_post` (irreversible journal entries), `stock.picking.button_validate` (stock changes), `purchase.order.button_confirm` (incoming receipts), `account.payment.action_post` (journal + reconciliation).
-- **Token gate** (v1.14.0): `_issue_confirmation_token()` issues a single-use, 120s-TTL nonce bound to the exact `model+method`. Validation consumes the token. Same flow applies to `batch_execute` and `execute_workflow`.
+- **Token gate** (v1.14.0): `_issue_confirmation_token()` issues a single-use, 120s-TTL nonce bound to `(model, method, payload_digest)` — a SHA-256 over the deterministic JSON of the operation payload. The confirmation re-call must reproduce the *exact same args/kwargs* the gate saw at issue time, so an agent can't get a token for `unlink([1])` and then re-call with `unlink([1,2,…,1000])`. Digest covers `{"args": args, "kwargs": kwargs}` post-`resolve_json` and post-context-merge for `execute_method`, the full ops list for `batch_execute`, and the params dict for `execute_workflow`.
 
 ```python
 # Step 1: triggers gate, returns confirmation_token in hint
@@ -107,7 +107,7 @@ execute_method("sale.order", "action_confirm", args_json='[[15]]',
     confirmed=True, confirmation_token='ymzyOtsZTDTJpKKysu_xWQ')
 ```
 
-Audit log to stderr when `MCP_SAFETY_AUDIT=true`.
+Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py` to stderr at INFO+) when `MCP_SAFETY_AUDIT=true`. `MCP_SAFETY_MODE`, `MCP_SAFETY_AUDIT`, and `MCP_DEFAULT_CONTEXT` are read at call time, so reconfiguring after import (or `patch.dict(os.environ, …)` in tests) takes effect immediately.
 
 ## Configuration
 
