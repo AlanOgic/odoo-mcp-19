@@ -11,14 +11,17 @@ MCP 2025-11-25 Features:
 """
 
 import asyncio
+import hashlib
 import json
+import logging
 import re
 import secrets
-import sys
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from fastmcp import Context
 from fastmcp.dependencies import Progress
@@ -30,7 +33,6 @@ from .constants import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
     PRIVATE_METHOD_HINTS,
-    _DEFAULT_CONTEXT,
     _READ_RESOURCE_MAX_CHARS,
     _merge_context,
     _validate_method,
@@ -62,28 +64,43 @@ from .utils import (
 
 
 # ----- Confirmation Token Store -----
-# Stateful nonces that tie a confirmed=True re-call to the original safety classification.
-# Prevents an agent from bypassing the gate by always passing confirmed=True.
+# Stateful nonces that tie a confirmed=True re-call to the original safety classification
+# AND the original payload (args/kwargs/operations/params). Prevents an agent from bypassing
+# the gate by passing confirmed=true with substituted arguments.
 
-_CONFIRMATION_TOKENS: dict[str, tuple[float, str, str]] = {}  # token → (timestamp, model, method)
+# token → (timestamp, model, method, payload_digest)
+_CONFIRMATION_TOKENS: dict[str, tuple[float, str, str, str]] = {}
 _CONFIRMATION_LOCK = threading.Lock()
 _CONFIRMATION_TTL = 120  # seconds
 
 
-def _issue_confirmation_token(model: str, method: str) -> str:
+def _payload_digest(payload: Any) -> str:
+    """SHA-256 hex digest of a JSON-serializable payload, with sorted keys for determinism.
+
+    Used to bind a confirmation token to the exact arguments seen at gate-issue time.
+    Any change between issue and consume — added IDs, swapped model on a resolve target,
+    different operation count or content — produces a different digest, invalidating the token.
+    """
+    serialized = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _issue_confirmation_token(model: str, method: str, payload_digest: str) -> str:
     """Issue a short-lived nonce for a pending confirmation."""
     token = secrets.token_urlsafe(16)
     now = time.time()
     with _CONFIRMATION_LOCK:
         # Evict expired tokens
-        expired = [k for k, (ts, _, _) in _CONFIRMATION_TOKENS.items() if now - ts > _CONFIRMATION_TTL]
+        expired = [k for k, (ts, *_) in _CONFIRMATION_TOKENS.items() if now - ts > _CONFIRMATION_TTL]
         for k in expired:
             del _CONFIRMATION_TOKENS[k]
-        _CONFIRMATION_TOKENS[token] = (now, model, method)
+        _CONFIRMATION_TOKENS[token] = (now, model, method, payload_digest)
     return token
 
 
-def _validate_confirmation_token(token: str | None, model: str, method: str) -> str | None:
+def _validate_confirmation_token(
+    token: str | None, model: str, method: str, payload_digest: str
+) -> str | None:
     """Validate and consume a confirmation token. Returns error message or None if valid."""
     if not token:
         return "confirmed=true requires a confirmation_token from the safety gate response."
@@ -91,11 +108,17 @@ def _validate_confirmation_token(token: str | None, model: str, method: str) -> 
         entry = _CONFIRMATION_TOKENS.pop(token, None)
     if not entry:
         return "Confirmation token is invalid or already used."
-    ts, stored_model, stored_method = entry
+    ts, stored_model, stored_method, stored_digest = entry
     if time.time() - ts > _CONFIRMATION_TTL:
         return f"Confirmation token expired (>{_CONFIRMATION_TTL}s). Re-call without confirmed=true to get a new token."
     if stored_model != model or stored_method != method:
         return f"Confirmation token was issued for {stored_model}.{stored_method}, not {model}.{method}."
+    if stored_digest != payload_digest:
+        return (
+            "Confirmation token was issued for a different payload. The arguments must match "
+            "exactly between the gate response and the confirmation re-call. Re-call without "
+            "confirmed=true to get a new token for the current payload."
+        )
     return None
 
 
@@ -243,12 +266,10 @@ def execute_method(
             except json.JSONDecodeError as e:
                 return ExecuteMethodResponse(success=False, error=f"Invalid kwargs_json: {e}")
 
-        # Merge default context if configured
-        if _DEFAULT_CONTEXT:
-            explicit_ctx = kwargs.get("context")
-            merged = _merge_context(explicit_ctx)
-            if merged:
-                kwargs["context"] = merged
+        # Merge default context if configured (no-op when env var unset)
+        merged_ctx = _merge_context(kwargs.get("context"))
+        if merged_ctx is not None:
+            kwargs["context"] = merged_ctx
 
         # --- resolve_json: auto-resolve Many2one names to IDs ---
         if resolve_json:
@@ -361,9 +382,12 @@ def execute_method(
             )
 
         if classification.requires_confirmation:
+            # Bind the token to the exact (model, method, args, kwargs) seen here.
+            # Args/kwargs are post-resolve_json and post-context-merge, so the digest
+            # captures what would actually be sent to Odoo.
+            payload = _payload_digest({"args": args, "kwargs": kwargs})
             if not confirmed:
-                # Issue a nonce token for the confirmation re-call
-                token = _issue_confirmation_token(model, method)
+                token = _issue_confirmation_token(model, method, payload)
                 audit_log(classification, confirmed=False, executed=False)
                 message = classification.reason
                 if classification.cascade_warning:
@@ -378,8 +402,8 @@ def execute_method(
                     execution_time_ms=round(elapsed_ms, 2),
                 )
             else:
-                # Validate the confirmation token
-                token_err = _validate_confirmation_token(confirmation_token, model, method)
+                # Validate the confirmation token (must match model+method+payload digest)
+                token_err = _validate_confirmation_token(confirmation_token, model, method, payload)
                 if token_err:
                     elapsed_ms = (time.time() - start_time) * 1000
                     return ExecuteMethodResponse(
@@ -394,10 +418,10 @@ def execute_method(
         # Apply smart limits for search methods
         if method in ["search", "search_read"] and 'limit' not in kwargs:
             kwargs['limit'] = DEFAULT_LIMIT
-            print(f"Applied default limit={DEFAULT_LIMIT}", file=sys.stderr)
+            logger.debug("Applied default limit=%d", DEFAULT_LIMIT)
         elif method in ["search", "search_read"] and kwargs.get('limit', 0) > MAX_LIMIT:
             kwargs['limit'] = MAX_LIMIT
-            print(f"Capped limit to {MAX_LIMIT}", file=sys.stderr)
+            logger.debug("Capped limit to %d", MAX_LIMIT)
 
         # Normalize domain if needed
         if method in ['search', 'search_read', 'search_count'] and args:
@@ -563,8 +587,11 @@ async def batch_execute(
 
     # Operations needing confirmation
     if any_needs_confirmation:
+        # Bind the token to the exact list of operations. Substituting any op (or even
+        # a single arg within an op) on the re-call produces a different digest.
+        batch_payload = _payload_digest(operations)
         if not confirmed:
-            token = _issue_confirmation_token("__batch__", f"batch_{len(operations)}")
+            token = _issue_confirmation_token("__batch__", "batch", batch_payload)
             for c in classifications:
                 if c.requires_confirmation:
                     audit_log(c, confirmed=False, executed=False)
@@ -582,7 +609,7 @@ async def batch_execute(
                 execution_time_ms=round(elapsed_ms, 2),
             )
         else:
-            token_err = _validate_confirmation_token(confirmation_token, "__batch__", f"batch_{len(operations)}")
+            token_err = _validate_confirmation_token(confirmation_token, "__batch__", "batch", batch_payload)
             if token_err:
                 elapsed_ms = (time.time() - start_time) * 1000
                 return BatchExecuteResponse(
@@ -627,12 +654,10 @@ async def batch_execute(
                 if not isinstance(kwargs, dict):
                     raise ValueError(f"Operation {idx}: kwargs_json must be a JSON object")
 
-                # Merge default context if configured
-                if _DEFAULT_CONTEXT:
-                    explicit_ctx = kwargs.get("context")
-                    merged = _merge_context(explicit_ctx)
-                    if merged:
-                        kwargs["context"] = merged
+                # Merge default context if configured (no-op when env var unset)
+                merged_ctx = _merge_context(kwargs.get("context"))
+                if merged_ctx is not None:
+                    kwargs["context"] = merged_ctx
 
                 result = odoo.execute_method(model, method, *args, **kwargs)
                 results.append(BatchOperationResult(operation_index=idx, success=True, result=result))
@@ -875,8 +900,12 @@ async def execute_workflow(
     # --- Safety Classification for workflow ---
     safety_preview = classify_workflow(workflow, params)
     if safety_preview is not None:
+        # Bind the token to (workflow_name, params). A different order_id or partner_id
+        # on the re-call produces a different digest and is rejected.
+        workflow_key = workflow.lower().strip()
+        wf_payload = _payload_digest(params)
         if not confirmed:
-            token = _issue_confirmation_token("__workflow__", workflow.lower().strip())
+            token = _issue_confirmation_token("__workflow__", workflow_key, wf_payload)
             elapsed_ms = (time.time() - start_time) * 1000
             return ExecuteWorkflowResponse(
                 workflow=workflow,
@@ -900,7 +929,7 @@ async def execute_workflow(
                 execution_time_ms=round(elapsed_ms, 2),
             )
         else:
-            token_err = _validate_confirmation_token(confirmation_token, "__workflow__", workflow.lower().strip())
+            token_err = _validate_confirmation_token(confirmation_token, "__workflow__", workflow_key, wf_payload)
             if token_err:
                 elapsed_ms = (time.time() - start_time) * 1000
                 return ExecuteWorkflowResponse(
