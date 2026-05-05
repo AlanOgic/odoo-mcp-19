@@ -8,7 +8,9 @@ schema building, and issue tracking.
 import json
 import logging
 import re
+import threading
 import time
+from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -425,3 +427,41 @@ def _get_documentation_urls(target: str) -> str:
             break
 
     return json.dumps(result, indent=2)
+
+
+# ----- Live fields_get cache (used by payload pre-flight) -----
+
+_FIELDS_CACHE: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
+_FIELDS_CACHE_LOCK = threading.Lock()
+_FIELDS_CACHE_TTL = 60  # seconds — shorter than _DOC_CACHE since model
+                        # schemas can change with module updates
+_FIELDS_CACHE_MAX = 100
+
+
+def get_fields_for_model(client, model: str) -> dict:
+    """Return the fields_get response for a model, with TTL+LRU caching.
+
+    Empty responses are NOT cached — they typically indicate a silently-failed
+    Odoo connection, and we don't want to grant a write token based on
+    'no fields exist therefore validation passes'.
+    """
+    now = time.time()
+    with _FIELDS_CACHE_LOCK:
+        cached = _FIELDS_CACHE.get(model)
+        if cached and (now - cached[0]) < _FIELDS_CACHE_TTL:
+            _FIELDS_CACHE.move_to_end(model)
+            return cached[1]
+
+    # Cache miss or expired — fetch fresh.
+    fields = client.execute_kw(model, "fields_get", [], {})
+
+    if not fields:
+        # Don't cache an empty response — we don't want to remember a failure.
+        return {}
+
+    with _FIELDS_CACHE_LOCK:
+        _FIELDS_CACHE[model] = (now, fields)
+        _FIELDS_CACHE.move_to_end(model)
+        while len(_FIELDS_CACHE) > _FIELDS_CACHE_MAX:
+            _FIELDS_CACHE.popitem(last=False)
+    return fields
