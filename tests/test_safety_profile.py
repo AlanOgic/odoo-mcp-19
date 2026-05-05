@@ -2,7 +2,6 @@
 import pytest
 
 from odoo_mcp.safety_profile import (
-    ResolvedProfile,
     SafetyMode,
     resolve,
 )

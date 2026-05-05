@@ -22,6 +22,7 @@ def test_main_module_imports_cleanly(monkeypatch):
     """Smoke check — importing __main__ should not error after the host
     resolution change."""
     import importlib
+
     from odoo_mcp import __main__ as main_mod
     importlib.reload(main_mod)
     assert hasattr(main_mod, "main")

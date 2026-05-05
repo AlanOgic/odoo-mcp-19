@@ -64,7 +64,6 @@ from .utils import (
     get_error_suggestion,
 )
 
-
 # ----- Confirmation Token Store -----
 # Stateful nonces that tie a confirmed=True re-call to the original safety classification
 # AND the original payload (args/kwargs/operations/params). Prevents an agent from bypassing
@@ -100,9 +99,7 @@ def _issue_confirmation_token(model: str, method: str, payload_digest: str) -> s
     return token
 
 
-def _validate_confirmation_token(
-    token: str | None, model: str, method: str, payload_digest: str
-) -> str | None:
+def _validate_confirmation_token(token: str | None, model: str, method: str, payload_digest: str) -> str | None:
     """Validate and consume a confirmation token. Returns error message or None if valid."""
     if not token:
         return "confirmed=true requires a confirmation_token from the safety gate response."
@@ -191,7 +188,7 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": False,
-        "openWorldHint": True
+        "openWorldHint": True,
     },
     icons=_tool_icons,
 )
@@ -319,9 +316,7 @@ def execute_method(
                         error=f"resolve_json['{field_name}']: model '{target_model}' is blocked for safety.",
                     )
                 try:
-                    matches = odoo.execute_method(
-                        target_model, "name_search", name=search_term, limit=5
-                    )
+                    matches = odoo.execute_method(target_model, "name_search", name=search_term, limit=5)
                     if not matches:
                         elapsed_ms = (time.time() - start_time) * 1000
                         return ExecuteMethodResponse(
@@ -336,7 +331,9 @@ def execute_method(
                         return ExecuteMethodResponse(
                             success=False,
                             error=f"resolve_json: Ambiguous match for '{search_term}' in {target_model} ({len(matches)} results)",
-                            hint="Multiple matches found:\n" + "\n".join(options) + "\nUse the numeric ID directly instead.",
+                            hint="Multiple matches found:\n"
+                            + "\n".join(options)
+                            + "\nUse the numeric ID directly instead.",
                             execution_time_ms=round(elapsed_ms, 2),
                         )
                     resolved_values[field_name] = matches[0][0]  # Use the ID
@@ -402,8 +399,13 @@ def execute_method(
             # Only when the profile asks for it AND this is a write-shaped call.
             if get_profile().validate_payloads and is_side_effect_method(method):
                 from .safety import validate_payload_against_schema as _validate_payload
+
                 _validation = _validate_payload(
-                    odoo, model, method, args=args, kwargs=kwargs,
+                    odoo,
+                    model,
+                    method,
+                    args=args,
+                    kwargs=kwargs,
                 )
                 if not _validation.ok:
                     elapsed_ms = (time.time() - start_time) * 1000
@@ -448,15 +450,15 @@ def execute_method(
             audit_log(classification, confirmed=confirmed, executed=True)
 
         # Apply smart limits for search methods
-        if method in ["search", "search_read"] and 'limit' not in kwargs:
-            kwargs['limit'] = DEFAULT_LIMIT
+        if method in ["search", "search_read"] and "limit" not in kwargs:
+            kwargs["limit"] = DEFAULT_LIMIT
             logger.debug("Applied default limit=%d", DEFAULT_LIMIT)
-        elif method in ["search", "search_read"] and kwargs.get('limit', 0) > MAX_LIMIT:
-            kwargs['limit'] = MAX_LIMIT
+        elif method in ["search", "search_read"] and kwargs.get("limit", 0) > MAX_LIMIT:
+            kwargs["limit"] = MAX_LIMIT
             logger.debug("Capped limit to %d", MAX_LIMIT)
 
         # Normalize domain if needed
-        if method in ['search', 'search_read', 'search_count'] and args:
+        if method in ["search", "search_read", "search_count"] and args:
             domain = args[0]
             # Handle double-wrapped domains [[domain]]
             if isinstance(domain, list) and len(domain) == 1 and isinstance(domain[0], list):
@@ -560,7 +562,7 @@ def execute_method(
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": False,
-        "openWorldHint": True
+        "openWorldHint": True,
     },
     icons=_tool_icons,
     task=True,  # Enable background task execution with progress
@@ -682,23 +684,23 @@ async def batch_execute(
 
     try:
         for idx, op in enumerate(operations):
-            model = op.get('model', 'unknown')
-            method = op.get('method', 'unknown')
+            model = op.get("model", "unknown")
+            method = op.get("method", "unknown")
             await progress.set_message(f"Operation {idx + 1}/{len(operations)}: {model}.{method}")
 
             try:
-                if not op.get('model') or not op.get('method'):
+                if not op.get("model") or not op.get("method"):
                     raise ValueError(f"Operation {idx}: 'model' and 'method' required")
 
-                model_err = _validate_model(op['model'])
+                model_err = _validate_model(op["model"])
                 if model_err:
                     raise ValueError(f"Operation {idx}: {model_err}")
-                method_err = _validate_method(op['method'])
+                method_err = _validate_method(op["method"])
                 if method_err:
                     raise ValueError(f"Operation {idx}: {method_err}")
 
-                args_json = op.get('args_json')
-                kwargs_json = op.get('kwargs_json')
+                args_json = op.get("args_json")
+                kwargs_json = op.get("kwargs_json")
 
                 args = json.loads(args_json) if args_json else []
                 if not isinstance(args, list):
@@ -768,6 +770,7 @@ async def batch_execute(
 @dataclass
 class OdooConnectionConfig:
     """Configuration collected from user elicitation."""
+
     url: str
     database: str
     auth_method: str
@@ -789,7 +792,7 @@ class OdooConnectionConfig:
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
-        "openWorldHint": False
+        "openWorldHint": False,
     },
     icons=_tool_icons,
 )
@@ -876,9 +879,8 @@ async def configure_odoo(ctx: Context) -> Dict[str, Any]:
             results["env_vars"]["ODOO_PASSWORD"] = "<your-password>"
             results["note"] = "Using password authentication. API keys are recommended for production."
 
-        results["instructions"] = (
-            "Set these environment variables to configure the Odoo MCP server:\n"
-            + "\n".join(f"export {k}='{v}'" for k, v in results["env_vars"].items())
+        results["instructions"] = "Set these environment variables to configure the Odoo MCP server:\n" + "\n".join(
+            f"export {k}='{v}'" for k, v in results["env_vars"].items()
         )
 
         return results
@@ -916,7 +918,7 @@ async def configure_odoo(ctx: Context) -> Dict[str, Any]:
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": False,
-        "openWorldHint": True
+        "openWorldHint": True,
     },
     icons=_tool_icons,
     task=True,  # Enable background task execution with progress
@@ -1046,7 +1048,9 @@ async def execute_workflow(
             invoice_ids = None
             try:
                 invoice_ids = odoo.execute_method("sale.order", "_create_invoices", [order_id])
-                steps.append(WorkflowStepResult(step="create_invoice", success=True, result={"invoice_ids": invoice_ids}))
+                steps.append(
+                    WorkflowStepResult(step="create_invoice", success=True, result={"invoice_ids": invoice_ids})
+                )
             except Exception as e:
                 steps.append(WorkflowStepResult(step="create_invoice", success=False, error=str(e)))
                 elapsed_ms = (time.time() - start_time) * 1000
@@ -1096,10 +1100,16 @@ async def execute_workflow(
             try:
                 lead = odoo.search_read("crm.lead", [["id", "=", lead_id]], fields=["type"], limit=1)
                 if lead and lead[0].get("type") == "lead":
-                    odoo.execute_method("crm.lead", "convert_opportunity", [lead_id], partner_id=params.get("partner_id", False))
+                    odoo.execute_method(
+                        "crm.lead", "convert_opportunity", [lead_id], partner_id=params.get("partner_id", False)
+                    )
                     steps.append(WorkflowStepResult(step="convert_to_opportunity", success=True))
                 else:
-                    steps.append(WorkflowStepResult(step="convert_to_opportunity", success=True, skipped=True, reason="Already an opportunity"))
+                    steps.append(
+                        WorkflowStepResult(
+                            step="convert_to_opportunity", success=True, skipped=True, reason="Already an opportunity"
+                        )
+                    )
             except Exception as e:
                 steps.append(WorkflowStepResult(step="convert_to_opportunity", success=False, error=str(e)))
             await progress.increment()
@@ -1145,12 +1155,18 @@ async def execute_workflow(
             # Build invoice lines
             invoice_lines = []
             for line in lines:
-                invoice_lines.append((0, 0, {
-                    "product_id": line.get("product_id"),
-                    "quantity": line.get("quantity", 1),
-                    "price_unit": line.get("price_unit"),
-                    "name": line.get("name", "Product"),
-                }))
+                invoice_lines.append(
+                    (
+                        0,
+                        0,
+                        {
+                            "product_id": line.get("product_id"),
+                            "quantity": line.get("quantity", 1),
+                            "price_unit": line.get("price_unit"),
+                            "name": line.get("name", "Product"),
+                        },
+                    )
+                )
 
             # Step 1: Create invoice
             await progress.set_message("Creating invoice...")
@@ -1305,25 +1321,30 @@ def read_resource(uri: str, max_chars: int = _READ_RESOURCE_MAX_CHARS) -> str:
             result = handler(**args)
             if max_chars and len(result) > max_chars:
                 truncated = result[:max_chars]
-                warning = json.dumps({
-                    "_truncated": True,
-                    "_total_chars": len(result),
-                    "_returned_chars": max_chars,
-                    "_hint": f"Output truncated from {len(result):,} to {max_chars:,} chars. "
-                             f"Use max_chars=0 for full output, or use narrower queries "
-                             f"(e.g. odoo://model/{{model}}/fields instead of /schema)."
-                })
+                warning = json.dumps(
+                    {
+                        "_truncated": True,
+                        "_total_chars": len(result),
+                        "_returned_chars": max_chars,
+                        "_hint": f"Output truncated from {len(result):,} to {max_chars:,} chars. "
+                        f"Use max_chars=0 for full output, or use narrower queries "
+                        f"(e.g. odoo://model/{{model}}/fields instead of /schema).",
+                    }
+                )
                 return truncated + "\n\n" + warning
             return result
 
-    return json.dumps({
-        "error": f"Unknown resource URI: {uri}",
-        "hint": "Use odoo://templates to list all available resource URIs",
-        "examples": [
-            "odoo://model/res.partner/schema",
-            "odoo://model/sale.order/fields",
-            "odoo://methods/res.partner",
-            "odoo://find-model/invoice",
-            "odoo://domain-syntax",
-        ]
-    }, indent=2)
+    return json.dumps(
+        {
+            "error": f"Unknown resource URI: {uri}",
+            "hint": "Use odoo://templates to list all available resource URIs",
+            "examples": [
+                "odoo://model/res.partner/schema",
+                "odoo://model/sale.order/fields",
+                "odoo://methods/res.partner",
+                "odoo://find-model/invoice",
+                "odoo://domain-syntax",
+            ],
+        },
+        indent=2,
+    )

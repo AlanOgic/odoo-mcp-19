@@ -4,7 +4,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from odoo_mcp.safety import (
-    PayloadValidationResult,
     validate_payload_against_schema,
 )
 

@@ -300,6 +300,7 @@ def _print_startup_banner(transport: str, host: str, port: int) -> None:
     if ssl_disabled:
         parts.append("  WARNING       : SSL verification is DISABLED -- vulnerable to MITM")
     from .safety_profile import get_profile
+
     profile = get_profile()
     posture_line = (
         f"[SAFETY {profile.safety_mode.value}"

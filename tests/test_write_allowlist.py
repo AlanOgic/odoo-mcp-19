@@ -1,5 +1,4 @@
 """Tests for MCP_WRITE_ALLOWLIST enforcement in classify_operation."""
-import pytest
 
 from odoo_mcp.safety import RiskLevel, classify_operation
 

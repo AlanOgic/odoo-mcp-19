@@ -24,81 +24,110 @@ logger = logging.getLogger(__name__)
 
 # ----- Risk Levels -----
 
+
 class RiskLevel(str, Enum):
     """Risk classification for Odoo operations."""
-    SAFE = "safe"           # Execute immediately, no confirmation
-    MEDIUM = "medium"       # Gate based on mode/volume
-    HIGH = "high"           # Always require confirmation
-    BLOCKED = "blocked"     # Always refuse
+
+    SAFE = "safe"  # Execute immediately, no confirmation
+    MEDIUM = "medium"  # Gate based on mode/volume
+    HIGH = "high"  # Always require confirmation
+    BLOCKED = "blocked"  # Always refuse
 
 
 # ----- Method Classification Sets -----
 
-SAFE_METHODS = frozenset({
-    "search_read", "read", "search", "search_count",
-    "fields_get", "name_get", "name_search", "default_get",
-    "read_group", "formatted_read_group",
-    "has_access", "check_access_rights", "export_data",
-})
+SAFE_METHODS = frozenset(
+    {
+        "search_read",
+        "read",
+        "search",
+        "search_count",
+        "fields_get",
+        "name_get",
+        "name_search",
+        "default_get",
+        "read_group",
+        "formatted_read_group",
+        "has_access",
+        "check_access_rights",
+        "export_data",
+    }
+)
 
-MEDIUM_METHODS = frozenset({
-    "create", "write", "copy", "name_create", "load",
-})
+MEDIUM_METHODS = frozenset(
+    {
+        "create",
+        "write",
+        "copy",
+        "name_create",
+        "load",
+    }
+)
 
-HIGH_METHODS = frozenset({
-    "unlink",
-    "action_confirm", "action_cancel", "action_done",
-    "action_draft", "action_validate", "action_post",
-    "action_assign", "action_set_won", "action_set_lost",
-    "button_confirm", "button_cancel", "button_draft",
-    "button_validate",
-})
+HIGH_METHODS = frozenset(
+    {
+        "unlink",
+        "action_confirm",
+        "action_cancel",
+        "action_done",
+        "action_draft",
+        "action_validate",
+        "action_post",
+        "action_assign",
+        "action_set_won",
+        "action_set_lost",
+        "button_confirm",
+        "button_cancel",
+        "button_draft",
+        "button_validate",
+    }
+)
 
 
 # ----- Model Classifications -----
 
-BLOCKED_MODELS = frozenset({
-    "ir.rule",
-    "ir.model.access",
-    "ir.module.module",
-    "ir.config_parameter",
-    "ir.model",
-    "ir.model.fields",
-    "res.users",
-    "res.groups",
-})
+BLOCKED_MODELS = frozenset(
+    {
+        "ir.rule",
+        "ir.model.access",
+        "ir.module.module",
+        "ir.config_parameter",
+        "ir.model",
+        "ir.model.fields",
+        "res.users",
+        "res.groups",
+    }
+)
 
-SENSITIVE_MODELS = frozenset({
-    "account.move",
-    "account.payment",
-    "account.bank.statement",
-    "hr.payslip",
-    "ir.cron",
-})
+SENSITIVE_MODELS = frozenset(
+    {
+        "account.move",
+        "account.payment",
+        "account.bank.statement",
+        "hr.payslip",
+        "ir.cron",
+    }
+)
 
 
 # ----- Cascade Warnings -----
 
 CASCADE_WARNINGS: dict[tuple[str, str], str] = {
     ("sale.order", "action_confirm"): (
-        "Confirming a sales order creates delivery orders and "
-        "may trigger procurement rules."
+        "Confirming a sales order creates delivery orders and " "may trigger procurement rules."
     ),
     ("account.move", "action_post"): (
         "Posting a journal entry creates accounting entries. "
         "This is generally irreversible without a reversal entry."
     ),
     ("stock.picking", "button_validate"): (
-        "Validating a transfer updates stock levels and creates "
-        "stock valuation entries."
+        "Validating a transfer updates stock levels and creates " "stock valuation entries."
     ),
     ("purchase.order", "button_confirm"): (
-        "Confirming a purchase order creates incoming receipts "
-        "and may trigger supplier notifications."
+        "Confirming a purchase order creates incoming receipts " "and may trigger supplier notifications."
     ),
     ("account.payment", "action_post"): (
-        "Posting a payment creates journal entries and triggers "
-        "automatic reconciliation."
+        "Posting a payment creates journal entries and triggers " "automatic reconciliation."
     ),
 }
 
@@ -108,15 +137,24 @@ CASCADE_WARNINGS: dict[tuple[str, str], str] = {
 # Methods whose names are explicitly side-effects regardless of pattern.
 # action_archive/action_unarchive are also covered by the "action_" prefix
 # below — kept here for explicit defense-in-depth.
-_LITERAL_SIDE_EFFECT_METHODS = frozenset({
-    "create", "write", "unlink", "copy",
-    "name_create", "load",
-    "action_archive", "action_unarchive",
-})
+_LITERAL_SIDE_EFFECT_METHODS = frozenset(
+    {
+        "create",
+        "write",
+        "unlink",
+        "copy",
+        "name_create",
+        "load",
+        "action_archive",
+        "action_unarchive",
+    }
+)
 
 # Method-name prefixes that always indicate side effects.
 _SIDE_EFFECT_PREFIXES: tuple[str, ...] = (
-    "action_", "button_", "_action_",
+    "action_",
+    "button_",
+    "_action_",
 )
 
 
@@ -153,36 +191,28 @@ def _allowlist_blocks(model: str, method: str, profile) -> bool:
         return False
     full_key = f"{model}.{method}"
     wildcard_key = f"{model}.*"
-    return (
-        full_key not in profile.write_allowlist
-        and wildcard_key not in profile.write_allowlist
-    )
+    return full_key not in profile.write_allowlist and wildcard_key not in profile.write_allowlist
 
 
 # ----- Pydantic Models -----
 
+
 class SafetyClassification(BaseModel):
     """Result of classifying an operation's risk level."""
+
     risk_level: RiskLevel = Field(description="Classified risk level")
     model: str = Field(description="Odoo model name")
     method: str = Field(description="Method name")
-    record_count: int | None = Field(
-        default=None, description="Estimated number of records affected"
-    )
-    requires_confirmation: bool = Field(
-        description="Whether the caller must re-call with confirmed=true"
-    )
+    record_count: int | None = Field(default=None, description="Estimated number of records affected")
+    requires_confirmation: bool = Field(description="Whether the caller must re-call with confirmed=true")
     reason: str = Field(description="Human-readable reason for the classification")
-    cascade_warning: str | None = Field(
-        default=None, description="Warning about side effects"
-    )
-    blocked_reason: str | None = Field(
-        default=None, description="Reason when operation is blocked"
-    )
+    cascade_warning: str | None = Field(default=None, description="Warning about side effects")
+    blocked_reason: str | None = Field(default=None, description="Reason when operation is blocked")
 
 
 class WorkflowStepClassification(BaseModel):
     """Classification for a single workflow step."""
+
     step: str = Field(description="Step name")
     model: str = Field(description="Model involved")
     method: str = Field(description="Method called")
@@ -192,11 +222,10 @@ class WorkflowStepClassification(BaseModel):
 
 class WorkflowSafetyPreview(BaseModel):
     """Safety preview for a complete workflow."""
+
     pending_confirmation: bool = Field(default=True)
     workflow: str = Field(description="Workflow name")
-    steps: list[WorkflowStepClassification] = Field(
-        description="Classification for each step"
-    )
+    steps: list[WorkflowStepClassification] = Field(description="Classification for each step")
     overall_risk: RiskLevel = Field(description="Highest risk across all steps")
     message: str = Field(description="User-facing summary")
 
@@ -210,6 +239,7 @@ _RISK_ORDER: dict[RiskLevel, int] = {
 
 
 # ----- Helpers -----
+
 
 def _get_safety_mode() -> str:
     """Get the configured safety mode (read from env on each call)."""
@@ -245,6 +275,7 @@ def _estimate_record_count(method: str, args: list, kwargs: dict) -> int | None:
 
 # ----- Core Classification -----
 
+
 def classify_operation(
     model: str,
     method: str,
@@ -265,6 +296,7 @@ def classify_operation(
     args = args or []
     kwargs = kwargs or {}
     from .safety_profile import get_profile
+
     profile = get_profile()
     mode = _get_safety_mode()
     record_count = _estimate_record_count(method, args, kwargs)
@@ -338,10 +370,7 @@ def classify_operation(
                 method=method,
                 record_count=record_count,
                 requires_confirmation=True,
-                reason=(
-                    f"'{method}' on sensitive model '{model}' "
-                    f"requires confirmation."
-                ),
+                reason=(f"'{method}' on sensitive model '{model}' " f"requires confirmation."),
                 cascade_warning=cascade_warning,
             )
 
@@ -388,6 +417,7 @@ def classify_operation(
 
 
 # ----- Batch Classification -----
+
 
 def classify_batch(
     operations: list[dict[str, Any]],
@@ -501,10 +531,7 @@ def classify_workflow(
             overall_risk = classification.risk_level
 
     # Build human-readable message
-    high_steps = [
-        s for s in step_classifications
-        if s.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED)
-    ]
+    high_steps = [s for s in step_classifications if s.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED)]
     warnings = [s.cascade_warning for s in step_classifications if s.cascade_warning]
 
     message_parts = [
@@ -512,9 +539,7 @@ def classify_workflow(
         f"with overall risk level: {overall_risk.value}."
     ]
     if high_steps:
-        message_parts.append(
-            f"High-risk steps: {', '.join(s.step for s in high_steps)}."
-        )
+        message_parts.append(f"High-risk steps: {', '.join(s.step for s in high_steps)}.")
     if warnings:
         message_parts.append("Side effects: " + " | ".join(warnings))
 
@@ -527,6 +552,7 @@ def classify_workflow(
 
 
 # ----- Audit Logger -----
+
 
 def _is_audit_enabled() -> bool:
     """Check if audit logging is enabled (read from env on each call)."""
@@ -572,6 +598,7 @@ def audit_log(
 
 
 # ----- Payload Pre-flight Validation (Phase 2) -----
+
 
 @dataclass(frozen=True)
 class PayloadValidationResult:
@@ -643,9 +670,6 @@ def validate_payload_against_schema(
             )
             continue
         if spec.get("readonly"):
-            errors.append(
-                f"Field '{field_name}' is readonly on '{model}' and cannot "
-                f"be written."
-            )
+            errors.append(f"Field '{field_name}' is readonly on '{model}' and cannot " f"be written.")
 
     return PayloadValidationResult(ok=not errors, errors=errors)
