@@ -327,8 +327,11 @@ def main():
         run_setup_wizard()
         return
 
+    from .safety_profile import get_profile
+
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
-    host = os.environ.get("MCP_HOST", "0.0.0.0")
+    profile = get_profile()
+    host = profile.host
     port = int(os.environ.get("MCP_PORT", "8080"))
 
     # Verbose startup banner. On by default for both transports — the banner
