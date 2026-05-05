@@ -1,4 +1,5 @@
 """Tests for MCP_READ_ONLY enforcement in execute_method."""
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -94,3 +95,72 @@ def test_read_only_off_does_not_block(monkeypatch, mock_ctx):
 
     assert response.success is False
     assert "read-only" not in response.error.lower()
+
+
+def test_read_only_blocks_batch_with_writes(monkeypatch):
+    monkeypatch.setenv("MCP_READ_ONLY", "true")
+    from odoo_mcp.server import batch_execute
+
+    response = asyncio.run(batch_execute(
+        operations=[
+            {"model": "res.partner", "method": "write", "args_json": '[[1], {"name": "X"}]'},
+        ],
+    ))
+
+    assert response.success is False
+    assert "read-only" in (response.error or "").lower()
+
+
+def test_read_only_allows_batch_of_reads(monkeypatch):
+    """A batch where every operation is SAFE should not be rejected by the
+    read-only guard — the read-only guard must not return an error for it.
+
+    Note: batch_execute uses FastMCP Progress which requires MCP dependency injection.
+    When called directly (outside MCP context), it raises AssertionError after the
+    read-only guard passes. We verify the read-only guard did NOT fire by confirming
+    we get through it (either a response without 'read-only' or the Progress exception).
+    """
+    monkeypatch.setenv("MCP_READ_ONLY", "true")
+    from odoo_mcp.server import batch_execute
+
+    try:
+        response = asyncio.run(batch_execute(
+            operations=[
+                {"model": "not a model", "method": "search_read"},
+            ],
+        ))
+        # If we got a response, the error must not be about read-only.
+        assert "read-only" not in (response.error or "").lower()
+    except AssertionError as exc:
+        # FastMCP Progress requires MCP dependency injection outside MCP context.
+        # Reaching this point means the read-only guard did not fire (correct).
+        assert "read-only" not in str(exc).lower()
+
+
+def test_read_only_blocks_workflow(monkeypatch):
+    """Under read-only, ALL workflows are rejected (they're inherently multi-step)."""
+    monkeypatch.setenv("MCP_READ_ONLY", "true")
+    from odoo_mcp.server import execute_workflow
+
+    response = asyncio.run(execute_workflow(
+        workflow="quote_to_cash",
+        params_json='{"partner_id": 1, "product_id": 1, "quantity": 1}',
+    ))
+
+    assert response.success is False
+    assert "read-only" in (response.error or "").lower()
+
+
+def test_read_only_off_allows_workflow_to_proceed_to_validation(monkeypatch):
+    """When read-only is off, the workflow guard does not fire. (We don't actually
+    expect a successful run — just absence of the read-only error.)"""
+    monkeypatch.delenv("MCP_READ_ONLY", raising=False)
+    from odoo_mcp.server import execute_workflow
+
+    response = asyncio.run(execute_workflow(
+        workflow="quote_to_cash",
+        params_json='{"partner_id": 1, "product_id": 1, "quantity": 1}',
+    ))
+
+    # Whatever happens downstream, the error (if any) must not be about read-only.
+    assert "read-only" not in (response.error or "").lower()

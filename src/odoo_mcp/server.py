@@ -569,6 +569,27 @@ async def batch_execute(
         confirmed: Set to true to bypass safety confirmation
     """
     start_time = time.time()
+
+    # Read-only kill-switch — reject the whole batch if any operation is a
+    # side-effect call. Runs before classification.
+    profile = get_profile()
+    if profile.read_only:
+        for op in operations:
+            method = op.get("method", "")
+            if is_side_effect_method(method):
+                return BatchExecuteResponse(
+                    success=False,
+                    error=(
+                        f"read-only mode is active: batch contains side-effect "
+                        f"operation '{method}' on '{op.get('model', '?')}' "
+                        f"(set MCP_READ_ONLY=false or MCP_SAFETY_MODE=strict to enable writes)."
+                    ),
+                    results=[],
+                    total_operations=len(operations),
+                    successful_operations=0,
+                    failed_operations=0,
+                )
+
     # Get Odoo client directly (works in both sync and background task modes)
     odoo = get_odoo_client()
     results: List[BatchOperationResult] = []
@@ -913,6 +934,19 @@ async def execute_workflow(
             workflow=workflow,
             success=False,
             error=f"Invalid params_json: {e}",
+        )
+
+    # Read-only kill-switch — workflows are by definition multi-step actions.
+    profile = get_profile()
+    if profile.read_only:
+        return ExecuteWorkflowResponse(
+            workflow=workflow,
+            success=False,
+            error=(
+                f"read-only mode is active: workflow '{workflow}' is a "
+                f"multi-step action and is rejected under MCP_READ_ONLY=true "
+                f"(set MCP_READ_ONLY=false or MCP_SAFETY_MODE=strict to enable workflows)."
+            ),
         )
 
     # --- Safety Classification for workflow ---
