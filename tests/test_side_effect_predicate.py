@@ -6,6 +6,7 @@ from odoo_mcp.safety import is_side_effect_method
 
 @pytest.mark.parametrize("method", [
     "create", "write", "unlink", "copy",
+    "name_create", "load",
     "action_archive", "action_unarchive", "action_confirm", "action_post",
     "button_validate", "button_confirm", "button_cancel",
 ])
