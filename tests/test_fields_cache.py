@@ -22,7 +22,7 @@ def clear_cache():
 
 def test_first_call_hits_odoo():
     client = MagicMock()
-    client.execute_kw.return_value = {
+    client.execute_method.return_value = {
         "name": {"type": "char", "readonly": False, "required": True},
         "id": {"type": "integer", "readonly": True, "required": False},
     }
@@ -30,22 +30,22 @@ def test_first_call_hits_odoo():
     fields = get_fields_for_model(client, "res.partner")
 
     assert "name" in fields
-    assert client.execute_kw.call_count == 1
+    assert client.execute_method.call_count == 1
 
 
 def test_second_call_hits_cache():
     client = MagicMock()
-    client.execute_kw.return_value = {"name": {"type": "char"}}
+    client.execute_method.return_value = {"name": {"type": "char"}}
 
     get_fields_for_model(client, "res.partner")
     get_fields_for_model(client, "res.partner")
 
-    assert client.execute_kw.call_count == 1
+    assert client.execute_method.call_count == 1
 
 
 def test_cache_expires_after_ttl(monkeypatch):
     client = MagicMock()
-    client.execute_kw.return_value = {"name": {"type": "char"}}
+    client.execute_method.return_value = {"name": {"type": "char"}}
 
     get_fields_for_model(client, "res.partner")
 
@@ -55,28 +55,28 @@ def test_cache_expires_after_ttl(monkeypatch):
 
     get_fields_for_model(client, "res.partner")
 
-    assert client.execute_kw.call_count == 2
+    assert client.execute_method.call_count == 2
 
 
 def test_empty_response_not_cached():
     """An Odoo connection that returns {} should not poison the cache."""
     client = MagicMock()
-    client.execute_kw.return_value = {}
+    client.execute_method.return_value = {}
 
     fields = get_fields_for_model(client, "res.partner")
     assert fields == {}
 
     # Second call must re-query (we don't trust an empty response).
-    client.execute_kw.return_value = {"name": {"type": "char"}}
+    client.execute_method.return_value = {"name": {"type": "char"}}
     fields = get_fields_for_model(client, "res.partner")
     assert "name" in fields
-    assert client.execute_kw.call_count == 2
+    assert client.execute_method.call_count == 2
 
 
 def test_lru_eviction():
     """Cache caps at 100 entries; oldest evicted first."""
     client = MagicMock()
-    client.execute_kw.return_value = {"x": {"type": "char"}}
+    client.execute_method.return_value = {"x": {"type": "char"}}
 
     for i in range(110):
         get_fields_for_model(client, f"model.test_{i}")
