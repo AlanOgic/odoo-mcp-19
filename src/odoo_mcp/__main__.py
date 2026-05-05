@@ -299,10 +299,28 @@ def _print_startup_banner(transport: str, host: str, port: int) -> None:
     ]
     if ssl_disabled:
         parts.append("  WARNING       : SSL verification is DISABLED -- vulnerable to MITM")
+    from .safety_profile import get_profile
+    profile = get_profile()
+    posture_line = (
+        f"[SAFETY {profile.safety_mode.value}"
+        f"{' · READ-ONLY' if profile.read_only else ' · WRITES ON'}"
+        f" · BIND {profile.host}"
+    )
+    if profile.write_allowlist_enforced:
+        posture_line += f" · ALLOWLIST {len(profile.write_allowlist)} entries"
+    posture_line += "]"
+    for warn in profile.warnings:
+        parts.append(f"  WARNING       : {warn}")
+
     parts += [
         "",
         "  -- Safety layer --",
-        f"  Mode          : {safety_mode}",
+        f"  {posture_line}",
+        f"  Mode          : {profile.safety_mode.value}",
+        f"  Read-only     : {profile.read_only}",
+        f"  Allowlist     : {len(profile.write_allowlist)} entries"
+        + (" (enforced)" if profile.write_allowlist_enforced else ""),
+        f"  Validate pl.  : {profile.validate_payloads}",
         f"  Audit log     : {safety_audit}",
         "",
         "  -- DX defaults --",
