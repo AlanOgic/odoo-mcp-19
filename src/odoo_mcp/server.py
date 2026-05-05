@@ -55,7 +55,9 @@ from .safety import (
     classify_batch,
     classify_operation,
     classify_workflow,
+    is_side_effect_method,
 )
+from .safety_profile import get_profile
 from .utils import (
     _get_live_doc,
     _track_model_issue,
@@ -243,6 +245,20 @@ def execute_method(
     method_err = _validate_method(method)
     if method_err:
         return ExecuteMethodResponse(success=False, error=method_err, execution_time_ms=0)
+
+    # Read-only kill-switch (MCP_READ_ONLY / MCP_SAFETY_MODE=locked).
+    # Runs before the classifier — cheap pattern match, no Odoo round-trip.
+    profile = get_profile()
+    if profile.read_only and is_side_effect_method(method):
+        return ExecuteMethodResponse(
+            success=False,
+            error=(
+                f"read-only mode is active: '{method}' on '{model}' is a "
+                f"side-effect operation (set MCP_READ_ONLY=false or "
+                f"MCP_SAFETY_MODE=strict to enable writes)."
+            ),
+            execution_time_ms=int((time.time() - start_time) * 1000),
+        )
 
     odoo = get_odoo_client()
 
