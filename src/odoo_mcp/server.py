@@ -398,6 +398,22 @@ def execute_method(
             )
 
         if classification.requires_confirmation:
+            # Phase 2: payload pre-flight against live fields_get.
+            # Only when the profile asks for it AND this is a write-shaped call.
+            if get_profile().validate_payloads and is_side_effect_method(method):
+                from .safety import validate_payload_against_schema as _validate_payload
+                _validation = _validate_payload(
+                    odoo, model, method, args=args, kwargs=kwargs,
+                )
+                if not _validation.ok:
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    return ExecuteMethodResponse(
+                        success=False,
+                        error="Payload validation failed:\n  - " + "\n  - ".join(_validation.errors),
+                        hint=f"Read odoo://model/{model}/quick-schema for the field list.",
+                        execution_time_ms=round(elapsed_ms, 2),
+                    )
+
             # Bind the token to the exact (model, method, args, kwargs) seen here.
             # Args/kwargs are post-resolve_json and post-context-merge, so the digest
             # captures what would actually be sent to Odoo.

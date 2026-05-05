@@ -12,6 +12,7 @@ Environment variables:
 import json
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -568,3 +569,83 @@ def audit_log(
             logger.error("[SAFETY AUDIT ERROR] %s", exc)
         except Exception:
             pass
+
+
+# ----- Payload Pre-flight Validation (Phase 2) -----
+
+@dataclass(frozen=True)
+class PayloadValidationResult:
+    ok: bool
+    errors: list[str]
+
+
+def _extract_vals_dict(method: str, args: list) -> dict | None:
+    """Pull the vals dict out of an operation's args, depending on method."""
+    if not args:
+        return None
+    if method == "create":
+        # create([{...}]) or create({...})
+        first = args[0]
+        if isinstance(first, dict):
+            return first
+        if isinstance(first, list) and first and isinstance(first[0], dict):
+            return first[0]  # validate first record only
+        return None
+    if method in ("write", "copy"):
+        # write([ids], {...})
+        if len(args) >= 2 and isinstance(args[1], dict):
+            return args[1]
+    return None  # action_*, button_*, unlink: no vals dict
+
+
+def validate_payload_against_schema(
+    client,
+    model: str,
+    method: str,
+    args: list | None = None,
+    kwargs: dict | None = None,
+) -> PayloadValidationResult:
+    """Validate that a write payload references only real, writable fields.
+
+    Returns ok=True for non-vals methods (action_*, button_*, unlink) — those
+    have no payload to validate.
+
+    Empty fields_get response counts as a failure: a silent connection
+    drop must not grant a write token.
+    """
+    from .utils import get_fields_for_model
+
+    args = args or []
+    vals = _extract_vals_dict(method, args)
+    if vals is None:
+        return PayloadValidationResult(ok=True, errors=[])
+
+    fields = get_fields_for_model(client, model)
+    if not fields:
+        return PayloadValidationResult(
+            ok=False,
+            errors=[
+                f"Could not load schema for '{model}' (fields_get returned "
+                f"empty). Refusing to issue a confirmation token without a "
+                f"verified field list."
+            ],
+        )
+
+    errors: list[str] = []
+    for field_name, value in vals.items():
+        if field_name == "context":
+            continue  # context is a kwargs concern, not a vals field
+        spec = fields.get(field_name)
+        if spec is None:
+            errors.append(
+                f"Field '{field_name}' does not exist on model '{model}'. "
+                f"Read odoo://model/{model}/quick-schema for the field list."
+            )
+            continue
+        if spec.get("readonly"):
+            errors.append(
+                f"Field '{field_name}' is readonly on '{model}' and cannot "
+                f"be written."
+            )
+
+    return PayloadValidationResult(ok=not errors, errors=errors)
