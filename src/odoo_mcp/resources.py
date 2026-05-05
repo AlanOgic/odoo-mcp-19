@@ -1265,3 +1265,67 @@ def get_tool_registry() -> str:
             "hr": [k for k, v in TOOL_REGISTRY.items() if "hr" in v.get("model", "")],
         }
     }, indent=2)
+
+
+# ----- Server-status resource -----
+
+@mcp.resource(
+    "odoo://server-status",
+    name="server-status",
+    description=(
+        "Runtime posture: resolved safety profile, transport, host, "
+        "allowlist, and any foot-gun warnings. Non-secret. Useful for "
+        "monitoring scripts and agents to know which gates are active."
+    ),
+)
+def server_status() -> str:
+    """Decorated handler for odoo://server-status. Delegates to the helper
+    so the read_resource bridge can call the same code path."""
+    return _server_status_payload()
+
+
+def _server_status_payload() -> str:
+    """Build the server-status JSON payload. Pure function — reads env each
+    call so tests can monkeypatch."""
+    import os
+    from importlib.metadata import version as _pkg_version
+
+    from .safety_profile import get_profile
+
+    try:
+        version = _pkg_version("odoo-mcp-19")
+    except Exception:
+        version = "unknown"
+
+    profile = get_profile()
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    port_raw = os.environ.get("MCP_PORT", "8080")
+    try:
+        port = int(port_raw)
+    except ValueError:
+        port = 8080
+    audit = os.environ.get("MCP_SAFETY_AUDIT", "").lower() in (
+        "true", "1", "yes", "on",
+    )
+    default_ctx_raw = os.environ.get("MCP_DEFAULT_CONTEXT", "")
+    try:
+        default_ctx = json.loads(default_ctx_raw) if default_ctx_raw else None
+    except json.JSONDecodeError:
+        default_ctx = None
+
+    payload = {
+        "version": version,
+        "transport": transport,
+        "host": profile.host,
+        "port": port,
+        "safety_mode": profile.safety_mode.value,
+        "read_only": profile.read_only,
+        "write_allowlist": sorted(profile.write_allowlist),
+        "write_allowlist_enforced": profile.write_allowlist_enforced,
+        "validate_payloads": profile.validate_payloads,
+        "audit_logging": audit,
+        "default_context": default_ctx,
+        "posture_open": profile.posture_open,
+        "warnings": list(profile.warnings),
+    }
+    return json.dumps(payload, indent=2)

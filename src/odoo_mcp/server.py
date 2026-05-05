@@ -1213,6 +1213,7 @@ _RESOURCE_ROUTES: list[tuple[re.Pattern[str], Any, list[str]]] = [
     for pattern, handler, param_names in [
         (r"^odoo://models$", _resources.get_models, []),
         (r"^odoo://session-bootstrap$", _resources.get_session_bootstrap, []),
+        (r"^odoo://server-status$", _resources._server_status_payload, []),
         (r"^odoo://bundle/(.+)$", _resources.get_bundle, ["models_csv"]),
         (r"^odoo://model/([^/]+)/quick-schema$", _resources.get_model_quick_schema, ["model_name"]),
         (r"^odoo://model/([^/]+)/workflow$", _resources.get_model_workflow, ["model_name"]),
