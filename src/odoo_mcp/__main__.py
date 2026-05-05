@@ -91,9 +91,7 @@ def _generate_claude_desktop(config: dict) -> str:
             "url": f"http://{config['mcp_host']}:{config['mcp_port']}/mcp",
         }
         if config.get("mcp_api_key"):
-            server["headers"] = {
-                "Authorization": f"Bearer {config['mcp_api_key']}"
-            }
+            server["headers"] = {"Authorization": f"Bearer {config['mcp_api_key']}"}
     else:
         server = {
             "command": "docker",
@@ -117,19 +115,13 @@ def run_setup_wizard():
     config["odoo_url"] = _prompt("Odoo URL", "https://mycompany.odoo.com")
     config["odoo_db"] = _prompt("Database")
     config["odoo_username"] = _prompt("Username")
-    config["auth_method"] = _prompt_choice(
-        "Auth method", ["API Key", "Password"], "API Key"
-    )
-    config["auth_value"] = _prompt_secret(
-        "API Key" if config["auth_method"] == "API Key" else "Password"
-    )
+    config["auth_method"] = _prompt_choice("Auth method", ["API Key", "Password"], "API Key")
+    config["auth_value"] = _prompt_secret("API Key" if config["auth_method"] == "API Key" else "Password")
     print()
 
     # --- MCP Transport ---
     print("── MCP Transport ──")
-    config["transport"] = _prompt_choice(
-        "Transport", ["stdio", "streamable-http"], "stdio"
-    )
+    config["transport"] = _prompt_choice("Transport", ["stdio", "streamable-http"], "stdio")
     if config["transport"] == "streamable-http":
         config["mcp_host"] = _prompt("Host", "0.0.0.0")
         config["mcp_port"] = _prompt("Port", "8080")
@@ -146,9 +138,7 @@ def run_setup_wizard():
 
     # --- Safety ---
     print("── Safety ──")
-    config["safety_mode"] = _prompt_choice(
-        "Safety mode", ["strict", "permissive"], "strict"
-    )
+    config["safety_mode"] = _prompt_choice("Safety mode", ["strict", "permissive"], "strict")
     print()
 
     # --- Output ---
@@ -269,10 +259,7 @@ def _print_startup_banner(transport: str, host: str, port: int) -> None:
     odoo_key = os.environ.get("ODOO_API_KEY") or os.environ.get("ODOO_PASSWORD", "")
     odoo_timeout = os.environ.get("ODOO_TIMEOUT", "30")
     odoo_ssl = os.environ.get("ODOO_VERIFY_SSL", "true")
-    ssl_disabled = (
-        odoo_ssl.lower() in ("0", "false", "no", "off")
-        and odoo_url.startswith("https://")
-    )
+    ssl_disabled = odoo_ssl.lower() in ("0", "false", "no", "off") and odoo_url.startswith("https://")
 
     safety_mode = os.environ.get("MCP_SAFETY_MODE", "strict")
     safety_audit = os.environ.get("MCP_SAFETY_AUDIT", "false")
@@ -299,9 +286,7 @@ def _print_startup_banner(transport: str, host: str, port: int) -> None:
     ]
     if transport == "streamable-http":
         parts.append(f"  Bind          : http://{host}:{port}")
-        parts.append(
-            f"  Auth          : Bearer (MCP_API_KEY={_api_key_status(os.environ.get('MCP_API_KEY', ''))})"
-        )
+        parts.append(f"  Auth          : Bearer (MCP_API_KEY={_api_key_status(os.environ.get('MCP_API_KEY', ''))})")
     parts += [
         "",
         "  -- Odoo connection --",
@@ -313,9 +298,7 @@ def _print_startup_banner(transport: str, host: str, port: int) -> None:
         f"  Verify SSL    : {odoo_ssl}",
     ]
     if ssl_disabled:
-        parts.append(
-            "  WARNING       : SSL verification is DISABLED -- vulnerable to MITM"
-        )
+        parts.append("  WARNING       : SSL verification is DISABLED -- vulnerable to MITM")
     parts += [
         "",
         "  -- Safety layer --",
@@ -343,8 +326,11 @@ def main():
         run_setup_wizard()
         return
 
+    from .safety_profile import get_profile
+
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
-    host = os.environ.get("MCP_HOST", "0.0.0.0")
+    profile = get_profile()
+    host = profile.host
     port = int(os.environ.get("MCP_PORT", "8080"))
 
     # Verbose startup banner. On by default for both transports — the banner
@@ -357,9 +343,7 @@ def main():
 
         # daemon=True so the timer never blocks Python shutdown if mcp.run()
         # exits early (fast STDIO disconnect, --help, misconfiguration, ...).
-        timer = threading.Timer(
-            0.4, _print_startup_banner, args=(transport, host, port)
-        )
+        timer = threading.Timer(0.4, _print_startup_banner, args=(transport, host, port))
         timer.daemon = True
         timer.start()
 
