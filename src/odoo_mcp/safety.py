@@ -102,6 +102,40 @@ CASCADE_WARNINGS: dict[tuple[str, str], str] = {
 }
 
 
+# ----- Side-Effect Method Predicate -----
+
+# Methods whose names are explicitly side-effects regardless of pattern.
+_LITERAL_SIDE_EFFECT_METHODS = frozenset({
+    "create", "write", "unlink", "copy",
+    "action_archive", "action_unarchive",
+})
+
+# Method-name prefixes that always indicate side effects.
+_SIDE_EFFECT_PREFIXES: tuple[str, ...] = (
+    "action_", "button_", "_action_",
+)
+
+
+def is_side_effect_method(method: str) -> bool:
+    """Return True if calling this method should be treated as a side effect.
+
+    Single source of truth for the read-only guard, the write allowlist, and
+    the payload pre-flight. Cheap pattern match — does NOT call the classifier.
+
+    Side-effect methods include:
+      * Literal CRUD names (create, write, unlink, copy, action_archive, ...)
+      * Anything matching action_*, button_*, _action_*
+
+    SAFE methods (search_read, read, fields_get, ...) and unknown read-like
+    methods return False.
+    """
+    if not method:
+        return False
+    if method in _LITERAL_SIDE_EFFECT_METHODS:
+        return True
+    return any(method.startswith(p) for p in _SIDE_EFFECT_PREFIXES)
+
+
 # ----- Pydantic Models -----
 
 class SafetyClassification(BaseModel):
