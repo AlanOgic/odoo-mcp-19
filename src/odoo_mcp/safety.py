@@ -139,6 +139,25 @@ def is_side_effect_method(method: str) -> bool:
     return any(method.startswith(p) for p in _SIDE_EFFECT_PREFIXES)
 
 
+def _allowlist_blocks(model: str, method: str, profile) -> bool:
+    """Return True if the resolved profile's allowlist is enforced AND the
+    given (model, method) is not permitted.
+
+    Does NOT short-circuit BLOCKED_MODELS or SAFE methods — callers must
+    check those first.
+    """
+    if not profile.write_allowlist_enforced:
+        return False
+    if not is_side_effect_method(method):
+        return False
+    full_key = f"{model}.{method}"
+    wildcard_key = f"{model}.*"
+    return (
+        full_key not in profile.write_allowlist
+        and wildcard_key not in profile.write_allowlist
+    )
+
+
 # ----- Pydantic Models -----
 
 class SafetyClassification(BaseModel):
@@ -237,12 +256,15 @@ def classify_operation(
     Classification logic:
     1. SAFE_METHODS → SAFE (even on blocked/sensitive models)
     2. BLOCKED_MODELS + non-safe method → BLOCKED
-    3. HIGH_METHODS → HIGH (always confirm)
-    4. MEDIUM_METHODS → depends on mode/model/volume
-    5. Unknown methods → MEDIUM
+    3. Allowlist enforcement — side-effect calls blocked unless explicitly permitted
+    4. HIGH_METHODS → HIGH (always confirm)
+    5. MEDIUM_METHODS → depends on mode/model/volume
+    6. Unknown methods → MEDIUM
     """
     args = args or []
     kwargs = kwargs or {}
+    from .safety_profile import get_profile
+    profile = get_profile()
     mode = _get_safety_mode()
     record_count = _estimate_record_count(method, args, kwargs)
     cascade_warning = CASCADE_WARNINGS.get((model, method))
@@ -273,7 +295,23 @@ def classify_operation(
             ),
         )
 
-    # 3. High-risk methods always require confirmation
+    # 3. Allowlist enforcement — explicit permits required for side-effect calls.
+    if _allowlist_blocks(model, method, profile):
+        return SafetyClassification(
+            risk_level=RiskLevel.BLOCKED,
+            model=model,
+            method=method,
+            record_count=record_count,
+            requires_confirmation=False,
+            reason=f"'{model}.{method}' is not in MCP_WRITE_ALLOWLIST.",
+            blocked_reason=(
+                f"Side-effect call '{model}.{method}' rejected: not present in "
+                f"MCP_WRITE_ALLOWLIST. Add the entry to allow it, or use a "
+                f"safe read method instead."
+            ),
+        )
+
+    # 4. High-risk methods always require confirmation
     if method in HIGH_METHODS:
         reason = f"'{method}' is a high-risk operation"
         if record_count and record_count > 1:
@@ -289,7 +327,7 @@ def classify_operation(
             cascade_warning=cascade_warning,
         )
 
-    # 4. Medium-risk methods: depends on mode, model, volume
+    # 5. Medium-risk methods: depends on mode, model, volume
     if method in MEDIUM_METHODS:
         # Sensitive models always need confirmation for writes
         if model in SENSITIVE_MODELS:
@@ -332,7 +370,7 @@ def classify_operation(
             cascade_warning=cascade_warning,
         )
 
-    # 5. Unknown methods → MEDIUM, confirmation depends on mode
+    # 6. Unknown methods → MEDIUM, confirmation depends on mode
     requires_confirm = mode == "strict"
     return SafetyClassification(
         risk_level=RiskLevel.MEDIUM,
