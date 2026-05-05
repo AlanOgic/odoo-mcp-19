@@ -45,6 +45,9 @@ docker compose up -d           # uses .env, requires MCP_API_KEY
 
 Note: live tests under `tests/live/` are **script-style runners**, not pytest modules — invoke them directly with `python`. They mutate environment state.
 
+- **Unit (no Odoo)**: `tests/test_safety.py`, `tests/test_token_gate.py` — run with `pytest`.
+- **Live (need `.env`)**: anything under `tests/live/` — run with `python <file>`, not pytest.
+
 ## High-level architecture
 
 The package was split in v1.14.0 (commit `ea10d79`) from a 3762-line `server.py` into 12 focused modules. Import order matters: `app.py` must be imported first so the `mcp` decorator is bound before `server.py`, `resources.py`, and `prompts.py` register their handlers.
@@ -151,6 +154,8 @@ Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py
 ## Key conventions
 
 **Schema first, query second.** Never guess field names — read `odoo://model/{model}/quick-schema` first. Guessing wastes API calls; introspection is fast.
+
+**`args_json` / `kwargs_json` are JSON strings, not Python objects.** Pass `args_json='[[15]]'`, not `args_json=[[15]]`. Same for `kwargs_json` and `resolve_json`. The server parses them with `json.loads`; native lists/dicts will fail validation.
 
 **`@api.private` is enforced.** Methods like `check_access` (use `has_access`) and `search_fetch` (use `search_read`) are blocked before the API call with actionable hints. Methods starting with `_` are also checked dynamically against `/doc-bearer/`.
 
