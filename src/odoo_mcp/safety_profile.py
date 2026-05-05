@@ -15,6 +15,7 @@ Environment variables:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping
@@ -45,15 +46,34 @@ def _parse_bool(raw: str | None, default: bool) -> bool:
     return default
 
 
+_ALLOWLIST_ENTRY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+\.([\w]+|\*)$")
+
+
 def _parse_allowlist(raw: str | None) -> frozenset[str]:
-    """Parse a comma-separated 'model.method' list into a frozenset."""
+    """Parse a comma-separated 'model.method' list into a frozenset.
+
+    Each entry must match either 'model.method' or 'model.*'. Entries that
+    do not match are dropped with a warning — this catches mistakes like
+    '*.write' (cross-model wildcards are deliberately not supported because
+    they over-grant) and obvious typos.
+    """
     if not raw:
         return frozenset()
-    return frozenset(
-        entry.strip()
-        for entry in raw.split(",")
-        if entry.strip()
-    )
+    valid: set[str] = set()
+    for entry in raw.split(","):
+        cleaned = entry.strip()
+        if not cleaned:
+            continue
+        if _ALLOWLIST_ENTRY_RE.match(cleaned):
+            valid.add(cleaned)
+        else:
+            logger.warning(
+                "MCP_WRITE_ALLOWLIST entry %r is not in 'model.method' or "
+                "'model.*' form — dropped (cross-model wildcards like "
+                "'*.method' are not supported).",
+                cleaned,
+            )
+    return frozenset(valid)
 
 
 def _parse_mode(raw: str | None) -> SafetyMode:
@@ -135,6 +155,12 @@ def resolve(env: Mapping[str, str]) -> ResolvedProfile:
         warnings.append(
             "MCP_SAFETY_MODE=locked but MCP_HOST=0.0.0.0 — "
             "remote bind enabled despite locked profile."
+        )
+    if mode is SafetyMode.LOCKED and not read_only:
+        warnings.append(
+            "MCP_SAFETY_MODE=locked but MCP_READ_ONLY=false — "
+            "the primary write kill-switch is disabled; only "
+            "MCP_WRITE_ALLOWLIST gates side-effect calls."
         )
     if read_only and write_allowlist:
         warnings.append(
