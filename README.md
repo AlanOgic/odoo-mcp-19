@@ -39,9 +39,10 @@ layer blocks every non-safe method.
 | | |
 |---|---|
 | **5 tools** | `execute_method` reaches any method on any model; `batch_execute`, `execute_workflow`, `configure_odoo`, and `read_resource` cover the rest |
-| **27 resources** | Model discovery, compact schemas, state-machine workflows, and introspection |
+| **28 resources** | Model discovery, compact schemas, state-machine workflows, introspection, and runtime posture (`odoo://server-status`) |
 | **19 prompts** | 12 generic guided workflows plus 7 `cyanview-*` skill prompts, gated per user in multi-user mode |
 | **Safety layer** | Risk classification before execution, 8 blocked models, 6 sensitive models, cascade warnings |
+| **Locked mode** | One flag (`MCP_SAFETY_MODE=locked`) turns writes off, enforces a write allowlist, binds HTTP to localhost, and pre-flights payloads against live `fields_get` — each layer independently overridable |
 | **Multi-user mode** | Per-user bearer keys and personal Odoo clients, so every write is attributed to a real person |
 | **Reference data** | 30 documented ORM methods, 13 modules with special-method knowledge, including the Enterprise AI module |
 
@@ -269,7 +270,7 @@ token issued for `unlink([1])` and reuse it on `unlink([1, 2, …, 1000])`.
 | `configure_odoo` | Interactive connection setup |
 | `read_resource` | Read any `odoo://` resource by URI |
 
-### Resources (27)
+### Resources (28)
 
 | Resource | Description |
 |----------|-------------|
@@ -300,6 +301,7 @@ token issued for `unlink([1])` and reuse it on `unlink([1, 2, …, 1000])`.
 | `odoo://hierarchical` | Parent/child tree query patterns |
 | `odoo://aggregation` | Aggregation guide (formatted_read_group) |
 | `odoo://model-limitations` | Known model issues + runtime problems |
+| `odoo://server-status` | Runtime safety posture (mode, host, allowlist, warnings). Non-secret. **New in v1.15.0.** |
 
 ### Prompts (19)
 
@@ -371,6 +373,41 @@ Side effects are surfaced for workflow actions:
 
 Tokens are single-use, expire after 120s, and are bound to the specific model+method. This prevents agents from bypassing the safety gate by always passing `confirmed=true`.
 
+### Locked mode (v1.15.0)
+
+`MCP_SAFETY_MODE=locked` adds four overlapping protections on top of the classifier and token gate. Designed for safe-by-default deployments where a colleague might point an over-eager AI agent at their own Odoo instance.
+
+| Protection | Default under `locked` | Override env var |
+|---|---|---|
+| Global write kill-switch | on | `MCP_READ_ONLY=false` |
+| Side-effect allowlist enforced | on (empty list = no writes) | populate `MCP_WRITE_ALLOWLIST` |
+| HTTP bind | `127.0.0.1` (localhost-only) | `MCP_HOST=0.0.0.0` |
+| Live `fields_get` payload pre-flight | on | `MCP_VALIDATE_PAYLOADS=false` |
+
+Each protection is independently overridable — set `locked` and tune the individual flags as needed. `permissive` and `strict` semantics are unchanged from v1.14.0; no existing deploy changes posture on upgrade unless the operator opts in.
+
+**Allowlist syntax**: `MCP_WRITE_ALLOWLIST="sale.order.action_confirm,res.partner.message_post,product.product.*"`. Each entry is `model.method` or `model.*` (any method on the model). Cross-model wildcards (`*.method`) are rejected — too easy to over-grant.
+
+**Three typical configurations:**
+
+```bash
+# Safe-by-default — paste this and forget
+MCP_SAFETY_MODE=locked
+
+# Locked but allow specific side-effect methods
+MCP_SAFETY_MODE=locked
+MCP_READ_ONLY=false
+MCP_WRITE_ALLOWLIST=res.partner.message_post,sale.order.action_confirm
+
+# Power user — current v1.14.0 behaviour, no changes
+MCP_SAFETY_MODE=strict
+```
+
+**Posture introspection**: read `odoo://server-status` to see the resolved profile at runtime — current mode, host, allowlist contents, and any foot-gun warnings (e.g. `locked` + `MCP_HOST=0.0.0.0`, or `locked` + `MCP_READ_ONLY=false`). The startup banner shows a one-line summary: `[SAFETY locked · READ-ONLY · BIND 127.0.0.1 · ALLOWLIST 0 entries]`.
+
+**Payload pre-flight** (`MCP_VALIDATE_PAYLOADS=true`): before issuing a confirmation token for a write, the validator fetches `fields_get` for the target model (60s LRU cache) and rejects payloads that reference non-existent fields, write to readonly fields, or arrive when the connection is silently down (`fields_get` returns `{}`). Catches hallucinated field names before they reach Odoo.
+
+## DX Improvements (v1.11.0)
 ## Token-efficient discovery
 
 ### Quick schema
@@ -527,10 +564,14 @@ env `ODOO_*` credentials become optional (only the `env-admin` fallback uses the
 | `MCP_API_KEY` | HTTP: this **or** `USERS_DB_PATH` | — | Static bearer token (single-user HTTP, or admin fallback in multi-user mode). HTTP server `sys.exit(1)` if neither is set |
 | `USERS_DB_PATH` | No | — | Path to the CLORAG registry (`users.db`) → enables [multi-user mode](#multi-user-mode) |
 | `TOKEN_ENCRYPTION_KEY` / `TOKEN_ENCRYPTION_KEY_FILE` | With `USERS_DB_PATH` | — | Secret to decrypt registry Odoo credentials — must equal CLORAG's value |
-| `MCP_HOST` | No | `0.0.0.0` | HTTP bind address |
+| `MCP_HOST` | No | `0.0.0.0` (`127.0.0.1` under `locked`) | HTTP bind address. Default flips to localhost when `MCP_SAFETY_MODE=locked`. |
 | `MCP_PORT` | No | `8080` | HTTP port |
 | `MCP_VERBOSE` | No | `true` | Slant-ASCII startup banner to stderr (version, transport, masked creds, safety mode, capability counts). `false` to silence |
-| `MCP_SAFETY_MODE` | No | `strict` | `strict` or `permissive` |
+| `MCP_SAFETY_MODE` | No | `strict` | `permissive`, `strict`, or **`locked`** (v1.15.0). `locked` activates `MCP_READ_ONLY=true`, `MCP_WRITE_ALLOWLIST` enforcement, `MCP_HOST=127.0.0.1` default, and `MCP_VALIDATE_PAYLOADS=true`. |
+| `MCP_SAFETY_MODE` | No | `strict` | `permissive`, `strict`, or **`locked`** (v1.15.0). `locked` activates `MCP_READ_ONLY=true`, `MCP_WRITE_ALLOWLIST` enforcement, `MCP_HOST=127.0.0.1` default, and `MCP_VALIDATE_PAYLOADS=true`. |
+| `MCP_READ_ONLY` | No | derived from mode | `true` to globally reject all side-effect methods (`create`, `write`, `unlink`, `copy`, `name_create`, `load`, `action_*`, `button_*`, `_action_*`). Reads pass through. |
+| `MCP_WRITE_ALLOWLIST` | No | empty | Comma-separated `model.method` (or `model.*`) entries permitted as side effects. Enforced under `locked` mode, or whenever set explicitly. |
+| `MCP_VALIDATE_PAYLOADS` | No | derived from mode | `true` to validate write payloads against live `fields_get` before issuing a confirmation token. Catches hallucinated fields and readonly writes. |
 | `MCP_SAFETY_AUDIT` | No | — | `true` to log safety audit to stderr |
 | `MCP_DEFAULT_CONTEXT` | No | — | JSON object merged into all contexts (max 4KB) |
 | `MCP_BOOTSTRAP_MODELS` | No | `res.partner,sale.order,account.move,product.product,stock.picking` | Models for session-bootstrap (max 20) |
