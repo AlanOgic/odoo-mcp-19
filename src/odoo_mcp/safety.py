@@ -105,8 +105,11 @@ CASCADE_WARNINGS: dict[tuple[str, str], str] = {
 # ----- Side-Effect Method Predicate -----
 
 # Methods whose names are explicitly side-effects regardless of pattern.
+# action_archive/action_unarchive are also covered by the "action_" prefix
+# below — kept here for explicit defense-in-depth.
 _LITERAL_SIDE_EFFECT_METHODS = frozenset({
     "create", "write", "unlink", "copy",
+    "name_create", "load",
     "action_archive", "action_unarchive",
 })
 
