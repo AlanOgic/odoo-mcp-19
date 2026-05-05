@@ -138,7 +138,9 @@ def run_setup_wizard():
 
     # --- Safety ---
     print("── Safety ──")
-    config["safety_mode"] = _prompt_choice("Safety mode", ["strict", "permissive"], "strict")
+    config["safety_mode"] = _prompt_choice(
+        "Safety mode", ["strict", "permissive", "locked"], "strict"
+    )
     print()
 
     # --- Output ---

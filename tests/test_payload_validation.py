@@ -10,7 +10,7 @@ from odoo_mcp.safety import (
 
 def _client_with_fields(fields: dict):
     client = MagicMock()
-    client.execute_kw.return_value = fields
+    client.execute_method.return_value = fields
     return client
 
 
@@ -106,4 +106,4 @@ def test_validator_uses_fields_cache():
     validate_payload_against_schema(
         client, "res.partner", "write", args=[[1], {"name": "B"}],
     )
-    assert client.execute_kw.call_count == 1
+    assert client.execute_method.call_count == 1

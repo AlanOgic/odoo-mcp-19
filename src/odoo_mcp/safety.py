@@ -157,6 +157,12 @@ _SIDE_EFFECT_PREFIXES: tuple[str, ...] = (
     "_action_",
 )
 
+# Modes whose classifier behaviour requires confirmation for unknown methods
+# and for batch (record_count > 1) MEDIUM operations. "locked" inherits the
+# "strict" classifier semantics in addition to its own profile-layer gates
+# (read_only, write_allowlist, validate_payloads).
+_STRICT_EQUIV: frozenset[str] = frozenset({"strict", "locked"})
+
 
 def is_side_effect_method(method: str) -> bool:
     """Return True if calling this method should be treated as a side effect.
@@ -374,8 +380,12 @@ def classify_operation(
                 cascade_warning=cascade_warning,
             )
 
-        # Strict mode: confirm if batch (record_count > 1)
-        if mode == "strict" and record_count is not None and record_count > 1:
+        # Modes treated as confirmation-required ("strict" semantics).
+        # Note: "locked" inherits "strict" classifier behaviour for unknown
+        # and batch operations (in addition to its own read_only / allowlist
+        # gates resolved at the profile layer).
+        # Strict and locked modes: confirm if batch (record_count > 1)
+        if mode in _STRICT_EQUIV and record_count is not None and record_count > 1:
             return SafetyClassification(
                 risk_level=RiskLevel.MEDIUM,
                 model=model,
@@ -401,7 +411,7 @@ def classify_operation(
         )
 
     # 6. Unknown methods → MEDIUM, confirmation depends on mode
-    requires_confirm = mode == "strict"
+    requires_confirm = mode in _STRICT_EQUIV
     return SafetyClassification(
         risk_level=RiskLevel.MEDIUM,
         model=model,

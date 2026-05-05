@@ -125,6 +125,32 @@ def test_warnings_empty_under_default_strict():
     assert profile.warnings == ()
 
 
+def test_warnings_flag_locked_with_read_only_disabled():
+    """Operator opting out of the primary kill-switch under locked mode
+    should see an explicit warning."""
+    profile = resolve({"MCP_SAFETY_MODE": "locked", "MCP_READ_ONLY": "false"})
+    assert any("MCP_READ_ONLY=false" in w for w in profile.warnings)
+
+
+def test_allowlist_drops_invalid_entries():
+    """Cross-model wildcards and malformed entries should be dropped with a
+    warning rather than silently stored. Odoo models are dotted (e.g.
+    'sale.order', 'product.product') — single-segment names are rejected."""
+    profile = resolve({
+        "MCP_WRITE_ALLOWLIST": "*.write,sale.order.action_confirm,nonsense, ,product.product.*",
+    })
+    # Valid entries remain.
+    assert "sale.order.action_confirm" in profile.write_allowlist
+    assert "product.product.*" in profile.write_allowlist
+    # Cross-model wildcard and bare junk are dropped.
+    assert "*.write" not in profile.write_allowlist
+    assert "nonsense" not in profile.write_allowlist
+    assert profile.write_allowlist == frozenset({
+        "sale.order.action_confirm",
+        "product.product.*",
+    })
+
+
 @pytest.mark.parametrize("raw,expected", [
     ("true", True), ("True", True), ("1", True), ("yes", True), ("on", True),
     ("false", False), ("False", False), ("0", False), ("no", False), ("off", False),

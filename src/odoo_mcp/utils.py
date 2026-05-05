@@ -449,10 +449,18 @@ def get_fields_for_model(client, model: str) -> dict:
             return cached[1]
 
     # Cache miss or expired — fetch fresh.
-    fields = client.execute_kw(model, "fields_get", [], {})
+    # Treat any exception (network failure, model-not-found, auth error) as
+    # an empty schema — the caller's pre-flight will refuse to issue a
+    # token without a verified field list, which is the safe behaviour.
+    try:
+        fields = client.execute_method(model, "fields_get")
+    except Exception as exc:
+        logger.warning("fields_get for %r failed: %s", model, exc)
+        return {}
 
-    if not fields:
-        # Don't cache an empty response — we don't want to remember a failure.
+    if not fields or not isinstance(fields, dict):
+        # Don't cache an empty (or unexpected non-dict) response — we don't
+        # want to remember a failure.
         return {}
 
     with _FIELDS_CACHE_LOCK:

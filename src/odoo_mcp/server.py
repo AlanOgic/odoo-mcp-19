@@ -251,8 +251,9 @@ def execute_method(
             success=False,
             error=(
                 f"read-only mode is active: '{method}' on '{model}' is a "
-                f"side-effect operation (set MCP_READ_ONLY=false or "
-                f"MCP_SAFETY_MODE=strict to enable writes)."
+                f"side-effect operation. Set MCP_READ_ONLY=false to enable "
+                f"writes (or change MCP_SAFETY_MODE away from 'locked' if "
+                f"MCP_READ_ONLY is not set explicitly)."
             ),
             execution_time_ms=int((time.time() - start_time) * 1000),
         )
@@ -599,8 +600,10 @@ async def batch_execute(
                     success=False,
                     error=(
                         f"read-only mode is active: batch contains side-effect "
-                        f"operation '{method}' on '{op.get('model', '?')}' "
-                        f"(set MCP_READ_ONLY=false or MCP_SAFETY_MODE=strict to enable writes)."
+                        f"operation '{method}' on '{op.get('model', '?')}'. "
+                        f"Set MCP_READ_ONLY=false to enable writes (or change "
+                        f"MCP_SAFETY_MODE away from 'locked' if MCP_READ_ONLY "
+                        f"is not set explicitly)."
                     ),
                     results=[],
                     total_operations=len(operations),
@@ -962,8 +965,10 @@ async def execute_workflow(
             success=False,
             error=(
                 f"read-only mode is active: workflow '{workflow}' is a "
-                f"multi-step action and is rejected under MCP_READ_ONLY=true "
-                f"(set MCP_READ_ONLY=false or MCP_SAFETY_MODE=strict to enable workflows)."
+                f"multi-step action and is rejected under MCP_READ_ONLY=true. "
+                f"Set MCP_READ_ONLY=false to enable workflows (or change "
+                f"MCP_SAFETY_MODE away from 'locked' if MCP_READ_ONLY is "
+                f"not set explicitly)."
             ),
         )
 

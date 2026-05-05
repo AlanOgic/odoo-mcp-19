@@ -63,5 +63,30 @@ def test_blocked_model_still_blocked_with_allowlist(monkeypatch):
     result = classify_operation("res.users", "write", args=[[1], {"name": "X"}])
     assert result.risk_level is RiskLevel.BLOCKED
     # The reason should still cite the security-critical model, not allowlist.
-    assert ("security-critical" in (result.blocked_reason or "").lower()
-            or "security-critical" in (result.reason or "").lower())
+    assert (
+        "security-critical" in (result.blocked_reason or "").lower()
+        or "security-critical" in (result.reason or "").lower()
+    )
+
+
+def test_locked_mode_unknown_method_requires_confirmation(monkeypatch):
+    """Under locked mode, an unknown method on a non-blocked model must
+    require confirmation (matches strict-mode classifier behaviour)."""
+    monkeypatch.setenv("MCP_SAFETY_MODE", "locked")
+    monkeypatch.setenv("MCP_READ_ONLY", "false")
+    monkeypatch.setenv("MCP_WRITE_ALLOWLIST", "res.partner.unknown_custom_method")
+    result = classify_operation("res.partner", "unknown_custom_method", args=[[1]])
+    assert result.requires_confirmation is True
+
+
+def test_locked_mode_batch_medium_requires_confirmation(monkeypatch):
+    """Under locked mode, MEDIUM batch operations (record_count > 1) must
+    require confirmation (matches strict-mode classifier behaviour)."""
+    monkeypatch.setenv("MCP_SAFETY_MODE", "locked")
+    monkeypatch.setenv("MCP_READ_ONLY", "false")
+    monkeypatch.setenv("MCP_WRITE_ALLOWLIST", "res.partner.create")
+    # create() with a list of dicts → batch
+    result = classify_operation(
+        "res.partner", "create", args=[[{"name": "A"}, {"name": "B"}]],
+    )
+    assert result.requires_confirmation is True
