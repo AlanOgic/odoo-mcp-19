@@ -110,6 +110,21 @@ execute_method("sale.order", "action_confirm", args_json='[[15]]',
     confirmed=True, confirmation_token='ymzyOtsZTDTJpKKysu_xWQ')
 ```
 
+### Locked mode (v1.15.0)
+
+`MCP_SAFETY_MODE=locked` adds four overlapping protections on top of the existing classifier and token gate:
+
+| Protection | Default under `locked` | Override |
+|---|---|---|
+| Global write kill-switch | on | `MCP_READ_ONLY=false` |
+| Side-effect allowlist enforced | on (empty list = no writes) | populate `MCP_WRITE_ALLOWLIST` |
+| HTTP bind | `127.0.0.1` | `MCP_HOST=0.0.0.0` |
+| Live `fields_get` payload pre-flight | on | `MCP_VALIDATE_PAYLOADS=false` |
+
+Each protection is independently overridable. Read `odoo://server-status` to see the resolved profile at runtime, including any foot-gun warnings.
+
+**Allowlist syntax**: `MCP_WRITE_ALLOWLIST="sale.order.action_confirm,res.partner.message_post,product.product.*"`. The wildcard matches any method on the named model. There is no `*.method` form (too easy to over-grant).
+
 Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py` to stderr at INFO+) when `MCP_SAFETY_AUDIT=true`. `MCP_SAFETY_MODE`, `MCP_SAFETY_AUDIT`, and `MCP_DEFAULT_CONTEXT` are read at call time, so reconfiguring after import (or `patch.dict(os.environ, …)` in tests) takes effect immediately.
 
 ## Configuration
@@ -122,10 +137,13 @@ Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py
 | `MCP_TRANSPORT` | No | `stdio` | Or `streamable-http` |
 | `MCP_API_KEY` | **Yes for HTTP** | — | Bearer token. Server `sys.exit(1)` without it in HTTP mode. |
 | `MCP_HOST` / `MCP_PORT` | No | `0.0.0.0` / `8080` | HTTP bind |
-| `MCP_SAFETY_MODE` | No | `strict` | Or `permissive` (only HIGH/BLOCKED confirm) |
+| `MCP_SAFETY_MODE` | No | `strict` | `permissive`, `strict`, or **`locked`** (new in v1.15.0). `locked` activates `MCP_READ_ONLY=true`, `MCP_WRITE_ALLOWLIST` enforcement, `MCP_HOST=127.0.0.1` default, and `MCP_VALIDATE_PAYLOADS=true`. |
 | `MCP_SAFETY_AUDIT` | No | — | `true` to log audit entries to stderr |
 | `MCP_DEFAULT_CONTEXT` | No | — | JSON merged into all op contexts. Max 4KB. e.g. `{"lang":"fr_FR"}` |
 | `MCP_BOOTSTRAP_MODELS` | No | `res.partner,sale.order,account.move,product.product,stock.picking` | Models for `odoo://session-bootstrap`. Max 20. |
+| `MCP_READ_ONLY` | No | derived from mode | `true` to globally reject all side-effect methods (writes, `action_*`, `button_*`). |
+| `MCP_WRITE_ALLOWLIST` | No | empty | Comma-separated `model.method` (or `model.*`) entries permitted as side effects. Enforced under `locked`, or explicitly via this var. |
+| `MCP_VALIDATE_PAYLOADS` | No | derived from mode | `true` to validate write payloads against live `fields_get` before issuing a confirmation token. |
 
 ## Tools (5)
 
@@ -150,6 +168,7 @@ Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py
 | `odoo://methods/{model}` | Live-enriched (signatures, return types, decorators) via `/doc-bearer/`; static fallback |
 | `odoo://model-limitations` | Known issues + runtime-detected problematic combos |
 | `odoo://domain-syntax` / `odoo://aggregation` / `odoo://pagination` / `odoo://hierarchical` | Reference docs |
+| `odoo://server-status` | Resolved safety profile, transport, host, allowlist, warnings. Non-secret. New in v1.15.0. |
 
 ## Key conventions
 

@@ -8,7 +8,9 @@ schema building, and issue tracking.
 import json
 import logging
 import re
+import threading
 import time
+from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -25,7 +27,6 @@ from .constants import (
     _RUNTIME_ISSUES_LOCK,
 )
 from .odoo_client import get_odoo_client
-
 
 # ----- Compact Schema Builder -----
 
@@ -62,8 +63,8 @@ def _strip_html(html_str: str) -> str:
     """Strip HTML tags and normalize whitespace for plain text display."""
     if not html_str:
         return ""
-    text = re.sub(r'<[^>]+>', '', html_str)
-    return ' '.join(text.split()).strip()
+    text = re.sub(r"<[^>]+>", "", html_str)
+    return " ".join(text.split()).strip()
 
 
 def _get_live_doc(model_name: str) -> Optional[Dict[str, Any]]:
@@ -116,7 +117,10 @@ def _detect_domain_pattern(domain: List, model: str = None) -> List[str]:
     domain_str = str(domain)
 
     # Detect dot notation (relational filters)
-    if "." in domain_str and any(f".{field}" in domain_str for field in ["id", "name", "code", "state", "type", "partner", "company", "user", "product", "location"]):
+    if "." in domain_str and any(
+        f".{field}" in domain_str
+        for field in ["id", "name", "code", "state", "type", "partner", "company", "user", "product", "location"]
+    ):
         patterns.append("dot_notation")
 
     # Detect complex OR conditions
@@ -139,7 +143,7 @@ def _detect_domain_pattern(domain: List, model: str = None) -> List[str]:
     if model == "stock.move.line":
         # picking_type_id with negative operators causes NotImplemented error
         if "picking_type_id" in domain_str:
-            if any(op in domain_str for op in ["'!='", "'not in'", "'not like'", "\"!=\"", "\"not in\""]):
+            if any(op in domain_str for op in ["'!='", "'not in'", "'not like'", '"!="', '"not in"']):
                 patterns.append("computed_field_negative_operator")
         # Deep related fields that cause issues
         if any(field in domain_str for field in ["product_category_name", "picking_code"]):
@@ -159,7 +163,7 @@ def _detect_problematic_fields(fields: List, model: str = None) -> List[str]:
         "stock.move.line": {
             "non_stored_computed": ["lots_visible", "allowed_uom_ids"],
             "deep_related": ["product_category_name", "picking_code"],
-            "computed_with_search": ["picking_type_id"]
+            "computed_with_search": ["picking_type_id"],
         }
     }
 
@@ -172,7 +176,9 @@ def _detect_problematic_fields(fields: List, model: str = None) -> List[str]:
     return problematic
 
 
-def _track_model_issue(model: str, method: str, error_msg: str, domain: List = None, fields: List = None) -> Dict[str, Any]:
+def _track_model_issue(
+    model: str, method: str, error_msg: str, domain: List = None, fields: List = None
+) -> Dict[str, Any]:
     """
     Track a model/method issue with error categorization and pattern detection.
     Returns analysis with suggested solutions.
@@ -187,11 +193,7 @@ def _track_model_issue(model: str, method: str, error_msg: str, domain: List = N
             RUNTIME_MODEL_ISSUES[model] = {}
 
         if method not in RUNTIME_MODEL_ISSUES[model]:
-            RUNTIME_MODEL_ISSUES[model][method] = {
-                "categories": {},
-                "first_seen": now,
-                "total_count": 0
-            }
+            RUNTIME_MODEL_ISSUES[model][method] = {"categories": {}, "first_seen": now, "total_count": 0}
 
         model_issues = RUNTIME_MODEL_ISSUES[model][method]
         model_issues["total_count"] += 1
@@ -203,7 +205,7 @@ def _track_model_issue(model: str, method: str, error_msg: str, domain: List = N
                 "count": 0,
                 "domain_patterns": {},
                 "sample_errors": [],
-                "solutions": ERROR_CATEGORIES[category]["solutions"]
+                "solutions": ERROR_CATEGORIES[category]["solutions"],
             }
 
         cat_info = model_issues["categories"][category]
@@ -260,7 +262,7 @@ def _track_model_issue(model: str, method: str, error_msg: str, domain: List = N
         "problematic_fields": problematic_fields,
         "solutions": ERROR_CATEGORIES[category]["solutions"],
         "model_specific_advice": model_specific_advice,
-        "occurrences": cat_info["count"]
+        "occurrences": cat_info["count"],
     }
 
 
@@ -330,16 +332,12 @@ def _get_module_knowledge_by_name(module_name: str) -> str:
     """Get specific module knowledge"""
     modules = MODULE_KNOWLEDGE.get("modules", {})
     if module_name in modules:
-        return json.dumps({
-            "module": module_name,
-            **modules[module_name]
-        }, indent=2)
+        return json.dumps({"module": module_name, **modules[module_name]}, indent=2)
     else:
         available = list(modules.keys())
-        return json.dumps({
-            "error": f"Module '{module_name}' not found in knowledge base",
-            "available_modules": available
-        }, indent=2)
+        return json.dumps(
+            {"error": f"Module '{module_name}' not found in knowledge base", "available_modules": available}, indent=2
+        )
 
 
 def _get_documentation_urls(target: str) -> str:
@@ -380,7 +378,7 @@ def _get_documentation_urls(target: str) -> str:
         "documentation": {},
         "github": {},
         "search_queries": [],
-        "special_methods": []
+        "special_methods": [],
     }
 
     # Get module documentation
@@ -425,3 +423,49 @@ def _get_documentation_urls(target: str) -> str:
             break
 
     return json.dumps(result, indent=2)
+
+
+# ----- Live fields_get cache (used by payload pre-flight) -----
+
+_FIELDS_CACHE: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
+_FIELDS_CACHE_LOCK = threading.Lock()
+_FIELDS_CACHE_TTL = 60  # seconds — shorter than _DOC_CACHE since model
+# schemas can change with module updates
+_FIELDS_CACHE_MAX = 100
+
+
+def get_fields_for_model(client, model: str) -> dict:
+    """Return the fields_get response for a model, with TTL+LRU caching.
+
+    Empty responses are NOT cached — they typically indicate a silently-failed
+    Odoo connection, and we don't want to grant a write token based on
+    'no fields exist therefore validation passes'.
+    """
+    now = time.time()
+    with _FIELDS_CACHE_LOCK:
+        cached = _FIELDS_CACHE.get(model)
+        if cached and (now - cached[0]) < _FIELDS_CACHE_TTL:
+            _FIELDS_CACHE.move_to_end(model)
+            return cached[1]
+
+    # Cache miss or expired — fetch fresh.
+    # Treat any exception (network failure, model-not-found, auth error) as
+    # an empty schema — the caller's pre-flight will refuse to issue a
+    # token without a verified field list, which is the safe behaviour.
+    try:
+        fields = client.execute_method(model, "fields_get")
+    except Exception as exc:
+        logger.warning("fields_get for %r failed: %s", model, exc)
+        return {}
+
+    if not fields or not isinstance(fields, dict):
+        # Don't cache an empty (or unexpected non-dict) response — we don't
+        # want to remember a failure.
+        return {}
+
+    with _FIELDS_CACHE_LOCK:
+        _FIELDS_CACHE[model] = (now, fields)
+        _FIELDS_CACHE.move_to_end(model)
+        while len(_FIELDS_CACHE) > _FIELDS_CACHE_MAX:
+            _FIELDS_CACHE.popitem(last=False)
+    return fields
