@@ -111,3 +111,34 @@ def test_bundle_reports_invalid_model_in_errors_not_silently_dropped():
     # The bad model must be surfaced, not silently omitted.
     assert "this.does.not.exist" in out["errors"]
     assert out["total"] == 1
+
+
+# ----- find-model (concept resolution) -----
+
+
+def test_find_model_exact_alias_still_resolves():
+    with patch.object(resources, "get_odoo_client", return_value=MagicMock()):
+        out = json.loads(resources.find_model_resource("invoice"))
+    assert out["best_match"] == "account.move"
+    assert out["source"] == "alias"
+
+
+def test_find_model_multiword_concept_tokenizes_to_known_aliases():
+    # "customer invoice" is not an exact alias nor a model substring, but both
+    # words are known aliases — the union must surface instead of no match.
+    with patch.object(resources, "get_odoo_client", return_value=MagicMock()):
+        out = json.loads(resources.find_model_resource("customer invoice"))
+    models = {m["model"] for m in out["all_matches"]}
+    assert "res.partner" in models
+    assert "account.move" in models
+    assert out["best_match"] is not None
+    assert out["source"] == "alias-token"
+
+
+def test_find_model_multiword_partial_match_still_resolves():
+    # Only one token is a known alias; that partial match beats no match.
+    with patch.object(resources, "get_odoo_client", return_value=MagicMock()):
+        out = json.loads(resources.find_model_resource("customer zzzznotareal"))
+    models = {m["model"] for m in out["all_matches"]}
+    assert "res.partner" in models
+    assert out["source"] == "alias-token"

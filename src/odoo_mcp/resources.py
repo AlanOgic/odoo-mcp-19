@@ -174,7 +174,7 @@ def get_model_fields_light(model_name: str) -> str:
 
 @mcp.resource(
     "odoo://model/{model_name}/quick-schema",
-    description="Ultra-compact schema (~1.5KB): short keys, no labels, no help. Best for token savings.",
+    description="Ultra-compact schema: short keys, no labels/help. ~60-80% smaller than /fields, best for tokens.",
 )
 def get_model_quick_schema(model_name: str) -> str:
     """Get ultra-compact schema for a model.
@@ -624,7 +624,7 @@ def get_resource_templates() -> str:
         "note": "Replace {param} with actual values when reading these resources",
         "templates": {
             "odoo://model/{model_name}/quick-schema": {
-                "description": "Ultra-compact schema (~1.5KB): short keys (t=type, req, ro, rel). Best for token savings.",
+                "description": "Ultra-compact schema: short keys (t/req/ro/rel). ~60-80% smaller than /fields.",
                 "example": "odoo://model/res.partner/quick-schema"
             },
             "odoo://model/{model_name}/workflow": {
@@ -1090,7 +1090,7 @@ def find_model_resource(concept: str) -> str:
     odoo_client = get_odoo_client()
     concept_lower = concept.lower().strip()
 
-    result = {
+    result: Dict[str, Any] = {
         "concept": concept,
         "best_match": None,
         "all_matches": [],
@@ -1104,6 +1104,24 @@ def find_model_resource(concept: str) -> str:
         result["all_matches"] = [{"model": m, "score": 100, "source": "alias"} for m in models]
         result["source"] = "alias"
         return json.dumps(result, indent=2)
+
+    # 1b. Token-based alias match for multi-word concepts ("customer invoice").
+    #     Each word is looked up independently so natural-language phrases still
+    #     resolve to the union of their known models instead of returning empty.
+    tokens = [t for t in re.split(r"[\s,/]+", concept_lower) if t]
+    if len(tokens) > 1:
+        seen: set[str] = set()
+        for token in tokens:
+            for model in CONCEPT_ALIASES.get(token, []):
+                if model not in seen:
+                    seen.add(model)
+                    result["all_matches"].append(
+                        {"model": model, "score": 85, "source": "alias-token", "matched": token}
+                    )
+        if result["all_matches"]:
+            result["best_match"] = result["all_matches"][0]["model"]
+            result["source"] = "alias-token"
+            return json.dumps(result, indent=2)
 
     # 2. Search ir.model by display name
     try:

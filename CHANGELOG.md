@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`odoo://find-model/{concept}` resolves multi-word concepts** — natural-language
+  phrases like `customer invoice` previously returned no match (the phrase was
+  neither an exact alias nor a model substring). The resolver now tokenizes the
+  concept and matches each word against the alias table, returning the union of
+  known models (e.g. `res.partner` + `account.move`) with `source: "alias-token"`.
+  Exact single- and multi-word aliases are unchanged.
+- **Schema size hints are now relative, not absolute** — `quick-schema` descriptions
+  (and the `_build_compact_schema` docstring / `read_resource` tool doc) dropped the
+  misleading `~1.5KB` figure in favor of "~60-80% smaller than /fields", since the
+  absolute size scales with the model's field count (e.g. `res.partner` ≈ 13 KB).
+
 ### Fixed
 - **Schema resources leaked a cryptic error on missing/invalid models** — the
   `odoo://model/{m}/quick-schema`, `/fields`, `/schema` and `odoo://bundle`

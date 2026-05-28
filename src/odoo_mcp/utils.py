@@ -37,7 +37,8 @@ def _build_compact_schema(fields: Dict[str, Any]) -> Dict[str, Any]:
     - fields: {name: {t, req?, ro?, rel?, sel?}} with short keys
     - required_fields: list of required field names (top-level for quick access)
 
-    This produces ~1.5-2KB vs 5-10KB for /fields, saving 60-80% tokens.
+    Typically 60-80% smaller than /fields (absolute size scales with the
+    model's field count).
     """
     compact = {}
     required = []

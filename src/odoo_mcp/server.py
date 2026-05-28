@@ -167,7 +167,7 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
     Smart limits: Default 100, Max 1000 records
 
     DISCOVERY RESOURCES (read these before querying):
-    - odoo://model/{model}/quick-schema - Compact field names & types (~1.5KB, best for token savings)
+    - odoo://model/{model}/quick-schema - Compact field names & types (densest form, best for token savings)
     - odoo://model/{model}/fields - Lightweight field list (e.g. odoo://model/res.partner/fields)
     - odoo://model/{model}/workflow - State machine transitions (e.g. odoo://model/sale.order/workflow)
     - odoo://bundle/{models} - Batch quick-schema for N models (e.g. odoo://bundle/res.partner,sale.order)
