@@ -21,6 +21,7 @@ from .constants import (
     TOOL_REGISTRY,
     _DEFAULT_BOOTSTRAP_MODELS,
     _RUNTIME_ISSUES_LOCK,
+    _validate_model,
 )
 from .odoo_client import get_odoo_client
 from .utils import (
@@ -31,6 +32,40 @@ from .utils import (
     _get_module_knowledge_by_name,
     _strip_html,
 )
+
+
+# ----- Internal helpers -----
+
+# Hint appended to model-resolution errors so agents know where to look next.
+_MODEL_LOOKUP_HINT = "Use odoo://models or odoo://find-model/{concept} to find the right model."
+
+
+def _fetch_model_fields(model_name: str) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
+    """Validate a model name and fetch its ``fields_get`` definition.
+
+    Returns ``(fields, None)`` on success or ``(None, error_dict)`` when the
+    name is malformed or the model does not exist / is inaccessible.
+
+    Centralizing this guard keeps the schema builders from ever receiving the
+    ``{"error": ...}`` sentinel that ``OdooClient.get_model_fields`` returns on
+    failure — feeding that sentinel into the builders previously leaked the
+    cryptic ``'str' object has no attribute 'get'`` (the error string was
+    iterated as if it were field metadata). The regex check also mirrors the
+    validation enforced on the tool path, which the resource path lacked.
+    """
+    err = _validate_model(model_name)
+    if err:
+        return None, {"error": err, "hint": _MODEL_LOOKUP_HINT}
+    fields = get_odoo_client().get_model_fields(model_name)
+    # get_model_fields returns {"error": "<msg>"} on failure. A real field can
+    # be named "error", but its value is always a dict, never a str — so an
+    # str-valued "error" key unambiguously identifies the failure sentinel.
+    if isinstance(fields, dict) and isinstance(fields.get("error"), str):
+        return None, {
+            "error": f"Model '{model_name}' not found or inaccessible: {fields['error']}",
+            "hint": _MODEL_LOOKUP_HINT,
+        }
+    return fields, None
 
 
 # ----- MCP Resources -----
@@ -69,10 +104,10 @@ def get_model_info(model_name: str) -> str:
 )
 def get_model_schema(model_name: str) -> str:
     """Get comprehensive schema information for a model"""
-    odoo_client = get_odoo_client()
+    fields, error = _fetch_model_fields(model_name)
+    if fields is None:
+        return json.dumps(error, indent=2)
     try:
-        fields = odoo_client.get_model_fields(model_name)
-
         schema = {
             "model": model_name,
             "fields": fields,
@@ -114,11 +149,12 @@ def get_model_fields_light(model_name: str) -> str:
 
     Returns only essential info per field: type, label, required flag,
     relation model (for relational fields), and selection values.
-    Much smaller than /schema (~5-10KB vs 300KB).
+    Much smaller than /schema; use /quick-schema for the densest form.
     """
-    odoo_client = get_odoo_client()
+    fields, error = _fetch_model_fields(model_name)
+    if fields is None:
+        return json.dumps(error, indent=2)
     try:
-        fields = odoo_client.get_model_fields(model_name)
         light = {}
         for name, meta in fields.items():
             entry = {
@@ -144,11 +180,12 @@ def get_model_quick_schema(model_name: str) -> str:
     """Get ultra-compact schema for a model.
 
     Returns minimal field info with short keys (t=type, req=required, ro=readonly, rel=relation).
-    No indentation, no labels, no help text. ~60-80% smaller than /fields.
+    No indentation, no labels, no help text. Typically 60-80% smaller than /fields.
     """
-    odoo_client = get_odoo_client()
+    fields, error = _fetch_model_fields(model_name)
+    if fields is None:
+        return json.dumps(error)
     try:
-        fields = odoo_client.get_model_fields(model_name)
         schema = _build_compact_schema(fields)
         schema["model"] = model_name
         schema["field_count"] = len(schema["fields"])
@@ -242,7 +279,6 @@ def get_bundle(models_csv: str) -> str:
     Schema fetches run in parallel (one thread per model, capped at 10) so
     bundle latency is bounded by the slowest fetch, not their sum.
     """
-    odoo_client = get_odoo_client()
     model_names = [m.strip() for m in models_csv.split(",") if m.strip()]
     if len(model_names) > 10:
         return json.dumps({"error": "Maximum 10 models per bundle request", "requested": len(model_names)})
@@ -250,19 +286,21 @@ def get_bundle(models_csv: str) -> str:
     bundle: Dict[str, Any] = {"models": {}, "errors": {}}
 
     def _fetch(name: str) -> tuple[str, Any]:
+        fields, error = _fetch_model_fields(name)
+        if fields is None:
+            return name, error
         try:
-            fields = odoo_client.get_model_fields(name)
             schema = _build_compact_schema(fields)
             schema["field_count"] = len(schema["fields"])
             return name, schema
         except Exception as exc:
-            return name, exc
+            return name, {"error": str(exc)}
 
     if model_names:
         with ThreadPoolExecutor(max_workers=min(len(model_names), 10)) as executor:
             for name, payload in executor.map(_fetch, model_names):
-                if isinstance(payload, Exception):
-                    bundle["errors"][name] = str(payload)
+                if isinstance(payload, dict) and "error" in payload and "fields" not in payload:
+                    bundle["errors"][name] = payload["error"]
                 else:
                     bundle["models"][name] = payload
 
