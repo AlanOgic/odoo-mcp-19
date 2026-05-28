@@ -5,6 +5,144 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Schema resources leaked a cryptic error on missing/invalid models** — the
+  `odoo://model/{m}/quick-schema`, `/fields`, `/schema` and `odoo://bundle`
+  resources fed the `get_model_fields` error sentinel straight into the schema
+  builders when a model was absent or its name malformed, surfacing the
+  internal `'str' object has no attribute 'get'` instead of an actionable
+  message. The resource path also skipped the model-name regex enforced on the
+  tool path. A shared `_fetch_model_fields()` helper now validates the name via
+  `_validate_model` and detects the sentinel before the builders run, returning
+  a clear "model not found / invalid format" message with a lookup hint;
+  `bundle` reports the bad model in its `errors` map with the same clean
+  message. Covered by new `tests/test_resources.py` (6 unit tests, no live
+  Odoo required).
+
+## [1.14.0] - 2026-05-05
+
+### Added
+- **Token-based safety confirmation** — the safety gate now issues a single-use,
+  120-second, operation-bound `confirmation_token` (cryptographic nonce) with each
+  pending confirmation. The confirmation re-call must present a matching token via the
+  new `confirmation_token` parameter; `confirmed=true` alone no longer bypasses the gate.
+  Applied to all three gates: `execute_method`, `batch_execute`, `execute_workflow`.
+- **Payload-digest token binding** — tokens are bound to a SHA-256 digest over the
+  deterministic JSON of the operation payload (`_payload_digest()`), not just
+  `(model, method)`. The confirmation re-call must reproduce the exact same args/kwargs
+  seen at issue time, closing argument-substitution attacks (e.g. obtaining a token for
+  `unlink([1])` then re-calling with `unlink([1..1000])`). Digest covers post-`resolve_json`,
+  post-context-merge `{args, kwargs}` for `execute_method`, the full ops list for
+  `batch_execute`, and the params dict for `execute_workflow`.
+- **Verbose startup banner** — `_print_startup_banner()` prints a slant-ASCII startup
+  card to **stderr** at boot (version, transport, masked credentials, safety mode, DX
+  defaults, capability counts). Gated by `MCP_VERBOSE` (default `true`, both transports).
+  Secrets masked to first 4 chars. No protocol changes (stdout stays clean).
+- **Live integration tests** — `tests/live/test_safety_live.py` and
+  `tests/live/test_v1110_live.py` (script-style runners, not pytest-collected).
+- **Unit tests** — `tests/test_token_gate.py` covering happy path, single-use, TTL expiry,
+  model/method/digest mismatch, and the argument-substitution attack vectors.
+
+### Fixed
+- **CRITICAL: `resolve_json` bypassed `BLOCKED_MODELS`** — the `target_model` in
+  `resolve_json` was passed to `name_search` without validation, allowing reads from
+  `ir.config_parameter`, `res.users`, `ir.rule`, etc. Now validated against the model
+  regex **and** `BLOCKED_MODELS` before execution.
+- **CRITICAL: stateless safety confirmation** — an agent could pass `confirmed=true` on
+  the first call, skipping the gate entirely. Fixed by the token gate above.
+- Read safety env vars (`MCP_SAFETY_MODE`, `MCP_SAFETY_AUDIT`, `MCP_DEFAULT_CONTEXT`) at
+  call time so reconfiguration after import takes effect immediately.
+
+### Changed
+- **Blocked models expanded** — added `ir.model`, `ir.model.fields`, `res.groups`
+  (now 8 total).
+- Adopted the `logging` module for audit/diagnostic output (`odoo_mcp.safety` logger).
+
+### Performance
+- Faster resource dispatch and parallelized bundle/bootstrap fetches.
+
+### Refactor
+- **Split `server.py` (3762 → ~1226 lines) into 12 focused modules** with zero logic
+  changes: `app.py`, `constants.py`, `models.py`, `utils.py`, `resources.py`,
+  `prompts.py` extracted alongside the existing `server.py`, `odoo_client.py`,
+  `arg_mapping.py`, `safety.py`, `__main__.py`. Import order matters — `app.py` binds the
+  `mcp` decorator first so the resource/prompt/tool handlers register on import.
+
+## [1.13.0] - 2026-04-10
+
+### Added
+- **Security hardening**: mandatory HTTP auth (`sys.exit(1)` if `MCP_API_KEY` unset in
+  HTTP mode), input validation (model/method regex, URI-scheme guard), sanitized error
+  responses (Odoo `debug` tracebacks never forwarded to clients), non-root Docker user
+  (UID 1001), `--env-file` for secrets.
+- **Thread safety**: singleton `OdooClient` with double-checked locking; `threading.Lock`
+  on `_DOC_CACHE` (100-entry LRU) and `RUNTIME_MODEL_ISSUES`.
+- **Resource limits**: `MCP_DEFAULT_CONTEXT` capped at 4 KB; `MCP_BOOTSTRAP_MODELS` capped
+  at 20 models.
+
+### Fixed
+- `ValueError` self-catch in error parsing.
+- Unbound `method_info` referenced outside its `for` loop.
+- `batch_execute` missing type checks on `args`/`kwargs`.
+- Improved error guidance for relational writes, dates, and state changes.
+- Skip the `X-Odoo-Database` header for Odoo.com SaaS instances (#1).
+
+### Changed
+- **Dependencies**: `fastmcp>=3.2.0`, `requests>=2.32.4` (CVE fix).
+
+## [1.12.0] - 2026-03-10
+
+### Changed
+- **FastMCP SDK upgrade 3.0.0b1 → 3.1.0** — providers, transforms, component versioning,
+  OpenTelemetry, and MultiAuth support.
+
+### Added
+- HTTP transport in Docker Compose, setup wizard coverage, and docs.
+
+### Fixed
+- Inconsistent lifespan context access in `execute_method` — now uses
+  `get_odoo_client()`.
+
+## [1.11.0] - 2026-02-12
+
+### Added
+- `odoo://model/{model}/quick-schema` — ultra-compact schema (~1.5 KB, 60–80% smaller,
+  short keys `t`/`req`/`ro`/`rel`).
+- `odoo://bundle/{models}` — batch quick-schema for up to 10 models in one call.
+- `odoo://session-bootstrap` — one-call kickoff with schemas + workflows for
+  `MCP_BOOTSTRAP_MODELS`.
+- `odoo://model/{model}/workflow` — state machines for 6 models with transitions and
+  side effects.
+- `resolve_json` parameter on `execute_method` for Many2one name→ID auto-resolution.
+- `MCP_DEFAULT_CONTEXT` env var merged into all operation contexts.
+
+### Changed
+- Expanded error patterns from ~5 to ~25, with `{model}` template substitution.
+
+### Fixed
+- Preserve context through the `search_read` → `search`+`read` fallback.
+
+## [1.10.0] - 2026-02-11
+
+### Added
+- **Pre-execution safety classification layer** (`safety.py`, zero FastMCP dependency) —
+  classifies every operation as `SAFE` / `MEDIUM` / `HIGH` / `BLOCKED` before execution.
+  - **Blocked models** (writes refused): `ir.rule`, `ir.model.access`, `ir.module.module`,
+    `ir.config_parameter`, `res.users`.
+  - **Sensitive models** (writes confirm): `account.move`, `account.payment`,
+    `account.bank.statement`, `hr.payslip`, `ir.cron`.
+  - **Cascade warnings** for known side effects (`action_confirm`, `action_post`,
+    `button_validate`).
+  - `confirmed=true` parameter on `execute_method`, `batch_execute`, `execute_workflow`.
+  - Audit logging to stderr via `MCP_SAFETY_AUDIT=true`.
+- `read_resource` tool — bridge for clients (e.g. Claude Desktop) without resource-template
+  support.
+- Live `/doc-bearer/` enrichment for `odoo://methods/{model}` (signatures, return types,
+  decorators) with static fallback.
+- Lightweight `odoo://model/{model}/fields` resource and improved resource discoverability.
+
 ## [1.9.0] - 2026-02-02
 
 ### Added

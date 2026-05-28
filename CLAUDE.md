@@ -122,6 +122,7 @@ Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py
 | `MCP_TRANSPORT` | No | `stdio` | Or `streamable-http` |
 | `MCP_API_KEY` | **Yes for HTTP** | — | Bearer token. Server `sys.exit(1)` without it in HTTP mode. |
 | `MCP_HOST` / `MCP_PORT` | No | `0.0.0.0` / `8080` | HTTP bind |
+| `MCP_VERBOSE` | No | `true` | Slant-ASCII startup banner (version, transport, masked creds, safety mode, capability counts). Writes to **stderr** only, so STDIO's stdout stays protocol-clean. Set `false` to silence. |
 | `MCP_SAFETY_MODE` | No | `strict` | Or `permissive` (only HIGH/BLOCKED confirm) |
 | `MCP_SAFETY_AUDIT` | No | — | `true` to log audit entries to stderr |
 | `MCP_DEFAULT_CONTEXT` | No | — | JSON merged into all op contexts. Max 4KB. e.g. `{"lang":"fr_FR"}` |
