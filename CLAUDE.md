@@ -16,6 +16,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install (editable + dev deps)
 pip install -e ".[dev]"
 
+# Install published package (production path — also installs the `odoo-mcp-19` console entry point)
+pip install odoo-mcp-19
+
 # Run server — STDIO (default); loads .env from cwd
 python -m odoo_mcp
 
@@ -26,7 +29,7 @@ MCP_TRANSPORT=streamable-http MCP_API_KEY=<token> python -m odoo_mcp
 python -m odoo_mcp --setup
 
 # Tests — unit (no Odoo needed)
-pytest tests/test_safety.py tests/test_token_gate.py
+pytest tests/test_safety.py tests/test_token_gate.py tests/test_resources.py
 pytest tests/test_safety.py::TestClassifyOperation::test_safe_methods_are_safe   # single test
 
 # Tests — live (requires .env with real Odoo creds; script-style runners)
@@ -45,7 +48,7 @@ docker compose up -d           # uses .env, requires MCP_API_KEY
 
 Note: live tests under `tests/live/` are **script-style runners**, not pytest modules — invoke them directly with `python`. They mutate environment state.
 
-- **Unit (no Odoo)**: `tests/test_safety.py`, `tests/test_token_gate.py` — run with `pytest`.
+- **Unit (no Odoo)**: `tests/test_safety.py`, `tests/test_token_gate.py`, `tests/test_resources.py` (patches `get_odoo_client` with a stub — pins resource-layer validation/error handling) — run with `pytest`.
 - **Live (need `.env`)**: anything under `tests/live/` — run with `python <file>`, not pytest.
 
 ## High-level architecture
