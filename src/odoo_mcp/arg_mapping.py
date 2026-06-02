@@ -7,7 +7,6 @@ This module provides mapping from positional args to named args.
 
 from typing import Any
 
-
 # Mapping of ORM method arguments from positional to named
 # Format: method_name -> list of (arg_position, v2_param_name)
 V2_ARG_MAPPING: dict[str, list[tuple[int, str]]] = {
@@ -21,7 +20,6 @@ V2_ARG_MAPPING: dict[str, list[tuple[int, str]]] = {
     "search_count": [
         (0, "domain"),
     ],
-
     # Read methods
     "read": [
         (0, "ids"),
@@ -38,7 +36,6 @@ V2_ARG_MAPPING: dict[str, list[tuple[int, str]]] = {
         (1, "groupby"),
         (2, "aggregates"),
     ],
-
     # Write methods
     # v2 API uses vals_list (array of dicts) for create
     "create": [
@@ -51,7 +48,6 @@ V2_ARG_MAPPING: dict[str, list[tuple[int, str]]] = {
     "unlink": [
         (0, "ids"),
     ],
-
     # Name methods
     "name_get": [
         (0, "ids"),
@@ -62,18 +58,15 @@ V2_ARG_MAPPING: dict[str, list[tuple[int, str]]] = {
     "name_create": [
         (0, "name"),
     ],
-
     # Field methods
     "fields_get": [],
     "default_get": [
         (0, "fields_list"),
     ],
-
-    # Copy/duplicate
+    # Copy/duplicate — runs on a recordset, so the selector belongs in "ids".
     "copy": [
-        (0, "id"),
+        (0, "ids"),
     ],
-
     # Check methods
     "check_access_rights": [
         (0, "operation"),
@@ -85,7 +78,6 @@ V2_ARG_MAPPING: dict[str, list[tuple[int, str]]] = {
     "has_access": [
         (0, "operation"),
     ],
-
     # Export/Import
     "export_data": [
         (0, "fields_to_export"),
@@ -94,20 +86,20 @@ V2_ARG_MAPPING: dict[str, list[tuple[int, str]]] = {
         (0, "fields"),
         (1, "data"),
     ],
-
-    # Action methods (common in Odoo)
-    "action_confirm": [],
-    "action_cancel": [],
-    "action_done": [],
-    "action_draft": [],
-    "action_validate": [],
-    "action_post": [],
-
-    # Workflow methods
-    "button_confirm": [],
-    "button_cancel": [],
-    "button_draft": [],
-    "button_validate": [],
+    # Action methods (common in Odoo). These run on a recordset, so the leading
+    # [ids] argument must be forwarded as the JSON-2 body "ids" key — otherwise
+    # the call executes against an empty recordset.
+    "action_confirm": [(0, "ids")],
+    "action_cancel": [(0, "ids")],
+    "action_done": [(0, "ids")],
+    "action_draft": [(0, "ids")],
+    "action_validate": [(0, "ids")],
+    "action_post": [(0, "ids")],
+    # Workflow methods (same recordset semantics as the action methods above).
+    "button_confirm": [(0, "ids")],
+    "button_cancel": [(0, "ids")],
+    "button_draft": [(0, "ids")],
+    "button_validate": [(0, "ids")],
 }
 
 
@@ -125,11 +117,7 @@ V2_KWARGS_MAPPING: dict[str, str] = {
 }
 
 
-def convert_args_to_v2(
-    method: str,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any]
-) -> dict[str, Any]:
+def convert_args_to_v2(method: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
     """
     Convert positional arguments to named arguments for v2 API.
 
@@ -145,11 +133,21 @@ def convert_args_to_v2(
 
     # Get mapping for this method
     arg_mapping = V2_ARG_MAPPING.get(method, [])
+    mapped_positions = {pos for pos, _ in arg_mapping}
 
     # Convert positional args
     for pos, param_name in arg_mapping:
         if pos < len(args):
             result[param_name] = args[pos]
+
+    # Fallback for record-bound methods not in the table (e.g. action_set_won,
+    # convert_opportunity): JSON-2 requires the recordset in the body "ids" key.
+    # When position 0 isn't explicitly mapped and the leading arg looks like a
+    # recordset (a list of record ids), route it to "ids" so it isn't dropped.
+    if 0 not in mapped_positions and args:
+        first = args[0]
+        if isinstance(first, list) and all(isinstance(x, int) for x in first):
+            result["ids"] = first
 
     # Convert kwargs (handle any name changes)
     for k, v in kwargs.items():
@@ -157,9 +155,9 @@ def convert_args_to_v2(
         result[v2_name] = v
 
     # Ensure domain exists for search methods
-    if method in ['search', 'search_read', 'search_count']:
-        if 'domain' not in result:
-            result['domain'] = []
+    if method in ["search", "search_read", "search_count"]:
+        if "domain" not in result:
+            result["domain"] = []
 
     return result
 
