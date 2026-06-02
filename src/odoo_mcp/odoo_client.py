@@ -69,7 +69,7 @@ class OdooClient:
         # Setup session
         self.session = requests.Session()
         self.session.verify = verify_ssl
-        self.session.headers['Content-Type'] = 'application/json'
+        self.session.headers["Content-Type"] = "application/json"
 
         # Lift the default per-host connection pool from 10 to 20. Bundle and
         # session-bootstrap fan out up to 10 concurrent fetches; without this,
@@ -84,10 +84,19 @@ class OdooClient:
         hostname_lower = (parsed_url.hostname or "").lower()
         is_odoo_saas = hostname_lower.endswith(".odoo.com") or hostname_lower == "odoo.com"
         if db and not is_odoo_saas:
-            self.session.headers['X-Odoo-Database'] = db
+            self.session.headers["X-Odoo-Database"] = db
 
-        if api_key:
-            self.session.headers['Authorization'] = f'Bearer {api_key}'
+        # JSON-2 authenticates with a bearer API key only — login/password auth
+        # was removed in the v2 API. Always send the credential we have as the
+        # bearer token (api_key preferred, else the password value). Without a
+        # header, requests went out unauthenticated and failed opaquely.
+        self.session.headers["Authorization"] = f"Bearer {self.auth_credential}"
+        if not api_key and password:
+            logger.warning(
+                "Authenticating with ODOO_PASSWORD as a bearer token. The Odoo 19 "
+                "JSON-2 API only accepts API keys — set ODOO_API_KEY to a valid key. "
+                "A login password will be rejected by Odoo with HTTP 401."
+            )
 
         self._warn_insecure_ssl()
 
@@ -130,8 +139,8 @@ class OdooClient:
             if response.status_code >= 400:
                 try:
                     error_body = response.json()
-                    odoo_error = error_body.get('message', '') or error_body.get('name', '')
-                    odoo_debug = error_body.get('debug', '')
+                    odoo_error = error_body.get("message", "") or error_body.get("name", "")
+                    odoo_debug = error_body.get("debug", "")
                     # Build informative error message
                     parts = [f"Request failed: {response.status_code} {response.reason} for url: {response.url}"]
                     if odoo_error:
@@ -144,12 +153,11 @@ class OdooClient:
                     # If we can't parse the error body, fall back to raise_for_status
                     response.raise_for_status()
 
-            result = response.json()
-
-            # Handle wrapped response format
-            if isinstance(result, dict) and 'result' in result:
-                return result['result']
-            return result
+            # JSON-2 returns the bare serialized return value in the body —
+            # there is no {"result": ...} envelope (that was the legacy /jsonrpc
+            # convention). Unwrapping a "result" key would corrupt any method
+            # that legitimately returns a dict containing one.
+            return response.json()
 
         except requests.exceptions.Timeout as e:
             raise TimeoutError(f"Request timeout after {self.timeout}s: {e}")
@@ -173,9 +181,7 @@ class OdooClient:
 
             return {
                 "model_names": models,
-                "models_details": {
-                    rec["model"]: {"name": rec.get("name", "")} for rec in result
-                },
+                "models_details": {rec["model"]: {"name": rec.get("name", "")} for rec in result},
             }
         except Exception as e:
             logger.error("Error retrieving models: %s", e)
@@ -231,7 +237,7 @@ class OdooClient:
         fields: list[str] | None = None,
         offset: int | None = None,
         limit: int | None = None,
-        order: str | None = None
+        order: str | None = None,
     ) -> list[dict[str, Any]]:
         """Search and read records in one call."""
         kwargs: dict[str, Any] = {}
@@ -246,12 +252,7 @@ class OdooClient:
 
         return self._execute(model_name, "search_read", domain, **kwargs)
 
-    def read_records(
-        self,
-        model_name: str,
-        ids: list[int],
-        fields: list[str] | None = None
-    ) -> list[dict[str, Any]]:
+    def read_records(self, model_name: str, ids: list[int], fields: list[str] | None = None) -> list[dict[str, Any]]:
         """Read records by IDs."""
         kwargs: dict[str, Any] = {}
         if fields is not None:
