@@ -10,7 +10,7 @@ import os
 import re
 import threading
 import urllib.parse
-from typing import Any
+from typing import Any, cast
 
 import requests
 from dotenv import load_dotenv
@@ -198,14 +198,14 @@ class OdooClient:
             )
             if not result:
                 return {"error": f"Model {model_name} not found"}
-            return result[0]
+            return cast(dict[str, Any], result[0])
         except Exception as e:
             return {"error": str(e)}
 
     def get_model_fields(self, model_name: str) -> dict[str, Any]:
         """Get field definitions for a model."""
         try:
-            return self._execute(model_name, "fields_get")
+            return cast(dict[str, Any], self._execute(model_name, "fields_get"))
         except Exception as e:
             return {"error": str(e)}
 
@@ -224,8 +224,8 @@ class OdooClient:
             data = response.json()
             # JSON-2 may wrap in {"result": ...} or return directly
             if isinstance(data, dict) and "result" in data and isinstance(data["result"], dict):
-                return data["result"]
-            return data
+                return cast(dict[str, Any], data["result"])
+            return cast("dict[str, Any] | None", data)
         except Exception as e:
             logger.debug("get_model_doc failed for %s: %s: %s", model_name, type(e).__name__, e)
             return None
@@ -250,14 +250,14 @@ class OdooClient:
         if order is not None:
             kwargs["order"] = order
 
-        return self._execute(model_name, "search_read", domain, **kwargs)
+        return cast("list[dict[str, Any]]", self._execute(model_name, "search_read", domain, **kwargs))
 
     def read_records(self, model_name: str, ids: list[int], fields: list[str] | None = None) -> list[dict[str, Any]]:
         """Read records by IDs."""
         kwargs: dict[str, Any] = {}
         if fields is not None:
             kwargs["fields"] = fields
-        return self._execute(model_name, "read", ids, **kwargs)
+        return cast("list[dict[str, Any]]", self._execute(model_name, "read", ids, **kwargs))
 
 
 def load_config() -> dict[str, str]:
@@ -300,7 +300,7 @@ def load_config() -> dict[str, str]:
             logger.info("Loading config from: %s", path)
             try:
                 with open(path, "r") as f:
-                    return json.load(f)
+                    return cast(dict[str, str], json.load(f))
             except json.JSONDecodeError as e:
                 raise ValueError(f"Invalid JSON in config file {path}: {e}") from e
 
