@@ -101,7 +101,7 @@ def _generate_claude_desktop(config: dict) -> str:
             "env": _build_env_dict(config),
         }
 
-    return json.dumps({"mcpServers": {"odoo19": server}}, indent=2)
+    return json.dumps({"mcpServers": {"odoo19-mcp": server}}, indent=2)
 
 
 def run_setup_wizard():

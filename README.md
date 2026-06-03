@@ -118,6 +118,11 @@ Edit your Claude Desktop configuration file:
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
+> **Server name:** register this server as `odoo19-mcp` (the name the `--setup`
+> wizard generates and the one used in every example below). The companion
+> Cyanview skills assume this name in their `allowed-tools`, so a different name
+> means those skills won't be permitted to call the server's tools.
+
 ### Using Docker (recommended)
 
 **Method 1: Using `run-docker.sh` wrapper (simplest)**
@@ -127,7 +132,7 @@ Create a `.env` file in the project root with your credentials, then:
 ```json
 {
   "mcpServers": {
-    "odoo": {
+    "odoo19-mcp": {
       "command": "/path/to/odoo-mcp-19/run-docker.sh"
     }
   }
@@ -139,7 +144,7 @@ Create a `.env` file in the project root with your credentials, then:
 ```json
 {
   "mcpServers": {
-    "odoo": {
+    "odoo19-mcp": {
       "command": "docker",
       "args": ["run", "--rm", "-i",
         "-e", "ODOO_URL=https://your-instance.odoo.com",
@@ -158,7 +163,7 @@ Create a `.env` file in the project root with your credentials, then:
 ```json
 {
   "mcpServers": {
-    "odoo": {
+    "odoo19-mcp": {
       "command": "/path/to/odoo-mcp-19/.venv/bin/python",
       "args": ["-m", "odoo_mcp"],
       "env": {
@@ -177,7 +182,7 @@ Create a `.env` file in the project root with your credentials, then:
 ```json
 {
   "mcpServers": {
-    "odoo": {
+    "odoo19-mcp": {
       "command": "odoo-mcp-19",
       "env": {
         "ODOO_URL": "https://your-instance.odoo.com",
@@ -403,7 +408,7 @@ docker run -d -p 8080:8080 \
 ```json
 {
   "mcpServers": {
-    "odoo": {
+    "odoo19-mcp": {
       "type": "streamable-http",
       "url": "http://localhost:8080/mcp",
       "headers": {
