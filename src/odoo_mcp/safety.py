@@ -62,7 +62,6 @@ BLOCKED_MODELS = frozenset({
     "ir.module.module",
     "ir.config_parameter",
     "ir.model",
-    "ir.model.fields",
     "res.users",
     "res.groups",
 })
@@ -73,6 +72,10 @@ SENSITIVE_MODELS = frozenset({
     "account.bank.statement",
     "hr.payslip",
     "ir.cron",
+    # Studio-style schema customization: creating/editing custom fields is
+    # allowed but always requires explicit confirmation (token gate), in both
+    # strict and permissive modes. Whole-model changes (ir.model) stay BLOCKED.
+    "ir.model.fields",
 })
 
 

@@ -29,8 +29,9 @@ MCP_TRANSPORT=streamable-http MCP_API_KEY=<token> python -m odoo_mcp
 python -m odoo_mcp --setup
 
 # Tests — unit (no Odoo needed)
-pytest tests/test_safety.py tests/test_token_gate.py tests/test_resources.py
+pytest tests/test_safety.py tests/test_token_gate.py tests/test_resources.py tests/test_arg_mapping.py tests/test_odoo_client.py
 pytest tests/test_safety.py::TestClassifyOperation::test_safe_methods_are_safe   # single test
+# Note: bare `pytest tests/` also collects tests/live/ (test_*_live.py) — those need .env and mutate env state. List unit files explicitly.
 
 # Tests — live (requires .env with real Odoo creds; script-style runners)
 python tests/live/test_safety_live.py
@@ -48,7 +49,7 @@ docker compose up -d           # uses .env, requires MCP_API_KEY
 
 Note: live tests under `tests/live/` are **script-style runners**, not pytest modules — invoke them directly with `python`. They mutate environment state.
 
-- **Unit (no Odoo)**: `tests/test_safety.py`, `tests/test_token_gate.py`, `tests/test_resources.py` (patches `get_odoo_client` with a stub — pins resource-layer validation/error handling) — run with `pytest`.
+- **Unit (no Odoo)**: `tests/test_safety.py`, `tests/test_token_gate.py`, `tests/test_resources.py` (patches `get_odoo_client` with a stub — pins resource-layer validation/error handling), `tests/test_arg_mapping.py` (positional → JSON-2 named-arg conversion contract), `tests/test_odoo_client.py` (bearer auth + no `result`-envelope unwrap, mock-based) — run with `pytest`.
 - **Live (need `.env`)**: anything under `tests/live/` — run with `python <file>`, not pytest.
 
 ## High-level architecture
@@ -99,8 +100,8 @@ src/odoo_mcp/
 | `HIGH` | Always confirm |
 | `BLOCKED` | Always refuse |
 
-- **BLOCKED_MODELS** (writes always refused): `ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `ir.model.fields`, `res.users`, `res.groups`. The `resolve_json` parameter also rejects these as targets — agents cannot use it to read security-critical data.
-- **SENSITIVE_MODELS** (writes always confirm): `account.move`, `account.payment`, `account.bank.statement`, `hr.payslip`, `ir.cron`.
+- **BLOCKED_MODELS** (writes always refused): `ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `res.users`, `res.groups`. The `resolve_json` parameter also rejects these as targets — agents cannot use it to read security-critical data.
+- **SENSITIVE_MODELS** (writes always confirm, both modes): `account.move`, `account.payment`, `account.bank.statement`, `hr.payslip`, `ir.cron`, `ir.model.fields`. The last enables Studio-style custom-field creation/editing — allowed but always token-gated; whole-model changes (`ir.model`) remain BLOCKED.
 - **Cascade warnings** are surfaced for: `sale.order.action_confirm` (creates deliveries), `account.move.action_post` (irreversible journal entries), `stock.picking.button_validate` (stock changes), `purchase.order.button_confirm` (incoming receipts), `account.payment.action_post` (journal + reconciliation).
 - **Token gate** (v1.14.0): `_issue_confirmation_token()` issues a single-use, 120s-TTL nonce bound to `(model, method, payload_digest)` — a SHA-256 over the deterministic JSON of the operation payload. The confirmation re-call must reproduce the *exact same args/kwargs* the gate saw at issue time, so an agent can't get a token for `unlink([1])` and then re-call with `unlink([1,2,…,1000])`. Digest covers `{"args": args, "kwargs": kwargs}` post-`resolve_json` and post-context-merge for `execute_method`, the full ops list for `batch_execute`, and the params dict for `execute_workflow`.
 
