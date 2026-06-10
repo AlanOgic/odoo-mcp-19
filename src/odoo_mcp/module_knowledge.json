@@ -71,7 +71,10 @@
     },
     "deprecation_notice": {
       "deprecated": ["/xmlrpc", "/xmlrpc/2", "/jsonrpc"],
-      "removal": "Odoo 20 (fall 2026)",
+      "removal": {
+        "db_service": "Removed — Odoo 20 (fall 2026) / Online 19.1 (winter 2025)",
+        "common_and_object_services": "Odoo 22 (fall 2028) / Online 21.1 (winter 2027)"
+      },
       "replacement": "JSON-2 API at /json/2/"
     },
     "documentation_endpoint": {
