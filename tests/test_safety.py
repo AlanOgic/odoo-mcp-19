@@ -82,6 +82,18 @@ class TestBlockedModels:
         result = classify_operation("ir.rule", "write", [[1], {}])
         assert result.risk_level == RiskLevel.BLOCKED
 
+    @pytest.mark.parametrize("method", ["generate", "revoke"])
+    def test_api_key_management_is_blocked(self, method):
+        """Odoo 19.1+ programmatic API-key methods on res.users.apikeys must be
+        BLOCKED — minting a key is a persistent privilege escalation."""
+        result = classify_operation(
+            "res.users.apikeys",
+            method,
+            [{"scope": None, "name": "x", "expiration_date": "2027-01-01"}],
+        )
+        assert result.risk_level == RiskLevel.BLOCKED
+        assert result.blocked_reason is not None
+
 
 # =====================================================
 # Test: HIGH methods

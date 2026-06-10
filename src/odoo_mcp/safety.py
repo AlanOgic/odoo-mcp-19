@@ -64,6 +64,12 @@ BLOCKED_MODELS = frozenset({
     "ir.model",
     "res.users",
     "res.groups",
+    # Odoo 19.1+ exposes programmatic API-key management via JSON-2
+    # (res.users.apikeys.generate / .revoke). A distinct model name from
+    # res.users, so it must be listed explicitly — otherwise an agent could
+    # mint a persistent, unscoped API key that outlives the MCP session
+    # (privilege escalation / backdoor). No legitimate agent flow needs it.
+    "res.users.apikeys",
 })
 
 SENSITIVE_MODELS = frozenset({
