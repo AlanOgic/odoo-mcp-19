@@ -13,8 +13,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Development commands
 
 ```bash
-# Install (editable + dev deps)
-pip install -e ".[dev]"
+# Install (local workflow — repo is uv-managed: uv.lock + .venv)
+uv sync --extra dev
+# then prefix commands with `uv run`, e.g.:
+uv run pytest tests/test_safety.py
+# pip equivalent: pip install -e ".[dev]"
 
 # Install published package (production path — also installs the `odoo-mcp-19` console entry point)
 pip install odoo-mcp-19
@@ -64,8 +67,8 @@ src/odoo_mcp/
 ├── resources.py       27 odoo:// resource handlers
 ├── prompts.py         13 guided prompts
 ├── safety.py          Risk classification + token gate (v1.14.0)
-├── odoo_client.py     v2 JSON-2 client (thread-safe singleton, sanitized errors)
-├── arg_mapping.py     Positional → named args for 30 ORM methods
+├── odoo_client.py     v2 JSON-2 client (thread-safe singleton, sanitized errors, always-Bearer auth)
+├── arg_mapping.py     Positional → named args for 30 ORM methods + record-bound `ids` fallback
 ├── constants.py       Limits, regex validators, MODEL_STATE_MACHINES, default context
 ├── models.py          Pydantic response schemas (structured output)
 ├── utils.py           Compact schema builder, error suggestions, /doc-bearer LRU cache
@@ -100,7 +103,7 @@ src/odoo_mcp/
 | `HIGH` | Always confirm |
 | `BLOCKED` | Always refuse |
 
-- **BLOCKED_MODELS** (writes always refused): `ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `res.users`, `res.groups`. The `resolve_json` parameter also rejects these as targets — agents cannot use it to read security-critical data.
+- **BLOCKED_MODELS** (writes always refused): `ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `res.users`, `res.groups`, `res.users.apikeys`. The `resolve_json` parameter also rejects these as targets — agents cannot use it to read security-critical data. `res.users.apikeys` is blocked because Odoo 19.1+ exposes programmatic API-key management (`res.users.apikeys.generate` / `.revoke` over JSON-2); it's a distinct model name from `res.users`, so without an explicit entry an agent could mint a persistent, unscoped API key that outlives the MCP session.
 - **SENSITIVE_MODELS** (writes always confirm, both modes): `account.move`, `account.payment`, `account.bank.statement`, `hr.payslip`, `ir.cron`, `ir.model.fields`. The last enables Studio-style custom-field creation/editing — allowed but always token-gated; whole-model changes (`ir.model`) remain BLOCKED.
 - **Cascade warnings** are surfaced for: `sale.order.action_confirm` (creates deliveries), `account.move.action_post` (irreversible journal entries), `stock.picking.button_validate` (stock changes), `purchase.order.button_confirm` (incoming receipts), `account.payment.action_post` (journal + reconciliation).
 - **Token gate** (v1.14.0): `_issue_confirmation_token()` issues a single-use, 120s-TTL nonce bound to `(model, method, payload_digest)` — a SHA-256 over the deterministic JSON of the operation payload. The confirmation re-call must reproduce the *exact same args/kwargs* the gate saw at issue time, so an agent can't get a token for `unlink([1])` and then re-call with `unlink([1,2,…,1000])`. Digest covers `{"args": args, "kwargs": kwargs}` post-`resolve_json` and post-context-merge for `execute_method`, the full ops list for `batch_execute`, and the params dict for `execute_workflow`.
@@ -164,6 +167,8 @@ Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py
 
 **`@api.private` is enforced.** Methods like `check_access` (use `has_access`) and `search_fetch` (use `search_read`) are blocked before the API call with actionable hints. Methods starting with `_` are also checked dynamically against `/doc-bearer/`.
 
+**Match the method to the question.** Counting → `search_count` (returns just an int — no payload, no pagination limit silently capping the result). Grouped counts / sums / averages → `formatted_read_group`. Only use `search_read` when you actually need the records. See `odoo://aggregation`.
+
 **`read_group` is deprecated in v19.** Use `formatted_read_group` (param is `aggregates`, not `fields`).
 
 **Domain logic is Polish-prefix.** `["&", t1, t2]` AND, `["|", t1, t2]` OR, `["!", t]` NOT. Dot notation works (`["partner_id.country_id.code", "=", "US"]`) but can break on computed fields — check `odoo://model-limitations`.
@@ -204,6 +209,8 @@ Read `odoo://model-limitations` for the full live list (static + runtime-detecte
 
 - This is a **v2-only** server. Do not add v1 fallback code.
 - `module_knowledge.json` must remain in `[tool.setuptools.package-data]` so it ships in the wheel and Docker image.
-- `arg_mapping.py` is mandatory — v2 API rejects positional args. Adding a new ORM method = entry in `arg_mapping`.
+- `arg_mapping.py` is mandatory — v2 API rejects positional args. Adding a new ORM method = entry in `arg_mapping`. **Record-bound methods take their recordset in the JSON-2 body `ids` key**: all `action_*`/`button_*` entries map position 0 → `"ids"` (so does `copy`), and `convert_args_to_v2` has a generic fallback that routes a leading list-of-ints to `ids` for unmapped record-bound methods (e.g. `action_set_won`) instead of dropping it. `tests/test_arg_mapping.py` pins this contract.
+- `odoo_client.py` always sends `Authorization: Bearer` and returns the JSON-2 response body as-is — **no `{"result": ...}` envelope unwrap** (that was the legacy `/jsonrpc` convention; unwrapping would corrupt methods that legitimately return a dict with a `result` key). `tests/test_odoo_client.py` pins this.
+- The canonical MCP server name in client configs (README, setup wizard, Claude Desktop config) is **`odoo19-mcp`** — keep it consistent when touching docs or the wizard.
 - `live` tests are not pytest-collected; they are direct scripts that mutate env state. Don't reorganize them into pytest fixtures without checking the in-file note.
 - AI module (Enterprise): models `ai.agent`, `ai.topic`, `ai.agent.source`, `ai.embedding`. Special methods: `get_direct_response`, `create_from_urls`, `create_from_attachments`. Documented in `module_knowledge.json`.
