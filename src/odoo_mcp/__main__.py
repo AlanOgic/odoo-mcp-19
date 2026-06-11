@@ -365,14 +365,44 @@ def main():
 
     # Log auth status for HTTP transport
     if transport == "streamable-http":
-        if not os.environ.get("MCP_API_KEY"):
+        users_db_path = os.environ.get("USERS_DB_PATH")
+        if not users_db_path and not os.environ.get("MCP_API_KEY"):
             print(
-                "ERROR: MCP_API_KEY must be set when using streamable-http transport.\n"
-                "Set MCP_API_KEY environment variable or run --setup to configure.",
+                "ERROR: streamable-http transport needs USERS_DB_PATH (multi-user"
+                " registry) or MCP_API_KEY (single static key).\n"
+                "Set one of them, or run --setup to configure.",
                 file=sys.stderr,
             )
             sys.exit(1)
-        print("🔐 Authentication enabled (Bearer token required)", file=sys.stderr)
+        if users_db_path:
+            from pathlib import Path
+
+            problems = []
+            db_path = Path(users_db_path)
+            if not db_path.is_file():
+                problems.append(f"registry not found: {users_db_path}")
+            if not (db_path.parent / ".token_salt").is_file():
+                problems.append(f"salt file not found: {db_path.parent / '.token_salt'}")
+            if not (
+                os.environ.get("TOKEN_ENCRYPTION_KEY")
+                or os.environ.get("TOKEN_ENCRYPTION_KEY_FILE")
+            ):
+                problems.append("TOKEN_ENCRYPTION_KEY(_FILE) is not set")
+            if problems:
+                print(
+                    "ERROR: multi-user registry misconfigured:\n  - "
+                    + "\n  - ".join(problems),
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            print(
+                "🔐 Multi-user authentication enabled (per-user registry keys"
+                + (", static fallback active" if os.environ.get("MCP_API_KEY") else "")
+                + ")",
+                file=sys.stderr,
+            )
+        else:
+            print("🔐 Authentication enabled (Bearer token required)", file=sys.stderr)
         mcp.run(transport="streamable-http", host=host, port=port)
     else:
         mcp.run()

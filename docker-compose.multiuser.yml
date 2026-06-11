@@ -1,0 +1,23 @@
+# Multi-user overlay: per-user keys + personal Odoo credentials from the
+# CLORAG-managed registry (users.db). Usage on the clorag host:
+#
+#   USERS_DB_HOST_DIR=/opt/clorag/data \
+#   TOKEN_ENCRYPTION_KEY_SECRET=/opt/clorag/secrets/token_encryption_key \
+#   docker compose -f docker-compose.yml -f docker-compose.multiuser.yml up -d
+#
+# The token_encryption_key secret MUST hold the same value as CLORAG's
+# (recommended: same content as admin_password, chmod 644). The registry is
+# mounted read-only — CLORAG remains the only writer.
+services:
+  odoo-mcp:
+    environment:
+      - USERS_DB_PATH=/registry/users.db
+      - TOKEN_ENCRYPTION_KEY_FILE=/run/secrets/token_encryption_key
+    volumes:
+      - ${USERS_DB_HOST_DIR:-/opt/clorag/data}:/registry:ro
+    secrets:
+      - token_encryption_key
+
+secrets:
+  token_encryption_key:
+    file: ${TOKEN_ENCRYPTION_KEY_SECRET:-/opt/clorag/secrets/token_encryption_key}

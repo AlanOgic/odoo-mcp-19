@@ -46,13 +46,27 @@ ODOO_ICON = _load_icon()
 @dataclass
 class AppContext:
     """Application context for the MCP server"""
-    odoo: OdooClient
+    odoo: Optional[OdooClient]
 
 
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
-    """Application lifespan for initialization and cleanup"""
-    odoo_client = get_odoo_client()
+    """Application lifespan for initialization and cleanup.
+
+    In multi-user mode (USERS_DB_PATH) the env Odoo credentials are
+    optional — per-user clients are built lazily from the registry, so a
+    missing env config must not prevent startup.
+    """
+    try:
+        odoo_client: Optional[OdooClient] = get_odoo_client()
+    except (FileNotFoundError, KeyError) as e:
+        if os.environ.get("USERS_DB_PATH"):
+            logger.warning(
+                "No env Odoo credentials (%s) — multi-user registry mode only", e
+            )
+            odoo_client = None
+        else:
+            raise
     try:
         yield AppContext(odoo=odoo_client)
     finally:
@@ -62,8 +76,21 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 # ----- Authentication -----
 
 def _get_auth_provider():
-    """Get auth provider if MCP_API_KEY is configured."""
+    """Get the auth provider.
+
+    USERS_DB_PATH set -> per-user keys from the shared registry, with the
+    static MCP_API_KEY (if any) kept as fallback. Otherwise today's
+    single-static-key behavior, or no auth (stdio).
+    """
     api_key = os.environ.get("MCP_API_KEY")
+
+    from .users_db import get_users_db
+
+    users_db = get_users_db()
+    if users_db is not None:
+        from .auth_verifier import DbTokenVerifier
+        return DbTokenVerifier(users_db, static_api_key=api_key)
+
     if api_key:
         from fastmcp.server.auth import StaticTokenVerifier
         return StaticTokenVerifier(
@@ -89,3 +116,17 @@ mcp = FastMCP(
     website_url="https://github.com/AlanOgic/odoo-mcp-19",
     icons=_icons,
 )
+
+
+# ----- Per-user skill visibility (multi-user mode only) -----
+
+def _register_skill_visibility() -> None:
+    from .users_db import get_users_db
+
+    users_db = get_users_db()
+    if users_db is not None:
+        from .skill_visibility import SkillVisibilityMiddleware
+        mcp.add_middleware(SkillVisibilityMiddleware(users_db))
+
+
+_register_skill_visibility()

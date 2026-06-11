@@ -3,13 +3,15 @@ services:
     build: .
     container_name: odoo-mcp-19
     ports:
-      - "${MCP_PORT:-8080}:${MCP_PORT:-8080}"
+      - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-8080}:${MCP_PORT:-8080}"
     environment:
-      # Odoo connection
+      # Odoo connection (global instance; in multi-user mode the per-user
+      # credentials come from the shared registry instead of env)
       - ODOO_URL=${ODOO_URL}
       - ODOO_DB=${ODOO_DB}
-      - ODOO_USERNAME=${ODOO_USERNAME}
-      - ODOO_API_KEY=${ODOO_API_KEY}
+      # Env identity — needed for stdio mode or the MCP_API_KEY fallback only
+      - ODOO_USERNAME=${ODOO_USERNAME:-}
+      - ODOO_API_KEY=${ODOO_API_KEY:-}
       - ODOO_PASSWORD=${ODOO_PASSWORD:-}
       - ODOO_TIMEOUT=${ODOO_TIMEOUT:-30}
       - ODOO_VERIFY_SSL=${ODOO_VERIFY_SSL:-true}
@@ -17,7 +19,9 @@ services:
       - MCP_TRANSPORT=${MCP_TRANSPORT:-streamable-http}
       - MCP_HOST=0.0.0.0
       - MCP_PORT=${MCP_PORT:-8080}
-      - MCP_API_KEY=${MCP_API_KEY:?MCP_API_KEY is required for HTTP transport}
+      # Single static key. Optional when the multi-user registry is mounted
+      # (see docker-compose.multiuser.yml); startup validates one is present.
+      - MCP_API_KEY=${MCP_API_KEY:-}
       # Safety & DX
       - MCP_SAFETY_MODE=${MCP_SAFETY_MODE:-strict}
       - MCP_SAFETY_AUDIT=${MCP_SAFETY_AUDIT:-}

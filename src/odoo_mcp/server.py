@@ -47,6 +47,7 @@ from .models import (
     IssueAnalysis,
     WorkflowStepResult,
 )
+from .user_clients import current_role  # noqa: E402
 from .odoo_client import get_odoo_client
 from .safety import (
     BLOCKED_MODELS,
@@ -368,7 +369,7 @@ def execute_method(
                 )
 
         # --- Safety Classification ---
-        classification = classify_operation(model, method, args, kwargs)
+        classification = classify_operation(model, method, args, kwargs, role=current_role())
 
         if classification.risk_level == RiskLevel.BLOCKED:
             audit_log(classification, confirmed=confirmed, executed=False)
@@ -564,7 +565,7 @@ async def batch_execute(
     await progress.set_total(len(operations))
 
     # --- Safety Classification for batch ---
-    classifications, overall_risk, any_needs_confirmation = classify_batch(operations)
+    classifications, overall_risk, any_needs_confirmation = classify_batch(operations, role=current_role())
 
     # BLOCKED operations always refuse
     blocked = [c for c in classifications if c.risk_level == RiskLevel.BLOCKED]
@@ -901,7 +902,7 @@ async def execute_workflow(
         )
 
     # --- Safety Classification for workflow ---
-    safety_preview = classify_workflow(workflow, params)
+    safety_preview = classify_workflow(workflow, params, role=current_role())
     if safety_preview is not None:
         # Bind the token to (workflow_name, params). A different order_id or partner_id
         # on the re-call produces a different digest and is rejected.

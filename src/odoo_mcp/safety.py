@@ -202,6 +202,7 @@ def classify_operation(
     method: str,
     args: list | None = None,
     kwargs: dict | None = None,
+    role: str | None = None,
 ) -> SafetyClassification:
     """
     Classify an Odoo operation by risk level.
@@ -228,6 +229,17 @@ def classify_operation(
             record_count=record_count,
             requires_confirmation=False,
             reason="Read-only or safe method.",
+        )
+
+    # 1b. Read-only profiles: anything beyond safe methods is blocked.
+    if role == "readonly":
+        return SafetyClassification(
+            risk_level=RiskLevel.BLOCKED,
+            model=model,
+            method=method,
+            record_count=record_count,
+            requires_confirmation=False,
+            reason="Read-only profile: write operations are blocked.",
         )
 
     # 2. Blocked models refuse all non-safe methods
@@ -324,6 +336,7 @@ def classify_operation(
 
 def classify_batch(
     operations: list[dict[str, Any]],
+    role: str | None = None,
 ) -> tuple[list[SafetyClassification], RiskLevel, bool]:
     """
     Classify all operations in a batch.
@@ -349,7 +362,7 @@ def classify_batch(
         except (json.JSONDecodeError, TypeError):
             pass
 
-        classification = classify_operation(model, method, args, kwargs)
+        classification = classify_operation(model, method, args, kwargs, role=role)
         classifications.append(classification)
 
         if _RISK_ORDER[classification.risk_level] > _RISK_ORDER[overall_risk]:
@@ -402,6 +415,7 @@ _WORKFLOW_STEPS: dict[str, list[tuple[str, str, str]]] = {
 def classify_workflow(
     workflow: str,
     params: dict | None = None,
+    role: str | None = None,
 ) -> WorkflowSafetyPreview | None:
     """
     Classify a workflow by its name.
@@ -418,7 +432,7 @@ def classify_workflow(
     overall_risk = RiskLevel.SAFE
 
     for step_name, model, method in steps_def:
-        classification = classify_operation(model, method)
+        classification = classify_operation(model, method, role=role)
         cascade_warning = CASCADE_WARNINGS.get((model, method))
 
         step_cls = WorkflowStepClassification(

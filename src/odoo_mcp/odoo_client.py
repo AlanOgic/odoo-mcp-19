@@ -315,8 +315,8 @@ _client_lock = threading.Lock()
 _client_instance: OdooClient | None = None
 
 
-def get_odoo_client() -> OdooClient:
-    """Get a configured Odoo client singleton instance."""
+def _get_env_client() -> OdooClient:
+    """Get the env-configured Odoo client singleton (stdio / fallback identity)."""
     global _client_instance
     if _client_instance is not None:
         return _client_instance
@@ -338,3 +338,22 @@ def get_odoo_client() -> OdooClient:
             verify_ssl=verify_ssl,
         )
         return _client_instance
+
+
+def get_odoo_client() -> OdooClient:
+    """Get the Odoo client for the current caller.
+
+    When an authenticated registry user is present (multi-user HTTP mode),
+    returns their personal client — Odoo actions run as the real user. In
+    stdio mode or with the static MCP_API_KEY fallback, returns the
+    env-configured singleton (today's behavior, unchanged).
+    """
+    try:
+        from .user_clients import get_client_for_current_user
+
+        client = get_client_for_current_user()
+    except ImportError:
+        client = None
+    if client is not None:
+        return client
+    return _get_env_client()
