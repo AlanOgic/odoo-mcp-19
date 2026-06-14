@@ -12,7 +12,7 @@ Connect Claude and AI assistants to Odoo 19+ via the Model Context Protocol (MCP
 
 - **5 tools, full power** - `execute_method` calls ANY method on ANY model. Combined with `batch_execute`, `execute_workflow`, `configure_odoo`, and `read_resource`, you have complete Odoo API access
 - **27 resources** - Dynamic model discovery, compact schemas, workflows, and introspection
-- **13 prompts** - Guided workflows for common business operations
+- **20 prompts** - 13 generic guided workflows + 7 `cyanview-*` workflow skill prompts (per-user gated in multi-user mode)
 - **30 ORM methods** - Complete documentation with examples
 - **13 modules** - Special methods including AI module (Enterprise)
 - **Safety layer** - Pre-execution risk classification, blocked models, cascade warnings
@@ -272,7 +272,9 @@ execute_workflow("quote_to_cash", '{"order_id": 123}')
 | `odoo://aggregation` | Aggregation guide (formatted_read_group) |
 | `odoo://model-limitations` | Known model issues + runtime problems |
 
-### Prompts (13)
+### Prompts (20)
+
+13 generic guided prompts:
 
 | Prompt | Purpose |
 |--------|---------|
@@ -290,6 +292,18 @@ execute_workflow("quote_to_cash", '{"order_id": 123}')
 | `paginated-search` | Paginate large result sets |
 | `aggregation-report` | Aggregation reports |
 
+7 `cyanview-*` workflow skill prompts (bodies loaded from `skills/*.md`; in multi-user mode each is gated per user via the `user_skills` allowlist):
+
+| Prompt | Purpose |
+|--------|---------|
+| `cyanview-quote` | Build a Cyanview sales quotation |
+| `cyanview-rma` | Manage an RMA / repair order |
+| `cyanview-customer-360` | Full 360° customer briefing |
+| `cyanview-serial-tracker` | Trace a device by serial number |
+| `cyanview-project-designer` | Design a camera-control system |
+| `cyanview-shipping-watchdog` | Audit unshipped/overdue orders |
+| `cyanview-inventory-watchdog` | Monitor stock levels and reorders |
+
 ## Safety Layer (v1.10.0)
 
 Pre-execution safety classification gates dangerous operations behind confirmation.
@@ -305,11 +319,11 @@ Pre-execution safety classification gates dangerous operations behind confirmati
 
 ### Blocked models (write always refused)
 
-`ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `ir.model.fields`, `res.users`, `res.groups`
+`ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `res.users`, `res.groups`, `res.users.apikeys`
 
 ### Sensitive models (write always confirms)
 
-`account.move`, `account.payment`, `account.bank.statement`, `hr.payslip`, `ir.cron`
+`account.move`, `account.payment`, `account.bank.statement`, `hr.payslip`, `ir.cron`, `ir.model.fields`
 
 ### Cascade warnings
 
@@ -434,6 +448,42 @@ curl -i -X POST http://localhost:8080/mcp \
   -d '{"jsonrpc": "2.0", "method": "initialize", "id": 1}'
 ```
 
+## Multi-user mode
+
+The HTTP transport above serves a single Odoo account behind one static `MCP_API_KEY`.
+For teams, set **`USERS_DB_PATH`** to switch into multi-user mode: many users share one
+server process, each authenticating with their own bearer token and acting as their **own**
+Odoo account — so every write is attributed to the real person, not a shared service user.
+
+### How it works
+
+- **Registry** — users, their per-server API keys, encrypted Odoo credentials, and skill
+  allowlists live in a SQLite registry (`users.db`) owned and written by **CLORAG** (a
+  companion app with an `/admin/users` page). This server is a **pure reader** — it opens
+  the database with `mode=ro` and never writes.
+- **Per-request identity** — an incoming bearer token is hashed (sha256) and looked up in
+  the registry. The caller gets a **personal `OdooClient`** built from their stored Odoo
+  username + decrypted API key (cached 300s, re-checked on credential rotation). Plaintext
+  keys are never stored; the static `MCP_API_KEY` still works and maps to an `env-admin`
+  identity.
+- **Roles** — `admin` → unrestricted; `readonly` → read-only, with the safety layer blocking
+  every non-safe method; other roles → normal safety rules on their own account.
+- **Per-user skills** — the `cyanview-*` workflow prompts are filtered per user against a
+  `user_skills` allowlist (fails closed without a token). Generic prompts stay visible to all.
+
+### Deployment
+
+```bash
+# Requires: USERS_DB_PATH, TOKEN_ENCRYPTION_KEY (must equal CLORAG's), MCP_TRANSPORT=streamable-http
+docker compose -f docker-compose.yml -f docker-compose.multiuser.yml up -d
+```
+
+The overlay mounts the CLORAG data dir read-only at `/registry` and injects the encryption
+key as a Docker secret. The `TOKEN_ENCRYPTION_KEY` and the `.token_salt` file must be
+**identical** to CLORAG's, or stored credentials cannot be decrypted. In multi-user mode the
+env `ODOO_*` credentials become optional (only the `env-admin` fallback uses them), though
+`ODOO_URL` / `ODOO_DB` are still needed to build per-user clients.
+
 ## Configuration
 
 | Variable | Required | Default | Description |
@@ -446,13 +496,16 @@ curl -i -X POST http://localhost:8080/mcp \
 | `ODOO_TIMEOUT` | No | `30` | Request timeout in seconds |
 | `ODOO_VERIFY_SSL` | No | `true` | SSL certificate verification |
 | `MCP_TRANSPORT` | No | `stdio` | Transport: `stdio` or `streamable-http` |
-| `MCP_API_KEY` | **Yes** (HTTP) | — | Bearer token for HTTP auth (required for streamable-http) |
+| `MCP_API_KEY` | HTTP: this **or** `USERS_DB_PATH` | — | Static bearer token (single-user HTTP, or admin fallback in multi-user mode). HTTP server `sys.exit(1)` if neither is set |
+| `USERS_DB_PATH` | No | — | Path to the CLORAG registry (`users.db`) → enables [multi-user mode](#multi-user-mode) |
+| `TOKEN_ENCRYPTION_KEY` / `TOKEN_ENCRYPTION_KEY_FILE` | With `USERS_DB_PATH` | — | Secret to decrypt registry Odoo credentials — must equal CLORAG's value |
 | `MCP_HOST` | No | `0.0.0.0` | HTTP bind address |
 | `MCP_PORT` | No | `8080` | HTTP port |
+| `MCP_VERBOSE` | No | `true` | Slant-ASCII startup banner to stderr (version, transport, masked creds, safety mode, capability counts). `false` to silence |
 | `MCP_SAFETY_MODE` | No | `strict` | `strict` or `permissive` |
 | `MCP_SAFETY_AUDIT` | No | — | `true` to log safety audit to stderr |
-| `MCP_DEFAULT_CONTEXT` | No | — | JSON object merged into all contexts |
-| `MCP_BOOTSTRAP_MODELS` | No | `res.partner,sale.order,account.move,product.product,stock.picking` | Models for session-bootstrap |
+| `MCP_DEFAULT_CONTEXT` | No | — | JSON object merged into all contexts (max 4KB) |
+| `MCP_BOOTSTRAP_MODELS` | No | `res.partner,sale.order,account.move,product.product,stock.picking` | Models for session-bootstrap (max 20) |
 
 ## Documentation
 

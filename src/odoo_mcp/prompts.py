@@ -236,14 +236,16 @@ def aggregation_report_prompt(model: str = "sale.order") -> list[Message]:
 
 **Read odoo://aggregation for complete reference.**
 
-**Using read_group with execute_method:**
+**Use formatted_read_group (v19+). `read_group` is deprecated — do not use it.**
+The param is `aggregates` (not `fields`); formatted_read_group always returns all
+group levels (no `lazy` flag needed).
 
 ```
-execute_method('{model}', 'read_group',
-  args_json='[DOMAIN]',
+execute_method('{model}', 'formatted_read_group',
   kwargs_json='{{
-    "fields": ["field:aggregator", ...],
-    "groupby": ["field", ...]
+    "domain": [DOMAIN],
+    "groupby": ["field", ...],
+    "aggregates": ["field:aggregator", ...]
   }}')
 ```
 
@@ -265,26 +267,23 @@ execute_method('{model}', 'read_group',
 
 1. Total by partner:
 ```
-kwargs_json='{{"fields": ["amount_total:sum"], "groupby": ["partner_id"]}}'
+kwargs_json='{{"domain": [], "groupby": ["partner_id"], "aggregates": ["amount_total:sum"]}}'
 ```
 
 2. Count by state:
 ```
-kwargs_json='{{"fields": ["__count"], "groupby": ["state"]}}'
+kwargs_json='{{"domain": [], "groupby": ["state"], "aggregates": ["__count"]}}'
 ```
 
 3. Monthly totals:
 ```
-kwargs_json='{{"fields": ["amount_total:sum", "__count"], "groupby": ["date_order:month"]}}'
+kwargs_json='{{"domain": [], "groupby": ["date_order:month"], "aggregates": ["amount_total:sum", "__count"]}}'
 ```
 
 4. Multi-level grouping:
 ```
-kwargs_json='{{"fields": ["amount_total:sum"], "groupby": ["partner_id", "state"]}}'
+kwargs_json='{{"domain": [], "groupby": ["partner_id", "state"], "aggregates": ["amount_total:sum"]}}'
 ```
-
-**Note:** read_group is deprecated in v19. Current MCP uses it for compatibility.
-New code should use formatted_read_group (web module).
 """)]
 
 
@@ -324,10 +323,10 @@ def ar_aging_report_prompt() -> list[Message]:
     """Generate accounts receivable aging report"""
     return [Message("""Generate an AR aging report:
 
-1. Use execute_method with read_group (see odoo://aggregation):
-   execute_method("account.move", "read_group",
-     args_json='[[["move_type", "=", "out_invoice"], ["payment_state", "in", ["not_paid", "partial"]]]]',
-     kwargs_json='{"fields": ["amount_residual:sum"], "groupby": ["partner_id"]}')
+1. Use execute_method with formatted_read_group (see odoo://aggregation):
+   execute_method("account.move", "formatted_read_group",
+     kwargs_json='{"domain": [["move_type", "=", "out_invoice"], ["payment_state", "in", ["not_paid", "partial"]]],
+                   "groupby": ["partner_id"], "aggregates": ["amount_residual:sum"]}')
 
 2. Then categorize by aging buckets:
    - Current (not yet due)
@@ -347,19 +346,19 @@ def inventory_check_prompt(product: str = None) -> list[Message]:
         return [Message(f"""Check inventory for "{product}":
 
 1. Find the product: read odoo://find-model/product, then search product.product
-2. Use execute_method with read_group (see odoo://aggregation):
-   execute_method("stock.quant", "read_group",
-     args_json='[[["product_id", "=", PRODUCT_ID]]]',
-     kwargs_json='{{"fields": ["quantity:sum"], "groupby": ["location_id"]}}')
+2. Use execute_method with formatted_read_group (see odoo://aggregation):
+   execute_method("stock.quant", "formatted_read_group",
+     kwargs_json='{{"domain": [["product_id", "=", PRODUCT_ID]],
+                   "groupby": ["location_id"], "aggregates": ["quantity:sum"]}}')
 
 3. Show available quantity by warehouse/location
 """)]
     else:
         return [Message("""Check overall inventory status:
 
-1. Use execute_method with read_group (see odoo://aggregation):
-   execute_method("stock.quant", "read_group", args_json='[[]]',
-     kwargs_json='{"fields": ["quantity:sum", "value:sum"], "groupby": ["product_id"]}')
+1. Use execute_method with formatted_read_group (see odoo://aggregation):
+   execute_method("stock.quant", "formatted_read_group",
+     kwargs_json='{"domain": [], "groupby": ["product_id"], "aggregates": ["quantity:sum", "value:sum"]}')
 
 2. Identify low stock items (quantity < reorder point)
 3. Show top products by value
@@ -371,10 +370,10 @@ def crm_pipeline_prompt() -> list[Message]:
     """Analyze CRM pipeline"""
     return [Message("""Analyze the CRM pipeline:
 
-1. Use execute_method with read_group (see odoo://aggregation):
-   execute_method("crm.lead", "read_group",
-     args_json='[[["type", "=", "opportunity"]]]',
-     kwargs_json='{"fields": ["expected_revenue:sum", "__count"], "groupby": ["stage_id"]}')
+1. Use execute_method with formatted_read_group (see odoo://aggregation):
+   execute_method("crm.lead", "formatted_read_group",
+     kwargs_json='{"domain": [["type", "=", "opportunity"]],
+                   "groupby": ["stage_id"], "aggregates": ["expected_revenue:sum", "__count"]}')
 
 2. Calculate conversion rates between stages
 3. Identify opportunities that need attention:
@@ -398,14 +397,14 @@ def customer_360_prompt(customer: str) -> list[Message]:
    - Credit limit and receivables
 
 3. Sales history (see odoo://aggregation):
-   execute_method("sale.order", "read_group",
-     args_json='[[["partner_id", "=", CUSTOMER_ID]]]',
-     kwargs_json='{{"fields": ["amount_total:sum"], "groupby": ["state"]}}')
+   execute_method("sale.order", "formatted_read_group",
+     kwargs_json='{{"domain": [["partner_id", "=", CUSTOMER_ID]],
+                   "groupby": ["state"], "aggregates": ["amount_total:sum"]}}')
 
 4. Invoice status:
-   execute_method("account.move", "read_group",
-     args_json='[[["partner_id", "=", CUSTOMER_ID], ["move_type", "=", "out_invoice"]]]',
-     kwargs_json='{{"fields": ["amount_residual:sum"], "groupby": ["payment_state"]}}')
+   execute_method("account.move", "formatted_read_group",
+     kwargs_json='{{"domain": [["partner_id", "=", CUSTOMER_ID], ["move_type", "=", "out_invoice"]],
+                   "groupby": ["payment_state"], "aggregates": ["amount_residual:sum"]}}')
 
 5. Recent activities:
    - Messages and notes from mail.message
@@ -423,7 +422,7 @@ def daily_operations_prompt() -> list[Message]:
     return [Message("""Generate a daily operations summary:
 
 **Sales:**
-- New orders today (use read_group on sale.order, see odoo://aggregation)
+- New orders today (use formatted_read_group on sale.order, see odoo://aggregation)
 - Pending quotations needing follow-up
 
 **Inventory:**
@@ -439,5 +438,5 @@ def daily_operations_prompt() -> list[Message]:
 - Activities due today
 - Hot opportunities (high probability, high value)
 
-Use execute_method with read_group for efficient aggregation. Present as a dashboard.
+Use execute_method with formatted_read_group for efficient aggregation. Present as a dashboard.
 """)]

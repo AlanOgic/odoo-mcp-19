@@ -7,7 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-06-14
+
+### Added
+- **Multi-user mode (CLORAG registry)** — HTTP transport activated by `USERS_DB_PATH`
+  serves many users from one process. Each request's bearer token is hashed (sha256) and
+  looked up in the CLORAG-managed `users.db` registry (read-only, `mode=ro`); the caller
+  gets a **personal `OdooClient`** built from their own Odoo username + decrypted API key,
+  so writes are attributed to the real Odoo account. Six new modules: `auth_verifier.py`
+  (`DbTokenVerifier`), `users_db.py` (read-only registry access), `user_clients.py`
+  (per-user client cache, 300s TTL with credential-rotation re-check), `token_crypto.py`
+  (Fernet/PBKDF2 decrypt — ports CLORAG `utils/token_encryption.py`, 480 000 iterations),
+  `skill_visibility.py` (per-user prompt filtering middleware), and `skill_prompts.py`.
+  The static `MCP_API_KEY` still works and maps to a synthetic `env-admin` identity; STDIO
+  is unchanged. Module count: 12 → 18.
+- **Role-based safety** — `users.role` from the registry feeds the safety classifier:
+  `admin` → unrestricted, `readonly` → read-only scopes with **every non-safe method
+  BLOCKED** before model rules are consulted, other roles → normal rules on their personal
+  Odoo account. Pinned by `tests/test_safety_role.py`.
+- **7 `cyanview-*` workflow skill prompts** — `cyanview-quote`, `cyanview-rma`,
+  `cyanview-customer-360`, `cyanview-serial-tracker`, `cyanview-project-designer`,
+  `cyanview-shipping-watchdog`, `cyanview-inventory-watchdog`. Bodies loaded from packaged
+  `skills/*.md` (frontmatter stripped at load). In multi-user mode each is gated per user
+  via the `user_skills` allowlist (`list_prompts` filtered, `get_prompt` re-enforced,
+  fails closed without an access token); generic prompts stay visible to everyone. Prompt
+  count: 13 → 20.
+- **Multi-user deployment** — `docker-compose.multiuser.yml` overlay mounts the CLORAG data
+  dir read-only at `/registry` and injects `TOKEN_ENCRYPTION_KEY` as a Docker secret.
+- **New config** — `USERS_DB_PATH`, `TOKEN_ENCRYPTION_KEY` / `TOKEN_ENCRYPTION_KEY_FILE`.
+  HTTP startup preflight now exits 1 unless `MCP_API_KEY` **or** `USERS_DB_PATH` is set; with
+  `USERS_DB_PATH` it also verifies the db file, `.token_salt`, and the encryption key exist.
+- **Unit tests** — `test_auth_verifier.py`, `test_token_crypto.py`, `test_user_clients.py`,
+  `test_skill_visibility.py`, `test_skill_prompts.py`, `test_safety_role.py`, plus the
+  `users_db_seed` fixture in `tests/conftest.py` that reproduces the exact CLORAG DDL and
+  crypto contract.
+
+### Security
+- **CRITICAL: `res.users.apikeys` added to `BLOCKED_MODELS`** — Odoo 19.1+ exposes
+  programmatic API-key management (`res.users.apikeys.generate` / `.revoke` over JSON-2).
+  It is a distinct model name from `res.users`, so without an explicit block an agent could
+  mint a persistent API key (up to 3 months) that outlives the MCP session. The
+  `resolve_json` target check rejects it too.
+
 ### Changed
+- **`ir.model.fields` moved from BLOCKED → SENSITIVE** — Studio-style custom-field
+  creation/editing is now allowed but always token-gated; whole-model changes (`ir.model`)
+  remain BLOCKED. Blocked set is now `ir.rule`, `ir.model.access`, `ir.module.module`,
+  `ir.config_parameter`, `ir.model`, `res.users`, `res.groups`, `res.users.apikeys`.
 - **`odoo://find-model/{concept}` resolves multi-word concepts** — natural-language
   phrases like `customer invoice` previously returned no match (the phrase was
   neither an exact alias nor a model substring). The resolver now tokenizes the
@@ -18,8 +64,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (and the `_build_compact_schema` docstring / `read_resource` tool doc) dropped the
   misleading `~1.5KB` figure in favor of "~60-80% smaller than /fields", since the
   absolute size scales with the model's field count (e.g. `res.partner` ≈ 13 KB).
+- Standardized the canonical MCP server name on `odoo19-mcp` across README and the setup
+  wizard.
 
 ### Fixed
+- **`OdooClient` always sends `Authorization: Bearer` and no longer unwraps a `{"result":…}`
+  envelope** — the legacy `/jsonrpc` unwrap corrupted JSON-2 methods that legitimately
+  return a dict with a `result` key. Pinned by `tests/test_odoo_client.py`.
+- **Record-bound methods forward their recordset to the JSON-2 `ids` key** — `action_*` /
+  `button_*` / `copy` map position 0 → `"ids"`, and `convert_args_to_v2` has a generic
+  fallback routing a leading list-of-ints to `ids` for unmapped record-bound methods
+  instead of dropping it. Pinned by `tests/test_arg_mapping.py`.
 - **Schema resources leaked a cryptic error on missing/invalid models** — the
   `odoo://model/{m}/quick-schema`, `/fields`, `/schema` and `odoo://bundle`
   resources fed the `get_model_fields` error sentinel straight into the schema
@@ -32,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bundle` reports the bad model in its `errors` map with the same clean
   message. Covered by new `tests/test_resources.py` (6 unit tests, no live
   Odoo required).
+- Cleared pre-existing mypy `no-any-return` warnings in the client.
 
 ## [1.14.0] - 2026-05-05
 
