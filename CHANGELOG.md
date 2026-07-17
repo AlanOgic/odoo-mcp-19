@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Install documentation now points to GitHub (`pip install git+https://github.com/AlanOgic/odoo-mcp-19.git`)
+  and locally built Docker images. The package is deliberately **not** published to PyPI or
+  Docker Hub; the previously documented `pip install odoo-mcp-19` and
+  `docker pull alanogik/odoo-mcp-19` paths never existed.
+
 ### Removed
 - The `quote-to-cash` prompt and the `quote_to_cash` workflow (with its
   `quotation_to_invoice` / `sales_workflow` aliases) from `execute_workflow` and the

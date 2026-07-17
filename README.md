@@ -33,13 +33,7 @@ Connect Claude and AI assistants to Odoo 19+ via the Model Context Protocol (MCP
 
 ### Option A: Docker (recommended)
 
-**Pull from Docker Hub:**
-
-```bash
-docker pull alanogik/odoo-mcp-19:latest
-```
-
-**Or build from source:**
+**Build from source:**
 
 ```bash
 git clone https://github.com/AlanOgic/odoo-mcp-19.git
@@ -91,10 +85,10 @@ EOF
 python -m odoo_mcp
 ```
 
-### Option C: pip install
+### Option C: pip install (from GitHub)
 
 ```bash
-pip install odoo-mcp-19
+pip install git+https://github.com/AlanOgic/odoo-mcp-19.git
 ```
 
 ## Setup Wizard

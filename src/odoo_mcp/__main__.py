@@ -11,7 +11,8 @@ from typing import Any
 
 from .server import mcp
 
-DOCKER_IMAGE = "alanogik/odoo-mcp-19:latest"
+# Locally built image (docker build -t odoo-mcp-19:latest .) — no Docker Hub image exists
+DOCKER_IMAGE = "odoo-mcp-19:latest"
 
 
 def _prompt(label: str, default: str = "") -> str:

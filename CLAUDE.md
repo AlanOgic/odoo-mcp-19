@@ -20,8 +20,8 @@ uv sync --extra dev
 uv run pytest tests/test_safety.py
 # pip equivalent: pip install -e ".[dev]"
 
-# Install published package (production path — also installs the `odoo-mcp-19` console entry point)
-pip install odoo-mcp-19
+# Install as a package (installs the `odoo-mcp-19` console entry point) — deliberately NOT on PyPI
+pip install git+https://github.com/AlanOgic/odoo-mcp-19.git
 
 # Run server — STDIO (default); loads .env from cwd
 python -m odoo_mcp
@@ -245,6 +245,8 @@ A release touches four places — keep them in sync:
 4. `wiki/` — a **gitignored local clone of the GitHub wiki** (`AlanOgic/odoo-mcp-19.wiki.git`). Wiki pages (Tools, Resources, Prompts, Deployment, …) are refreshed at each release and need their **own commit and push inside `wiki/`** — committing this repo does not publish them.
 
 Release commit convention: `chore(release): X.Y.Z — <summary>`.
+
+**No public registries — by choice.** The package is deliberately not published to PyPI, and no Docker Hub image exists. Distribution is `pip install git+https://github.com/AlanOgic/odoo-mcp-19.git` or a locally built Docker image (`docker build -t odoo-mcp-19 .`). Do not add publish steps, and do not treat the missing PyPI/Docker Hub listings as a bug to fix.
 
 ## Notes for Claude Code
 
