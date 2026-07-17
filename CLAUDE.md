@@ -235,6 +235,17 @@ Read `odoo://model-limitations` for the full live list (static + runtime-detecte
 - **Resource limits**: `MCP_DEFAULT_CONTEXT` ≤ 4KB; `MCP_BOOTSTRAP_MODELS` ≤ 20 models; `_DOC_CACHE` ≤ 100 entries.
 - **Gitignored**: `.env`, `.env.local`, `.mcp.json`, `odoo_config.json`.
 
+## Release process
+
+A release touches four places — keep them in sync:
+
+1. Version string in **both** `pyproject.toml` and `src/odoo_mcp/__init__.py` (`__version__`).
+2. `CHANGELOG.md` — Keep a Changelog format; move entries from `[Unreleased]` into the new version section with the date.
+3. This file's header (version + surface counts) if they changed.
+4. `wiki/` — a **gitignored local clone of the GitHub wiki** (`AlanOgic/odoo-mcp-19.wiki.git`). Wiki pages (Tools, Resources, Prompts, Deployment, …) are refreshed at each release and need their **own commit and push inside `wiki/`** — committing this repo does not publish them.
+
+Release commit convention: `chore(release): X.Y.Z — <summary>`.
+
 ## Notes for Claude Code
 
 - This is a **v2-only** server. Do not add v1 fallback code.
