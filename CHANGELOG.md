@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- The `quote-to-cash` prompt and the `quote_to_cash` workflow (with its
+  `quotation_to_invoice` / `sales_workflow` aliases) from `execute_workflow` and the
+  safety classifier. Their documentation was already removed from the wiki in March 2026
+  (wiki commit `619e5aa`); the code now matches. Prompt surface: 20 → 19 (13 → 12 generic).
+
 ## [1.15.0] - 2026-06-14
 
 ### Added

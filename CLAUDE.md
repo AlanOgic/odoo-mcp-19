@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **odoo-mcp-19** — Standalone MCP server for Odoo 19+ using the **v2 JSON-2 API** (`POST /json/2/{model}/{method}`, Bearer token auth, named args only). No v1 fallback.
 
 - **Version**: 1.15.0 · **Python**: 3.10+ · **MCP**: 2025-11-25 (FastMCP 3.2.0+)
-- **Surface**: 5 tools, 27 `odoo://` resources, 20 prompts (13 generic + 7 `cyanview-*` workflow skill prompts)
+- **Surface**: 5 tools, 27 `odoo://` resources, 19 prompts (12 generic + 7 `cyanview-*` workflow skill prompts)
 - **Discovery is via resources, action is via tools** — there is no `list_models` tool, agents read `odoo://models` instead.
 - **Two deployment shapes**: single-user (STDIO or HTTP with one static `MCP_API_KEY`) and **multi-user HTTP** (per-user `cv_odoo_…` keys from the CLORAG-managed registry, personal Odoo clients, per-user skill visibility — see "Multi-user mode" below).
 
@@ -68,7 +68,7 @@ src/odoo_mcp/
 ├── app.py             FastMCP instance + icon + auth provider selection + middleware wiring — imported first
 ├── server.py          5 tools + _RESOURCE_ROUTES table + search_read fallback + safety integration
 ├── resources.py       27 odoo:// resource handlers
-├── prompts.py         13 generic guided prompts
+├── prompts.py         12 generic guided prompts
 ├── skill_prompts.py   7 cyanview-* workflow prompts, bodies loaded from skills/*.md (frontmatter stripped)
 ├── safety.py          Risk classification + token gate + role-based blocking
 ├── odoo_client.py     v2 JSON-2 client (thread-safe singleton, sanitized errors, always-Bearer auth)
@@ -171,7 +171,7 @@ Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py
 |------|---------|
 | `execute_method` | Universal Odoo API access |
 | `batch_execute` | Multiple ops with progress tracking |
-| `execute_workflow` | Pre-built multi-step workflows (`quote_to_cash`, `lead_to_won`, `create_and_post_invoice`, …) |
+| `execute_workflow` | Pre-built multi-step workflows (`lead_to_won`, `create_and_post_invoice`, `stock_transfer`, …) |
 | `configure_odoo` | Interactive connection setup (user elicitation) |
 | `read_resource` | Read any `odoo://` URI — bridge for clients without resource template support |
 

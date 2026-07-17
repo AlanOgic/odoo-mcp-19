@@ -850,7 +850,6 @@ async def configure_odoo(ctx: Context) -> Dict[str, Any]:
     operations into one call, dramatically reducing tokens.
 
     Supported workflows:
-    - quote_to_cash: Create quote -> Confirm -> Deliver -> Invoice -> Payment
     - lead_to_won: Create lead -> Convert to opportunity -> Mark won
     - create_and_post_invoice: Create invoice -> Post it
     - stock_transfer: Create transfer -> Confirm -> Validate
@@ -947,74 +946,8 @@ async def execute_workflow(
     steps: List[WorkflowStepResult] = []
 
     try:
-        # ----- Quote to Cash Workflow -----
-        if workflow_lower in ["quote_to_cash", "quotation_to_invoice", "sales_workflow"]:
-            order_id = params.get("order_id")
-
-            if not order_id:
-                return ExecuteWorkflowResponse(
-                    workflow=workflow,
-                    success=False,
-                    error="order_id required for quote_to_cash workflow",
-                )
-
-            # 3 steps: confirm, create invoice, post invoice
-            await progress.set_total(3)
-
-            # Step 1: Confirm order
-            await progress.set_message("Confirming sales order...")
-            try:
-                odoo.execute_method("sale.order", "action_confirm", [order_id])
-                steps.append(WorkflowStepResult(step="confirm_order", success=True))
-            except Exception as e:
-                steps.append(WorkflowStepResult(step="confirm_order", success=False, error=str(e)))
-                elapsed_ms = (time.time() - start_time) * 1000
-                return ExecuteWorkflowResponse(
-                    workflow=workflow,
-                    success=False,
-                    steps=steps,
-                    execution_time_ms=round(elapsed_ms, 2),
-                )
-            await progress.increment()
-
-            # Step 2: Create invoice
-            await progress.set_message("Creating invoice...")
-            invoice_ids = None
-            try:
-                invoice_ids = odoo.execute_method("sale.order", "_create_invoices", [order_id])
-                steps.append(WorkflowStepResult(step="create_invoice", success=True, result={"invoice_ids": invoice_ids}))
-            except Exception as e:
-                steps.append(WorkflowStepResult(step="create_invoice", success=False, error=str(e)))
-                elapsed_ms = (time.time() - start_time) * 1000
-                return ExecuteWorkflowResponse(
-                    workflow=workflow,
-                    success=False,
-                    steps=steps,
-                    execution_time_ms=round(elapsed_ms, 2),
-                )
-            await progress.increment()
-
-            # Step 3: Post invoice (optional)
-            await progress.set_message("Posting invoice...")
-            if params.get("post_invoice", True) and invoice_ids:
-                try:
-                    odoo.execute_method("account.move", "action_post", invoice_ids)
-                    steps.append(WorkflowStepResult(step="post_invoice", success=True))
-                except Exception as e:
-                    steps.append(WorkflowStepResult(step="post_invoice", success=False, error=str(e)))
-            await progress.increment()
-
-            elapsed_ms = (time.time() - start_time) * 1000
-            return ExecuteWorkflowResponse(
-                workflow=workflow,
-                success=all(s.success or s.skipped for s in steps),
-                steps=steps,
-                invoice_ids=invoice_ids,
-                execution_time_ms=round(elapsed_ms, 2),
-            )
-
         # ----- Lead to Won Workflow -----
-        elif workflow_lower in ["lead_to_won", "crm_workflow", "opportunity_won"]:
+        if workflow_lower in ["lead_to_won", "crm_workflow", "opportunity_won"]:
             lead_id = params.get("lead_id")
 
             if not lead_id:
@@ -1136,7 +1069,6 @@ async def execute_workflow(
                 success=False,
                 error=f"Unknown workflow: {workflow}",
                 available_workflows=[
-                    "quote_to_cash - Confirm order, create & post invoice",
                     "lead_to_won - Convert lead and mark as won",
                     "create_and_post_invoice - Create and post a customer invoice",
                 ],

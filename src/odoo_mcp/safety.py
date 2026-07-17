@@ -377,12 +377,6 @@ def classify_batch(
 # ----- Workflow Classification -----
 
 # Canonical step lists (defined once, aliased below)
-_QUOTE_TO_CASH_STEPS: list[tuple[str, str, str]] = [
-    ("confirm_order", "sale.order", "action_confirm"),
-    ("create_invoice", "sale.order", "_create_invoices"),
-    ("post_invoice", "account.move", "action_post"),
-]
-
 _LEAD_TO_WON_STEPS: list[tuple[str, str, str]] = [
     ("convert_to_opportunity", "crm.lead", "convert_opportunity"),
     ("mark_won", "crm.lead", "action_set_won"),
@@ -400,9 +394,6 @@ _STOCK_TRANSFER_STEPS: list[tuple[str, str, str]] = [
 
 # Maps workflow name → list of (step_name, model, method)
 _WORKFLOW_STEPS: dict[str, list[tuple[str, str, str]]] = {
-    "quote_to_cash": _QUOTE_TO_CASH_STEPS,
-    "quotation_to_invoice": _QUOTE_TO_CASH_STEPS,
-    "sales_workflow": _QUOTE_TO_CASH_STEPS,
     "lead_to_won": _LEAD_TO_WON_STEPS,
     "crm_workflow": _LEAD_TO_WON_STEPS,
     "opportunity_won": _LEAD_TO_WON_STEPS,

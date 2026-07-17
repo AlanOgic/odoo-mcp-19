@@ -12,7 +12,7 @@ Connect Claude and AI assistants to Odoo 19+ via the Model Context Protocol (MCP
 
 - **5 tools, full power** - `execute_method` calls ANY method on ANY model. Combined with `batch_execute`, `execute_workflow`, `configure_odoo`, and `read_resource`, you have complete Odoo API access
 - **27 resources** - Dynamic model discovery, compact schemas, workflows, and introspection
-- **20 prompts** - 13 generic guided workflows + 7 `cyanview-*` workflow skill prompts (per-user gated in multi-user mode)
+- **19 prompts** - 12 generic guided workflows + 7 `cyanview-*` workflow skill prompts (per-user gated in multi-user mode)
 - **30 ORM methods** - Complete documentation with examples
 - **13 modules** - Special methods including AI module (Enterprise)
 - **Safety layer** - Pre-execution risk classification, blocked models, cascade warnings
@@ -225,7 +225,7 @@ execute_method("sale.order", "action_confirm", args_json='[[15]]',
     confirmed=true, confirmation_token='<token from step 1>')
 
 # Multi-step workflow in one call
-execute_workflow("quote_to_cash", '{"order_id": 123}')
+execute_workflow("create_and_post_invoice", '{"partner_id": 123, "invoice_lines": [...]}')
 ```
 
 ## Architecture
@@ -272,16 +272,15 @@ execute_workflow("quote_to_cash", '{"order_id": 123}')
 | `odoo://aggregation` | Aggregation guide (formatted_read_group) |
 | `odoo://model-limitations` | Known model issues + runtime problems |
 
-### Prompts (20)
+### Prompts (19)
 
-13 generic guided prompts:
+12 generic guided prompts:
 
 | Prompt | Purpose |
 |--------|---------|
 | `odoo-exploration` | Discover instance capabilities |
 | `search-records` | Search for records in a model |
 | `odoo-api-reference` | Quick API reference card |
-| `quote-to-cash` | Complete sales workflow |
 | `ar-aging-report` | Accounts receivable aging |
 | `inventory-check` | Stock levels analysis |
 | `crm-pipeline` | Pipeline analysis |

@@ -1,7 +1,7 @@
 """
 MCP Prompt handlers for the Odoo MCP Server.
 
-All 13 @mcp.prompt decorated functions. Importing this module
+All 12 @mcp.prompt decorated functions. Importing this module
 registers all prompts with the FastMCP instance.
 """
 
@@ -288,34 +288,6 @@ kwargs_json='{{"domain": [], "groupby": ["partner_id", "state"], "aggregates": [
 
 
 # ----- Business Workflow Prompts -----
-
-
-@mcp.prompt(name="quote-to-cash")
-def quote_to_cash_prompt(order_id: str = None) -> list[Message]:
-    """Complete quote-to-cash workflow"""
-    if order_id:
-        return [Message(f"""Execute the quote-to-cash workflow for order {order_id}:
-
-Use execute_workflow("quote_to_cash", '{{"order_id": {order_id}}}')
-
-This will:
-1. Confirm the sales order (action_confirm)
-2. Create invoice (_create_invoices)
-3. Post invoice (action_post)
-
-Report the result of each step.
-""")]
-    else:
-        return [Message("""Guide me through creating a complete sales flow:
-
-1. First, find or create a customer (res.partner)
-2. Create a quotation (sale.order) with order lines
-3. Confirm the quotation
-4. Create and post the invoice
-5. Optionally register payment
-
-Read odoo://tools/sales for available operations.
-""")]
 
 
 @mcp.prompt(name="ar-aging-report")

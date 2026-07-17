@@ -153,13 +153,13 @@ async def run_tests():
     check("overall risk is BLOCKED", overall == RiskLevel.BLOCKED)
 
     # ---- Test 9: Workflow classification ----
-    header("TEST 9: quote_to_cash workflow → preview with HIGH risk")
-    preview = classify_workflow("quote_to_cash")
+    header("TEST 9: create_and_post_invoice workflow → preview with HIGH risk")
+    preview = classify_workflow("create_and_post_invoice")
     print(f"  overall_risk={preview.overall_risk.value}, steps={len(preview.steps)}")
     for step in preview.steps:
         print(f"    {step.step}: {step.risk_level.value} | {step.cascade_warning or '-'}")
     check("overall risk is HIGH", preview.overall_risk == RiskLevel.HIGH)
-    check("3 steps", len(preview.steps) == 3)
+    check("2 steps", len(preview.steps) == 2)
 
     # ---- Test 10: Unknown workflow ----
     header("TEST 10: Unknown workflow → None")

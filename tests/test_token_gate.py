@@ -205,11 +205,11 @@ class TestBatchTokenBinding:
 
 class TestWorkflowTokenBinding:
     def test_different_params_rejected(self):
-        """Token for quote_to_cash with order_id=15 cannot be reused for order_id=99."""
-        issue = server._payload_digest({"order_id": 15})
-        consume = server._payload_digest({"order_id": 99})
+        """Token for lead_to_won with lead_id=15 cannot be reused for lead_id=99."""
+        issue = server._payload_digest({"lead_id": 15})
+        consume = server._payload_digest({"lead_id": 99})
 
-        token = server._issue_confirmation_token("__workflow__", "quote_to_cash", issue)
-        err = server._validate_confirmation_token(token, "__workflow__", "quote_to_cash", consume)
+        token = server._issue_confirmation_token("__workflow__", "lead_to_won", issue)
+        err = server._validate_confirmation_token(token, "__workflow__", "lead_to_won", consume)
         assert err is not None
         assert "different payload" in err

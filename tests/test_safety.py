@@ -294,17 +294,10 @@ class TestUnknownMethods:
 
 
 class TestWorkflowClassification:
-    def test_quote_to_cash(self):
-        preview = classify_workflow("quote_to_cash")
-        assert preview is not None
-        assert preview.overall_risk == RiskLevel.HIGH
-        assert len(preview.steps) == 3
-
-    def test_quote_to_cash_aliases(self):
-        for alias in ["quotation_to_invoice", "sales_workflow"]:
-            preview = classify_workflow(alias)
-            assert preview is not None
-            assert preview.overall_risk == RiskLevel.HIGH
+    def test_removed_quote_to_cash_returns_none(self):
+        # quote_to_cash and its aliases were removed post-1.15.0
+        for name in ["quote_to_cash", "quotation_to_invoice", "sales_workflow"]:
+            assert classify_workflow(name) is None
 
     def test_lead_to_won(self):
         preview = classify_workflow("lead_to_won")
@@ -326,14 +319,14 @@ class TestWorkflowClassification:
         assert preview is None
 
     def test_case_insensitive(self):
-        preview = classify_workflow("Quote_To_Cash")
+        preview = classify_workflow("Lead_To_Won")
         assert preview is not None
 
     def test_cascade_warnings_in_workflow(self):
-        preview = classify_workflow("quote_to_cash")
+        preview = classify_workflow("create_and_post_invoice")
         assert preview is not None
         warnings = [s.cascade_warning for s in preview.steps if s.cascade_warning]
-        assert len(warnings) > 0  # sale.order action_confirm and account.move action_post
+        assert len(warnings) > 0  # account.move action_post is irreversible
 
 
 # =====================================================
