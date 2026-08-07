@@ -8,10 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **FastMCP dependency is now bounded: `fastmcp[tasks]>=3.4.6,<4`** (was `>=3.2.0`, unbounded).
+  Because the package is installed from git rather than PyPI, `uv.lock` does not apply to the
+  documented install path — every fresh `pip install git+…` resolved dependencies anew. That
+  already pulled FastMCP 3.4.6 and a Starlette major bump (0.52 → 1.x) nobody had tested, and
+  would silently have pulled FastMCP 4.x on release. FastMCP 4.x is not a drop-in: it targets
+  MCP spec 2026-07-28 (stateless core, no server-initiated requests, so `configure_odoo`'s
+  elicitation raises at runtime), moves to MCP SDK v2 (`mcp>=2.0` plus the split-out
+  `mcp-types`, changing the `mcp.types` imports in `app.py` and `skill_visibility.py`),
+  switches to `httpx2`, and relocates background tasks into a separate `fastmcp-tasks`
+  package requiring an explicit `TasksExtension` — without which `batch_execute` and
+  `execute_workflow` fail to register. The tested baseline moves to 3.4.6 so development and
+  fresh installs converge on one verified version. See `docs/mcp-2026-07-28-migration.md`.
 - Install documentation now points to GitHub (`pip install git+https://github.com/AlanOgic/odoo-mcp-19.git`)
   and locally built Docker images. The package is deliberately **not** published to PyPI or
   Docker Hub; the previously documented `pip install odoo-mcp-19` and
   `docker pull alanogik/odoo-mcp-19` paths never existed.
+
+### Added
+- `tests/test_dependency_pins.py` — guards the FastMCP and MCP SDK majors from two angles:
+  the installed versions (catches a stale or bypassed lock) and the constraint declared in
+  `pyproject.toml` (catches the bound being widened without doing the migration).
 
 ### Removed
 - The `quote-to-cash` prompt and the `quote_to_cash` workflow (with its

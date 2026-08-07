@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **odoo-mcp-19** — Standalone MCP server for Odoo 19+ using the **v2 JSON-2 API** (`POST /json/2/{model}/{method}`, Bearer token auth, named args only). No v1 fallback.
 
-- **Version**: 1.15.0 · **Python**: 3.10+ · **MCP**: 2025-11-25 (FastMCP 3.2.0+)
+- **Version**: 1.15.0 · **Python**: 3.10+ · **MCP**: 2025-11-25 (FastMCP `>=3.4.6,<4`)
+- **The `<4` ceiling is deliberate.** FastMCP 4.x targets MCP spec 2026-07-28 and is not a drop-in — see `docs/mcp-2026-07-28-migration.md` and `tests/test_dependency_pins.py`, which fails the build if the bound is widened or the environment drifts.
 - **Surface**: 5 tools, 27 `odoo://` resources, 19 prompts (12 generic + 7 `cyanview-*` workflow skill prompts)
 - **Discovery is via resources, action is via tools** — there is no `list_models` tool, agents read `odoo://models` instead.
 - **Two deployment shapes**: single-user (STDIO or HTTP with one static `MCP_API_KEY`) and **multi-user HTTP** (per-user `cv_odoo_…` keys from the CLORAG-managed registry, personal Odoo clients, per-user skill visibility — see "Multi-user mode" below).
@@ -58,6 +59,8 @@ Note: live tests under `tests/live/` are **script-style runners**, not pytest mo
 - **Unit (no Odoo)**: everything in `tests/` except `tests/live/` — run with `pytest --ignore=tests/live`. Highlights: `test_resources.py` patches `get_odoo_client` with a stub (pins resource-layer validation/error handling); `test_arg_mapping.py` pins the positional → JSON-2 named-arg contract; `test_odoo_client.py` pins bearer auth + no `result`-envelope unwrap; `test_token_gate.py` / `test_safety.py` / `test_safety_role.py` cover the gate and role-based classification; the multi-user tests (`test_auth_verifier.py`, `test_token_crypto.py`, `test_user_clients.py`, `test_skill_visibility.py`, `test_skill_prompts.py`) use the `users_db_seed` fixture in `tests/conftest.py`, which builds a temp registry with the **exact CLORAG DDL and crypto contract** — keep that fixture contract-true.
 - **Live (need `.env`)**: anything under `tests/live/` — run with `python <file>`, not pytest.
 
+**CI**: the only workflow is `.github/workflows/claude-code-review.yml` — an automated Claude code review on every PR. There is **no build/test CI**; run the unit tests, lint, and typecheck locally before pushing.
+
 ## High-level architecture
 
 The package was split in v1.14.0 (commit `ea10d79`) from a 3762-line `server.py` into focused modules; the multi-user layer (commit `4d1b7f8`) added the `skill_prompts`, `auth_verifier`, `users_db`, `user_clients`, `token_crypto`, and `skill_visibility` modules (see the tree below). Import order matters: `app.py` must be imported first so the `mcp` decorator is bound before `server.py`, `resources.py`, `prompts.py`, and `skill_prompts.py` register their handlers. `app.py` also wires auth (`_get_auth_provider`) and the skill-visibility middleware at import time, based on env.
@@ -103,7 +106,7 @@ src/odoo_mcp/
 
 **3. Live doc enrichment** — `odoo://methods/{model}` and `@api.private` detection both consult `/doc-bearer/<model>.json` (provided by Odoo's `api_doc` module, requires `api_doc.group_allow_doc` on the API user). Cached in `_DOC_CACHE`: 5-min TTL, 100-entry LRU, `threading.Lock`. Falls back silently to static data if unavailable.
 
-**4. Background tasks** — `batch_execute` and `execute_workflow` use FastMCP's `[tasks]` extra to support async execution with progress reporting (MCP 2025-11-25 SEP-1686).
+**4. Background tasks** — `batch_execute` and `execute_workflow` use FastMCP's `[tasks]` extra (backed by `pydocket` on the 3.x line) to support async execution with progress reporting (MCP 2025-11-25 SEP-1686). In FastMCP 4.x the extra becomes the separate `fastmcp-tasks` package and `task=True` tools additionally require an explicit `mcp.add_extension(TasksExtension())` — without it they fail to register at startup. This is one of the reasons for the `<4` pin.
 
 **5. Multi-user request path** (HTTP + `USERS_DB_PATH`): bearer token → `DbTokenVerifier` hashes it (sha256) and looks it up in the registry (`server='odoo'`, non-revoked key, active user) → `AccessToken` carries `client_id=user_id` and a `role` claim → every tool call passes `role=current_role()` into safety classification, and `get_odoo_client()` resolves the caller's **personal** OdooClient (their Odoo username + decrypted API key), so writes are attributed to the real Odoo account. STDIO and the static `MCP_API_KEY` fallback bypass all of this and use the env singleton — existing single-user behavior is unchanged.
 
