@@ -173,8 +173,8 @@ Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py
 | Tool | Purpose |
 |------|---------|
 | `execute_method` | Universal Odoo API access |
-| `batch_execute` | Multiple ops with progress tracking |
-| `execute_workflow` | Pre-built multi-step workflows (`lead_to_won`, `create_and_post_invoice`, `stock_transfer`, …) |
+| `batch_execute` | Multiple ops with progress tracking. **`atomic=True` stops at the first failure — it does not roll back.** Each op is a separate JSON-2 request, so completed ops stay committed |
+| `execute_workflow` | Two implemented workflows: `lead_to_won` (aliases `crm_workflow`, `opportunity_won`) and `create_and_post_invoice` (alias `quick_invoice`). Anything else returns `Unknown workflow` — there is **no** natural-language workflow synthesis. Note `safety._WORKFLOW_STEPS` still carries a `stock_transfer` entry with no matching branch in `execute_workflow`; it classifies, then fails as unknown |
 | `configure_odoo` | Interactive connection setup (user elicitation) |
 | `read_resource` | Read any `odoo://` URI — bridge for clients without resource template support |
 

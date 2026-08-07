@@ -25,6 +25,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Docker Hub; the previously documented `pip install odoo-mcp-19` and
   `docker pull alanogik/odoo-mcp-19` paths never existed.
 
+### Fixed
+- **Documentation accuracy pass.** Three claims in the wiki and tool descriptions were wrong:
+  - `batch_execute` was documented as running "in a single transaction" with `atomic`
+    meaning "rollback all on error". It does neither. Each operation is a separate JSON-2
+    request, and `atomic=true` returns at the first failure leaving every prior operation
+    **committed**. Corrected in `wiki/Tools.md` and `CLAUDE.md`, with an explicit warning.
+  - `execute_workflow`'s tool description advertised a `stock_transfer` workflow and
+    natural-language workflow synthesis. Neither is implemented — both return
+    `Unknown workflow`. The description now lists only `lead_to_won` and
+    `create_and_post_invoice` with their aliases and required parameters.
+  - The CHANGELOG link block pointed at 10 release tags that were never pushed. Only
+    v1.0.0, v1.6.0, v1.11.0, v1.14.0 and v1.15.0 exist; the dead links are gone and
+    `[Unreleased]` now resolves.
+
 ### Added
 - `tests/test_dependency_pins.py` — guards the FastMCP and MCP SDK majors from two angles:
   the installed versions (catches a stale or bypassed lock) and the constraint declared in
@@ -454,7 +468,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `discover_model_actions` tool (now `odoo://actions/{model}` resource)
 - `aggregate_data` tool (use `execute_method` with `read_group` + `odoo://aggregation` guide)
 
-### Why This Change?
+### Why this change
 Resources are read-only discovery mechanisms that don't count as "tools" in the MCP context.
 This reduces cognitive load and keeps the tool interface minimal:
 - **Tools** = Actions that modify data or execute operations
@@ -575,14 +589,11 @@ This reduces cognitive load and keeps the tool interface minimal:
   - Docker support with `Dockerfile` and `docker-compose.yml`
   - `run-docker.sh` wrapper for Claude Desktop
 
-[1.9.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.9.0
-[1.8.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.8.0
-[1.7.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.7.0
+<!-- Only versions with a published git tag are linked. Intermediate releases were
+     cut without tags; their entries above remain the record for those versions. -->
+[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v1.15.0...HEAD
+[1.15.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.15.0
+[1.14.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.14.0
+[1.11.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.11.0
 [1.6.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.6.0
-[1.5.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.5.0
-[1.4.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.4.1
-[1.4.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.4.0
-[1.3.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.3.0
-[1.2.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.2.0
-[1.1.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.1.0
 [1.0.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.0.0

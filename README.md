@@ -6,22 +6,52 @@
 \____/\__,_/\____/\____/  /_/  /_/\____/_/       /_//____/ /_/
 ```
 
-Connect Claude and AI assistants to Odoo 19+ via the Model Context Protocol (MCP).
+Ask Claude to read and write your Odoo 19 data in plain language — and stop it from doing
+the dangerous parts by accident.
 
-## Features
+This server connects any Model Context Protocol (MCP) client to Odoo 19+ over the v2 JSON-2
+API. An assistant discovers your models by reading schemas rather than guessing field names,
+then calls any ORM method through one tool. Before anything destructive runs, a safety layer
+classifies the operation and holds it behind a single-use confirmation token.
 
-- **5 tools, full power** - `execute_method` calls ANY method on ANY model. Combined with `batch_execute`, `execute_workflow`, `configure_odoo`, and `read_resource`, you have complete Odoo API access
-- **27 resources** - Dynamic model discovery, compact schemas, workflows, and introspection
-- **19 prompts** - 12 generic guided workflows + 7 `cyanview-*` workflow skill prompts (per-user gated in multi-user mode)
-- **30 ORM methods** - Complete documentation with examples
-- **13 modules** - Special methods including AI module (Enterprise)
-- **Safety layer** - Pre-execution risk classification, blocked models, cascade warnings
-- **DX optimizations** - Quick-schema, bundle, session-bootstrap, resolve_json for token-efficient AI operations
-- **MCP 2025-11-25** - Background tasks, progress tracking, icons, structured outputs
-- **FastMCP 3.4.6 (`<4`)** - Latest 3.x with security fixes, providers, transforms, OpenTelemetry. FastMCP 4.x targets MCP spec 2026-07-28 and is intentionally not yet adopted
-- **Input validation** - Regex-validated model/method names, URI scheme guards, JSON type checks
-- **Thread-safe** - Singleton client, locked global caches for concurrent HTTP transport
-- **Hardened Docker** - Non-root container, `--env-file` for secrets, mandatory HTTP auth
+```python
+# The assistant reads the schema first, then queries — no guessed field names
+read_resource("odoo://model/sale.order/quick-schema")
+execute_method("sale.order", "search_read",
+    kwargs_json='{"domain": [["state", "=", "sale"]], "fields": ["name", "amount_total"], "limit": 10}')
+```
+
+## Who this is for
+
+- **You run Odoo 19+** and want an assistant that queries and updates it directly, instead of
+  copying data between a chat window and the ERP.
+- **You need writes to be safe.** Posting a journal entry or validating a picking is
+  irreversible. Every such call is gated, and eight security-critical models refuse writes
+  outright.
+- **You care about token cost.** Compact schemas, batched model bundles, and one-call session
+  bootstrap keep discovery cheap on long conversations.
+
+If you only need read-only reporting, this still works — set a `readonly` role and the safety
+layer blocks every non-safe method.
+
+## What you get
+
+| | |
+|---|---|
+| **5 tools** | `execute_method` reaches any method on any model; `batch_execute`, `execute_workflow`, `configure_odoo`, and `read_resource` cover the rest |
+| **27 resources** | Model discovery, compact schemas, state-machine workflows, and introspection |
+| **19 prompts** | 12 generic guided workflows plus 7 `cyanview-*` skill prompts, gated per user in multi-user mode |
+| **Safety layer** | Risk classification before execution, 8 blocked models, 6 sensitive models, cascade warnings |
+| **Multi-user mode** | Per-user bearer keys and personal Odoo clients, so every write is attributed to a real person |
+| **Reference data** | 30 documented ORM methods, 13 modules with special-method knowledge, including the Enterprise AI module |
+
+Built on **MCP 2025-11-25** (background tasks, progress tracking, icons, structured outputs)
+and **FastMCP `>=3.4.6,<4`**. The ceiling is deliberate — FastMCP 4.x targets MCP spec
+2026-07-28 and is [not yet adopted](docs/mcp-2026-07-28-migration.md).
+
+Hardened by default: regex-validated model and method names, a non-root Docker container,
+mandatory authentication on HTTP, thread-safe caches, and no traceback ever forwarded to a
+client.
 
 ## Installation
 
@@ -29,7 +59,7 @@ Connect Claude and AI assistants to Odoo 19+ via the Model Context Protocol (MCP
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (recommended) **OR** Python 3.10+
 - An Odoo 19+ instance with API access
-- An API key from your Odoo instance (Settings > Users > API Keys)
+- An API key from your Odoo instance (**Preferences → Account Security → New API Key**)
 
 ### Option A: Docker (recommended)
 
@@ -91,7 +121,7 @@ python -m odoo_mcp
 pip install git+https://github.com/AlanOgic/odoo-mcp-19.git
 ```
 
-## Setup Wizard
+## Setup wizard
 
 Interactive wizard that generates `.env`, Docker commands, and Claude Desktop config:
 
@@ -191,9 +221,10 @@ Create a `.env` file in the project root with your credentials, then:
 
 **Restart Claude Desktop** after saving the config file.
 
-### Verify it works
+### Verify the connection
 
-Ask Claude: *"List the first 5 partners in Odoo"*
+Ask Claude: *"List the first 5 partners in Odoo"*. It should call `execute_method` on
+`res.partner` and come back with names.
 
 ## Quick start examples
 
@@ -218,9 +249,13 @@ result = execute_method("sale.order", "action_confirm", args_json='[[15]]')
 execute_method("sale.order", "action_confirm", args_json='[[15]]',
     confirmed=true, confirmation_token='<token from step 1>')
 
-# Multi-step workflow in one call
+# Multi-step workflow in one call (also gated — posting an invoice is irreversible)
 execute_workflow("create_and_post_invoice", '{"partner_id": 123, "invoice_lines": [...]}')
 ```
+
+Note that `confirmed=true` on its own does nothing. The token is single-use, expires after
+120 seconds, and is bound to the exact payload the gate inspected — so an agent cannot take a
+token issued for `unlink([1])` and reuse it on `unlink([1, 2, …, 1000])`.
 
 ## Architecture
 
@@ -297,7 +332,7 @@ execute_workflow("create_and_post_invoice", '{"partner_id": 123, "invoice_lines"
 | `cyanview-shipping-watchdog` | Audit unshipped/overdue orders |
 | `cyanview-inventory-watchdog` | Monitor stock levels and reorders |
 
-## Safety Layer (v1.10.0)
+## Safety layer
 
 Pre-execution safety classification gates dangerous operations behind confirmation.
 
@@ -327,7 +362,7 @@ Side effects are surfaced for workflow actions:
 - `purchase.order` + `button_confirm` → creates incoming receipts
 - `account.payment` + `action_post` → creates journal entries + reconciliation
 
-### Confirmation flow (token-based, v1.14.0)
+### Confirmation flow
 
 1. Caller sends `execute_method(model, method, args_json)`
 2. Safety layer classifies the operation
@@ -336,9 +371,9 @@ Side effects are surfaced for workflow actions:
 
 Tokens are single-use, expire after 120s, and are bound to the specific model+method. This prevents agents from bypassing the safety gate by always passing `confirmed=true`.
 
-## DX Improvements (v1.11.0)
+## Token-efficient discovery
 
-### Quick Schema
+### Quick schema
 
 `odoo://model/{model}/quick-schema` — Ultra-compact schema with short keys: `t` (type), `req` (required), `ro` (readonly), `rel` (relation). ~60-80% smaller than `/fields`.
 
@@ -346,7 +381,7 @@ Tokens are single-use, expire after 120s, and are bound to the specific model+me
 
 `odoo://bundle/res.partner,sale.order,stock.picking` — Batch quick-schema for up to 10 models in one call.
 
-### Session Bootstrap
+### Session bootstrap
 
 `odoo://session-bootstrap` — One call to bootstrap a conversation with schemas + workflows for common models. Configure via `MCP_BOOTSTRAP_MODELS` env var.
 
@@ -354,7 +389,7 @@ Tokens are single-use, expire after 120s, and are bound to the specific model+me
 
 `odoo://model/{model}/workflow` — State machine transitions for 6 main models with side effects and irreversibility flags. Dynamic fallback for unmapped models.
 
-### Many2one Resolution
+### Many2one resolution
 
 Auto-resolve field names to IDs with `resolve_json`:
 
@@ -364,7 +399,7 @@ execute_method("res.partner", "write",
     resolve_json='{"user_id": {"model": "res.users", "search": "John"}}')
 ```
 
-### Default Context
+### Default context
 
 Set `MCP_DEFAULT_CONTEXT` to apply context to all operations:
 
@@ -372,11 +407,11 @@ Set `MCP_DEFAULT_CONTEXT` to apply context to all operations:
 export MCP_DEFAULT_CONTEXT='{"lang": "fr_FR", "tz": "Europe/Paris"}'
 ```
 
-### Expanded Error Patterns
+### Error suggestions
 
 ~25 error patterns with actionable suggestions covering 422, 500, 403, 404 errors and fallback patterns.
 
-## HTTP Transport
+## HTTP transport
 
 Run as an HTTP server with Bearer token authentication for remote or multi-client access.
 
@@ -426,7 +461,7 @@ docker run -d -p 8080:8080 \
 }
 ```
 
-### Verify it works
+### Verify authentication
 
 ```bash
 # Should succeed (200)
@@ -484,7 +519,7 @@ env `ODOO_*` credentials become optional (only the `env-admin` fallback uses the
 | `ODOO_URL` | Yes | — | Odoo server URL |
 | `ODOO_DB` | Yes | — | Database name |
 | `ODOO_USERNAME` | Yes | — | Username |
-| `ODOO_API_KEY` | Yes | — | API key (Settings > Users > API Keys) |
+| `ODOO_API_KEY` | Yes | — | API key (Preferences → Account Security) |
 | `ODOO_PASSWORD` | No | — | Password (fallback if no API key) |
 | `ODOO_TIMEOUT` | No | `30` | Request timeout in seconds |
 | `ODOO_VERIFY_SSL` | No | `true` | SSL certificate verification |
@@ -502,16 +537,26 @@ env `ODOO_*` credentials become optional (only the `env-admin` fallback uses the
 
 ## Documentation
 
-Full documentation in the **[Wiki](https://github.com/AlanOgic/odoo-mcp-19/wiki)**:
+Full documentation lives in the **[Wiki](https://github.com/AlanOgic/odoo-mcp-19/wiki)**:
 
-- [Getting Started](https://github.com/AlanOgic/odoo-mcp-19/wiki/Getting-Started)
-- [Tools](https://github.com/AlanOgic/odoo-mcp-19/wiki/Tools)
-- [Resources](https://github.com/AlanOgic/odoo-mcp-19/wiki/Resources)
-- [ORM Methods](https://github.com/AlanOgic/odoo-mcp-19/wiki/ORM-Methods)
-- [Module Knowledge](https://github.com/AlanOgic/odoo-mcp-19/wiki/Module-Knowledge)
-- [AI Module](https://github.com/AlanOgic/odoo-mcp-19/wiki/AI-Module)
-- [Domain Syntax](https://github.com/AlanOgic/odoo-mcp-19/wiki/Domain-Syntax)
-- [Prompts](https://github.com/AlanOgic/odoo-mcp-19/wiki/Prompts)
+**Start here**
+
+- [Getting started](https://github.com/AlanOgic/odoo-mcp-19/wiki/Getting-Started) — install and connect in five minutes
+- [Tools](https://github.com/AlanOgic/odoo-mcp-19/wiki/Tools) — the 5 tools, their parameters, and when to reach for each
+- [Resources](https://github.com/AlanOgic/odoo-mcp-19/wiki/Resources) — the 27 `odoo://` discovery URIs
+
+**Reference**
+
+- [ORM methods](https://github.com/AlanOgic/odoo-mcp-19/wiki/ORM-Methods) — 30 methods with working examples
+- [Domain syntax](https://github.com/AlanOgic/odoo-mcp-19/wiki/Domain-Syntax) — Polish-prefix search filters
+- [Module knowledge](https://github.com/AlanOgic/odoo-mcp-19/wiki/Module-Knowledge) — special methods across 13 modules
+- [AI module](https://github.com/AlanOgic/odoo-mcp-19/wiki/AI-Module) — Odoo 19 Enterprise AI integration
+- [Prompts](https://github.com/AlanOgic/odoo-mcp-19/wiki/Prompts) — the 19 guided workflow prompts
+
+**Operations**
+
+- [Deployment](https://github.com/AlanOgic/odoo-mcp-19/wiki/Deployment) — production HTTP behind Nginx, multi-client routing
+- [MCP 2026-07-28 migration](docs/mcp-2026-07-28-migration.md) — why FastMCP is pinned below 4.x, and what moving costs
 
 ## Security
 
