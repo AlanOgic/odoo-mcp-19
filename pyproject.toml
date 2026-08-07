@@ -23,7 +23,11 @@ authors = [
 ]
 
 dependencies = [
-    "fastmcp[tasks]>=3.2.0",
+    # Ceiling is deliberate: FastMCP 4.x targets MCP spec 2026-07-28 and moves to
+    # MCP SDK v2 (mcp>=2.0 + mcp-types), httpx2, and a separate fastmcp-tasks
+    # package for background tasks. See docs/mcp-2026-07-28-migration.md before
+    # raising it — tests/test_dependency_pins.py enforces the bound.
+    "fastmcp[tasks]>=3.4.6,<4",
     "requests>=2.32.4",
     "python-dotenv>=1.0.0",
     "cryptography>=42",
