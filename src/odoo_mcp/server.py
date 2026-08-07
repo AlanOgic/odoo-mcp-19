@@ -846,18 +846,20 @@ async def configure_odoo(ctx: Context) -> Dict[str, Any]:
 @mcp.tool(
     description="""Execute a multi-step workflow in a single call with progress tracking.
 
-    This is the KEY TOOL for Code-First Pattern - combines multiple
-    operations into one call, dramatically reducing tokens.
+    Combines several operations into one call, which costs far fewer tokens than
+    driving the same steps with individual execute_method calls.
 
     Supported workflows:
-    - lead_to_won: Create lead -> Convert to opportunity -> Mark won
-    - create_and_post_invoice: Create invoice -> Post it
-    - stock_transfer: Create transfer -> Confirm -> Validate
+    - lead_to_won (aliases: crm_workflow, opportunity_won)
+      Convert a lead to an opportunity -> mark it won. Requires lead_id.
+    - create_and_post_invoice (alias: quick_invoice)
+      Create a customer invoice -> post it. Requires partner_id and invoice_lines.
 
-    Or describe a custom workflow in natural language.
+    Any other name returns "Unknown workflow" with the list above — describe the
+    steps you need with execute_method or batch_execute instead.
 
-    SAFETY: Workflows with dangerous steps return pending_confirmation=true.
-    Add confirmed=true to proceed after reviewing the safety preview.
+    SAFETY: Workflows with dangerous steps return pending_confirmation=true with a
+    single-use confirmation_token. Re-call with confirmed=true AND that token.
     """,
     annotations={
         "title": "Execute Workflow",
