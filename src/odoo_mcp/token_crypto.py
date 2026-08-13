@@ -32,8 +32,7 @@ def _read_encryption_password() -> str:
     if file_path and Path(file_path).is_file():
         return Path(file_path).read_text().strip()
     raise RuntimeError(
-        "TOKEN_ENCRYPTION_KEY (or TOKEN_ENCRYPTION_KEY_FILE) is required to"
-        " decrypt registry credentials."
+        "TOKEN_ENCRYPTION_KEY (or TOKEN_ENCRYPTION_KEY_FILE) is required to" " decrypt registry credentials."
     )
 
 
@@ -70,8 +69,7 @@ def decrypt_secret(encrypted: str, db_path: Path) -> dict[str, object]:
         decrypted = fernet.decrypt(encrypted.encode())
     except InvalidToken as exc:
         raise RuntimeError(
-            "TOKEN_ENCRYPTION_KEY mismatch with registry — the secret must"
-            " hold the same value as the CLORAG one."
+            "TOKEN_ENCRYPTION_KEY mismatch with registry — the secret must" " hold the same value as the CLORAG one."
         ) from exc
     result = json.loads(decrypted)
     if not isinstance(result, dict):

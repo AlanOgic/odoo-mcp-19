@@ -64,9 +64,7 @@ class UsersDb:
             ).fetchone()
         if row is None:
             return None
-        return ApiKeyIdentity(
-            user_id=row["id"], name=row["name"], email=row["email"], role=row["role"]
-        )
+        return ApiKeyIdentity(user_id=row["id"], name=row["name"], email=row["email"], role=row["role"])
 
     def get_odoo_credentials(self, user_id: str) -> OdooCredentials | None:
         with self._connect() as conn:
@@ -86,9 +84,7 @@ class UsersDb:
 
     def get_skills(self, user_id: str) -> frozenset[str]:
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT skill_name FROM user_skills WHERE user_id = ?", (user_id,)
-            ).fetchall()
+            rows = conn.execute("SELECT skill_name FROM user_skills WHERE user_id = ?", (user_id,)).fetchall()
         return frozenset(row["skill_name"] for row in rows)
 
 

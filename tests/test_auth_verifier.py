@@ -51,9 +51,7 @@ def test_unknown_token_rejected(users_db_seed):
 
 
 def test_static_fallback_maps_to_env_admin(users_db_seed):
-    verifier = DbTokenVerifier(
-        UsersDb(users_db_seed.db_path), static_api_key="shared-static"
-    )
+    verifier = DbTokenVerifier(UsersDb(users_db_seed.db_path), static_api_key="shared-static")
     token = _verify(verifier, "shared-static")
     assert token is not None
     assert token.client_id == ENV_ADMIN_CLIENT_ID

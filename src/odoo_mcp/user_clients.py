@@ -95,8 +95,7 @@ def get_client_for_current_user() -> OdooClient | None:
             username=creds.odoo_username,
             api_key=str(secret["api_key"]),
             timeout=int(os.environ.get("ODOO_TIMEOUT", "30")),
-            verify_ssl=os.environ.get("ODOO_VERIFY_SSL", "1").lower()
-            in ("1", "true", "yes"),
+            verify_ssl=os.environ.get("ODOO_VERIFY_SSL", "1").lower() in ("1", "true", "yes"),
         )
         _cache[user_id] = _Entry(client, creds.updated_at, now)
         return client

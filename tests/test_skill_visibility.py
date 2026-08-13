@@ -73,9 +73,7 @@ def test_no_token_fails_closed(users_db_seed, patched_context):
 
 
 def test_member_sees_only_allowed_skills(users_db_seed, patched_context):
-    patched_context["token"] = SimpleNamespace(
-        client_id=users_db_seed.user_ids["member"], claims={"role": "support"}
-    )
+    patched_context["token"] = SimpleNamespace(client_id=users_db_seed.user_ids["member"], claims={"role": "support"})
     result = _list(_middleware(users_db_seed), "http", None)
     names = {p.name for p in result}
     assert names == {
@@ -87,25 +85,19 @@ def test_member_sees_only_allowed_skills(users_db_seed, patched_context):
 
 
 def test_admin_sees_everything(users_db_seed, patched_context):
-    patched_context["token"] = SimpleNamespace(
-        client_id=users_db_seed.user_ids["admin"], claims={"role": "admin"}
-    )
+    patched_context["token"] = SimpleNamespace(client_id=users_db_seed.user_ids["admin"], claims={"role": "admin"})
     result = _list(_middleware(users_db_seed), "http", None)
     assert len(result) == len(ALL_PROMPTS)
 
 
 def test_env_admin_sees_everything(users_db_seed, patched_context):
-    patched_context["token"] = SimpleNamespace(
-        client_id="env-admin", claims={"role": "admin"}
-    )
+    patched_context["token"] = SimpleNamespace(client_id="env-admin", claims={"role": "admin"})
     result = _list(_middleware(users_db_seed), "http", None)
     assert len(result) == len(ALL_PROMPTS)
 
 
 def test_render_forbidden_skill_raises(users_db_seed, patched_context):
-    patched_context["token"] = SimpleNamespace(
-        client_id=users_db_seed.user_ids["member"], claims={"role": "support"}
-    )
+    patched_context["token"] = SimpleNamespace(client_id=users_db_seed.user_ids["member"], claims={"role": "support"})
     mw = _middleware(users_db_seed)
 
     async def run():
@@ -120,9 +112,7 @@ def test_render_forbidden_skill_raises(users_db_seed, patched_context):
 
 
 def test_render_allowed_skill_passes(users_db_seed, patched_context):
-    patched_context["token"] = SimpleNamespace(
-        client_id=users_db_seed.user_ids["member"], claims={"role": "support"}
-    )
+    patched_context["token"] = SimpleNamespace(client_id=users_db_seed.user_ids["member"], claims={"role": "support"})
     mw = _middleware(users_db_seed)
 
     async def run():

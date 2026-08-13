@@ -52,9 +52,9 @@ class RegistrySeed:
     def __init__(self, db_path: Path, salt: bytes):
         self.db_path = db_path
         self.salt = salt
-        self.keys: dict[str, str] = {}      # label -> full key
+        self.keys: dict[str, str] = {}  # label -> full key
         self.user_ids: dict[str, str] = {}  # label -> user id
-        self.key_ids: dict[str, str] = {}   # label -> key id
+        self.key_ids: dict[str, str] = {}  # label -> key id
 
     def add_user(self, conn, label, name, role, is_active=True):
         user_id = str(uuid.uuid4())
@@ -72,9 +72,15 @@ class RegistrySeed:
         now = datetime.now().isoformat()
         conn.execute(
             "INSERT INTO api_keys VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
-            (key_id, user_id, server,
-             hashlib.sha256(full_key.encode()).hexdigest(),
-             full_key[:12], now, now if revoked else None),
+            (
+                key_id,
+                user_id,
+                server,
+                hashlib.sha256(full_key.encode()).hexdigest(),
+                full_key[:12],
+                now,
+                now if revoked else None,
+            ),
         )
         self.keys[label] = full_key
         self.key_ids[label] = key_id
@@ -109,9 +115,12 @@ def users_db_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RegistrySe
     now = datetime.now().isoformat()
     conn.execute(
         "INSERT INTO user_odoo_credentials VALUES (?, ?, ?, ?)",
-        (member_id, "thierry@cyanview.com",
-         encrypt_with_contract({"api_key": "thierry-odoo-key"}, salt, TEST_ENCRYPTION_KEY),
-         now),
+        (
+            member_id,
+            "thierry@cyanview.com",
+            encrypt_with_contract({"api_key": "thierry-odoo-key"}, salt, TEST_ENCRYPTION_KEY),
+            now,
+        ),
     )
     conn.executemany(
         "INSERT INTO user_skills VALUES (?, ?)",

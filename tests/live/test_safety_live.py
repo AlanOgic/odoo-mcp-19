@@ -19,6 +19,7 @@ import sys
 
 # Load .env
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from odoo_mcp.odoo_client import get_odoo_client
@@ -32,7 +33,7 @@ def header(msg):
 
 def result_summary(resp):
     """Extract key fields from the response model."""
-    d = resp.model_dump() if hasattr(resp, 'model_dump') else resp
+    d = resp.model_dump() if hasattr(resp, "model_dump") else resp
     out = {
         "success": d.get("success"),
         "pending_confirmation": d.get("pending_confirmation"),
@@ -42,7 +43,9 @@ def result_summary(resp):
     if d.get("safety"):
         s = d["safety"]
         out["safety.risk_level"] = s.get("risk_level") if isinstance(s, dict) else s.risk_level
-        out["safety.requires_confirmation"] = s.get("requires_confirmation") if isinstance(s, dict) else s.requires_confirmation
+        out["safety.requires_confirmation"] = (
+            s.get("requires_confirmation") if isinstance(s, dict) else s.requires_confirmation
+        )
         out["safety.cascade_warning"] = s.get("cascade_warning") if isinstance(s, dict) else s.cascade_warning
         out["safety.blocked_reason"] = s.get("blocked_reason") if isinstance(s, dict) else s.blocked_reason
     return {k: v for k, v in out.items() if v is not None}
@@ -53,8 +56,11 @@ async def run_tests():
     # Instead, test the safety module directly with real classification + a real Odoo call.
 
     from odoo_mcp.safety import (
-        classify_operation, classify_batch, classify_workflow,
-        audit_log, RiskLevel,
+        RiskLevel,
+        audit_log,
+        classify_batch,
+        classify_operation,
+        classify_workflow,
     )
 
     passed = 0
@@ -133,7 +139,7 @@ async def run_tests():
     ops = [
         {"model": "res.partner", "method": "search_read"},
         {"model": "sale.order", "method": "action_confirm", "args_json": "[[1]]"},
-        {"model": "res.partner", "method": "write", "args_json": "[[1], {\"name\": \"x\"}]"},
+        {"model": "res.partner", "method": "write", "args_json": '[[1], {"name": "x"}]'},
     ]
     classifications, overall, needs_confirm = classify_batch(ops)
     print(f"  overall_risk={overall.value}, needs_confirm={needs_confirm}")

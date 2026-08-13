@@ -37,7 +37,8 @@ def test_no_token_returns_none(monkeypatch, users_db_seed):
 
 def test_env_admin_returns_none(monkeypatch, users_db_seed):
     monkeypatch.setattr(
-        user_clients, "_safe_get_access_token",
+        user_clients,
+        "_safe_get_access_token",
         lambda: _fake_token("env-admin", role="admin"),
     )
     assert user_clients.get_client_for_current_user() is None
@@ -46,9 +47,7 @@ def test_env_admin_returns_none(monkeypatch, users_db_seed):
 
 def test_registry_user_gets_personal_client(monkeypatch, users_db_seed):
     member_id = users_db_seed.user_ids["member"]
-    monkeypatch.setattr(
-        user_clients, "_safe_get_access_token", lambda: _fake_token(member_id)
-    )
+    monkeypatch.setattr(user_clients, "_safe_get_access_token", lambda: _fake_token(member_id))
     client = user_clients.get_client_for_current_user()
     assert client is not None
     assert client.username == "thierry@cyanview.com"
@@ -59,9 +58,7 @@ def test_registry_user_gets_personal_client(monkeypatch, users_db_seed):
 
 def test_client_is_cached(monkeypatch, users_db_seed):
     member_id = users_db_seed.user_ids["member"]
-    monkeypatch.setattr(
-        user_clients, "_safe_get_access_token", lambda: _fake_token(member_id)
-    )
+    monkeypatch.setattr(user_clients, "_safe_get_access_token", lambda: _fake_token(member_id))
     first = user_clients.get_client_for_current_user()
     second = user_clients.get_client_for_current_user()
     assert first is second
@@ -69,20 +66,15 @@ def test_client_is_cached(monkeypatch, users_db_seed):
 
 def test_credential_rotation_rebuilds_client(monkeypatch, users_db_seed):
     member_id = users_db_seed.user_ids["member"]
-    monkeypatch.setattr(
-        user_clients, "_safe_get_access_token", lambda: _fake_token(member_id)
-    )
+    monkeypatch.setattr(user_clients, "_safe_get_access_token", lambda: _fake_token(member_id))
     first = user_clients.get_client_for_current_user()
 
     # Rotate credentials in the registry (as CLORAG would)
     conn = sqlite3.connect(users_db_seed.db_path)
     conn.execute(
-        "UPDATE user_odoo_credentials SET encrypted_secret = ?, updated_at = ?"
-        " WHERE user_id = ?",
+        "UPDATE user_odoo_credentials SET encrypted_secret = ?, updated_at = ?" " WHERE user_id = ?",
         (
-            encrypt_with_contract(
-                {"api_key": "rotated-key"}, users_db_seed.salt, TEST_ENCRYPTION_KEY
-            ),
+            encrypt_with_contract({"api_key": "rotated-key"}, users_db_seed.salt, TEST_ENCRYPTION_KEY),
             datetime.now().isoformat() + "-rotated",
             member_id,
         ),
@@ -100,7 +92,8 @@ def test_credential_rotation_rebuilds_client(monkeypatch, users_db_seed):
 def test_missing_credentials_raises_permission_error(monkeypatch, users_db_seed):
     admin_id = users_db_seed.user_ids["admin"]  # admin has no stored credentials
     monkeypatch.setattr(
-        user_clients, "_safe_get_access_token",
+        user_clients,
+        "_safe_get_access_token",
         lambda: _fake_token(admin_id, role="admin", name="Alan Admin"),
     )
     with pytest.raises(PermissionError, match="Alan Admin"):
@@ -121,8 +114,6 @@ def test_dispatcher_prefers_user_client(monkeypatch, users_db_seed):
     import odoo_mcp.odoo_client as odoo_client_module
 
     member_id = users_db_seed.user_ids["member"]
-    monkeypatch.setattr(
-        user_clients, "_safe_get_access_token", lambda: _fake_token(member_id)
-    )
+    monkeypatch.setattr(user_clients, "_safe_get_access_token", lambda: _fake_token(member_id))
     client = odoo_client_module.get_odoo_client()
     assert client.username == "thierry@cyanview.com"

@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 # ----- Module Knowledge Base -----
 
+
 def load_module_knowledge() -> Dict[str, Any]:
     """Load the module knowledge base from JSON file."""
     knowledge_path = Path(__file__).parent / "module_knowledge.json"
@@ -78,8 +79,8 @@ def _merge_context(explicit_context: Optional[Dict] = None) -> Optional[Dict]:
 
 # ----- Input Validation -----
 
-_MODEL_RE = re.compile(r'^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$')
-_METHOD_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+_MODEL_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+_METHOD_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 def _validate_model(model: str) -> Optional[str]:
@@ -124,30 +125,53 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
         "states": ["draft", "sent", "sale", "done", "cancel"],
         "transitions": [
             {"from": "draft", "to": "sent", "method": "action_quotation_sent", "label": "Mark as Sent"},
-            {"from": "draft", "to": "sale", "method": "action_confirm", "label": "Confirm Order",
-             "side_effects": ["Creates delivery orders (stock.picking)", "Reserves stock"],
-             "irreversible": False},
-            {"from": "sent", "to": "sale", "method": "action_confirm", "label": "Confirm Order",
-             "side_effects": ["Creates delivery orders (stock.picking)", "Reserves stock"],
-             "irreversible": False},
-            {"from": "sale", "to": "done", "method": "action_lock", "label": "Lock Order",
-             "irreversible": False},
-            {"from": ["draft", "sent", "sale"], "to": "cancel", "method": "action_cancel", "label": "Cancel",
-             "irreversible": False},
+            {
+                "from": "draft",
+                "to": "sale",
+                "method": "action_confirm",
+                "label": "Confirm Order",
+                "side_effects": ["Creates delivery orders (stock.picking)", "Reserves stock"],
+                "irreversible": False,
+            },
+            {
+                "from": "sent",
+                "to": "sale",
+                "method": "action_confirm",
+                "label": "Confirm Order",
+                "side_effects": ["Creates delivery orders (stock.picking)", "Reserves stock"],
+                "irreversible": False,
+            },
+            {"from": "sale", "to": "done", "method": "action_lock", "label": "Lock Order", "irreversible": False},
+            {
+                "from": ["draft", "sent", "sale"],
+                "to": "cancel",
+                "method": "action_cancel",
+                "label": "Cancel",
+                "irreversible": False,
+            },
         ],
     },
     "account.move": {
         "state_field": "state",
         "states": ["draft", "posted", "cancel"],
         "transitions": [
-            {"from": "draft", "to": "posted", "method": "action_post", "label": "Post/Validate",
-             "side_effects": ["Creates journal entries", "Updates account balances", "Assigns sequence number"],
-             "irreversible": True},
-            {"from": "posted", "to": "draft", "method": "button_draft", "label": "Reset to Draft",
-             "side_effects": ["Removes sequence assignment"],
-             "irreversible": False},
-            {"from": "posted", "to": "cancel", "method": "button_cancel", "label": "Cancel",
-             "irreversible": False},
+            {
+                "from": "draft",
+                "to": "posted",
+                "method": "action_post",
+                "label": "Post/Validate",
+                "side_effects": ["Creates journal entries", "Updates account balances", "Assigns sequence number"],
+                "irreversible": True,
+            },
+            {
+                "from": "posted",
+                "to": "draft",
+                "method": "button_draft",
+                "label": "Reset to Draft",
+                "side_effects": ["Removes sequence assignment"],
+                "irreversible": False,
+            },
+            {"from": "posted", "to": "cancel", "method": "button_cancel", "label": "Cancel", "irreversible": False},
         ],
     },
     "crm.lead": {
@@ -155,59 +179,105 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
         "note": "CRM uses type (lead/opportunity) + stage_id, not a simple state field",
         "stages": "Dynamic - read crm.stage for available stages",
         "transitions": [
-            {"from": "lead", "to": "opportunity", "method": "convert_opportunity", "label": "Convert to Opportunity",
-             "side_effects": ["May create/link partner"],
-             "irreversible": False},
-            {"from": "opportunity", "to": "won", "method": "action_set_won", "label": "Mark Won",
-             "side_effects": ["Updates probability to 100%"],
-             "irreversible": False},
-            {"from": "opportunity", "to": "lost", "method": "action_set_lost", "label": "Mark Lost",
-             "side_effects": ["Archives the lead"],
-             "irreversible": False},
+            {
+                "from": "lead",
+                "to": "opportunity",
+                "method": "convert_opportunity",
+                "label": "Convert to Opportunity",
+                "side_effects": ["May create/link partner"],
+                "irreversible": False,
+            },
+            {
+                "from": "opportunity",
+                "to": "won",
+                "method": "action_set_won",
+                "label": "Mark Won",
+                "side_effects": ["Updates probability to 100%"],
+                "irreversible": False,
+            },
+            {
+                "from": "opportunity",
+                "to": "lost",
+                "method": "action_set_lost",
+                "label": "Mark Lost",
+                "side_effects": ["Archives the lead"],
+                "irreversible": False,
+            },
         ],
     },
     "stock.picking": {
         "state_field": "state",
         "states": ["draft", "waiting", "confirmed", "assigned", "done", "cancel"],
         "transitions": [
-            {"from": "draft", "to": "confirmed", "method": "action_confirm", "label": "Confirm",
-             "irreversible": False},
-            {"from": ["confirmed", "waiting"], "to": "assigned", "method": "action_assign", "label": "Check Availability",
-             "side_effects": ["Reserves stock quantities"],
-             "irreversible": False},
-            {"from": "assigned", "to": "done", "method": "button_validate", "label": "Validate",
-             "side_effects": ["Updates stock levels", "Creates stock moves"],
-             "irreversible": True},
-            {"from": ["draft", "confirmed", "assigned"], "to": "cancel", "method": "action_cancel", "label": "Cancel",
-             "irreversible": False},
+            {"from": "draft", "to": "confirmed", "method": "action_confirm", "label": "Confirm", "irreversible": False},
+            {
+                "from": ["confirmed", "waiting"],
+                "to": "assigned",
+                "method": "action_assign",
+                "label": "Check Availability",
+                "side_effects": ["Reserves stock quantities"],
+                "irreversible": False,
+            },
+            {
+                "from": "assigned",
+                "to": "done",
+                "method": "button_validate",
+                "label": "Validate",
+                "side_effects": ["Updates stock levels", "Creates stock moves"],
+                "irreversible": True,
+            },
+            {
+                "from": ["draft", "confirmed", "assigned"],
+                "to": "cancel",
+                "method": "action_cancel",
+                "label": "Cancel",
+                "irreversible": False,
+            },
         ],
     },
     "purchase.order": {
         "state_field": "state",
         "states": ["draft", "sent", "purchase", "done", "cancel"],
         "transitions": [
-            {"from": "draft", "to": "sent", "method": "action_rfq_send", "label": "Send RFQ",
-             "irreversible": False},
-            {"from": ["draft", "sent"], "to": "purchase", "method": "button_confirm", "label": "Confirm Order",
-             "side_effects": ["Creates incoming receipt (stock.picking)"],
-             "irreversible": False},
-            {"from": "purchase", "to": "done", "method": "button_lock", "label": "Lock",
-             "irreversible": False},
-            {"from": ["draft", "sent", "purchase"], "to": "cancel", "method": "button_cancel", "label": "Cancel",
-             "irreversible": False},
+            {"from": "draft", "to": "sent", "method": "action_rfq_send", "label": "Send RFQ", "irreversible": False},
+            {
+                "from": ["draft", "sent"],
+                "to": "purchase",
+                "method": "button_confirm",
+                "label": "Confirm Order",
+                "side_effects": ["Creates incoming receipt (stock.picking)"],
+                "irreversible": False,
+            },
+            {"from": "purchase", "to": "done", "method": "button_lock", "label": "Lock", "irreversible": False},
+            {
+                "from": ["draft", "sent", "purchase"],
+                "to": "cancel",
+                "method": "button_cancel",
+                "label": "Cancel",
+                "irreversible": False,
+            },
         ],
     },
     "hr.leave": {
         "state_field": "state",
         "states": ["draft", "confirm", "validate1", "validate", "refuse"],
         "transitions": [
-            {"from": "draft", "to": "confirm", "method": "action_confirm", "label": "Confirm",
-             "irreversible": False},
-            {"from": "confirm", "to": "validate", "method": "action_approve", "label": "Approve",
-             "side_effects": ["Deducts leave allocation"],
-             "irreversible": False},
-            {"from": ["confirm", "validate"], "to": "refuse", "method": "action_refuse", "label": "Refuse",
-             "irreversible": False},
+            {"from": "draft", "to": "confirm", "method": "action_confirm", "label": "Confirm", "irreversible": False},
+            {
+                "from": "confirm",
+                "to": "validate",
+                "method": "action_approve",
+                "label": "Approve",
+                "side_effects": ["Deducts leave allocation"],
+                "irreversible": False,
+            },
+            {
+                "from": ["confirm", "validate"],
+                "to": "refuse",
+                "method": "action_refuse",
+                "label": "Refuse",
+                "irreversible": False,
+            },
         ],
     },
 }
@@ -227,8 +297,8 @@ ERROR_CATEGORIES = {
             "Reduce limit parameter",
             "Simplify domain (remove complex joins)",
             "Use read_group for aggregation instead",
-            "Add database indexes on filtered fields"
-        ]
+            "Add database indexes on filtered fields",
+        ],
     },
     "relational_filter": {
         "patterns": ["relation", "join", "does not exist", "invalid field"],
@@ -236,8 +306,8 @@ ERROR_CATEGORIES = {
         "solutions": [
             "Avoid dot notation in domain (e.g., partner_id.name)",
             "Query related model separately and use 'in' operator",
-            "Use search+read fallback (automatic)"
-        ]
+            "Use search+read fallback (automatic)",
+        ],
     },
     "computed_field": {
         "patterns": ["compute", "depends", "_compute_", "stored=false"],
@@ -245,8 +315,8 @@ ERROR_CATEGORIES = {
         "solutions": [
             "Exclude computed fields from 'fields' parameter",
             "Use stored computed fields only",
-            "Fetch computed fields in separate read() call"
-        ]
+            "Fetch computed fields in separate read() call",
+        ],
     },
     "access_rights": {
         "patterns": ["access", "permission", "denied", "not allowed", "security"],
@@ -254,8 +324,8 @@ ERROR_CATEGORIES = {
         "solutions": [
             "Check user access rights on model",
             "Verify record rules allow access",
-            "Use fields the user has permission to read"
-        ]
+            "Use fields the user has permission to read",
+        ],
     },
     "memory": {
         "patterns": ["memory", "out of memory", "oom", "killed"],
@@ -263,8 +333,8 @@ ERROR_CATEGORIES = {
         "solutions": [
             "Reduce limit significantly",
             "Paginate with smaller batches",
-            "Remove large fields (binary, text) from fields list"
-        ]
+            "Remove large fields (binary, text) from fields list",
+        ],
     },
     "data_integrity": {
         "patterns": ["integrity", "constraint", "null", "foreign key", "duplicate"],
@@ -272,8 +342,8 @@ ERROR_CATEGORIES = {
         "solutions": [
             "Check for orphaned records",
             "Verify foreign key references exist",
-            "Contact database administrator"
-        ]
+            "Contact database administrator",
+        ],
     },
     "unknown": {
         "patterns": [],
@@ -281,9 +351,9 @@ ERROR_CATEGORIES = {
         "solutions": [
             "Check Odoo server logs for details",
             "Try with simpler parameters",
-            "Use search+read fallback (automatic)"
-        ]
-    }
+            "Use search+read fallback (automatic)",
+        ],
+    },
 }
 
 # ----- /doc-bearer/ Live Documentation Cache -----
@@ -305,39 +375,32 @@ CONCEPT_ALIASES: Dict[str, List[str]] = {
     "vendor": ["res.partner"],
     "supplier": ["res.partner"],
     "company": ["res.partner", "res.company"],
-
     # Sales
     "quote": ["sale.order"],
     "quotation": ["sale.order"],
     "sales order": ["sale.order"],
     "order": ["sale.order", "purchase.order"],
-
     # Accounting
     "invoice": ["account.move"],
     "bill": ["account.move"],
     "payment": ["account.payment"],
     "journal": ["account.journal"],
-
     # Products
     "product": ["product.product", "product.template"],
     "item": ["product.product"],
     "article": ["knowledge.article", "product.product"],
-
     # HR
     "employee": ["hr.employee"],
     "department": ["hr.department"],
     "leave": ["hr.leave"],
     "expense": ["hr.expense"],
-
     # Project
     "task": ["project.task"],
     "project": ["project.project"],
-
     # CRM
     "lead": ["crm.lead"],
     "opportunity": ["crm.lead"],
     "pipeline": ["crm.lead"],
-
     # Stock
     "stock": ["stock.quant", "stock.move"],
     "inventory": ["stock.quant"],
@@ -345,18 +408,15 @@ CONCEPT_ALIASES: Dict[str, List[str]] = {
     "delivery": ["stock.picking"],
     "shipment": ["stock.picking"],
     "transfer": ["stock.picking"],
-
     # Communication
     "message": ["mail.message"],
     "channel": ["discuss.channel"],
     "chat": ["discuss.channel"],
     "note": ["mail.message"],
-
     # Documents
     "document": ["documents.document", "ir.attachment"],
     "attachment": ["ir.attachment"],
     "file": ["ir.attachment"],
-
     # Users & Access
     "user": ["res.users"],
     "group": ["res.groups"],
@@ -391,7 +451,6 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "method": "_create_invoices",
         "params": {"order_ids": "list of int"},
     },
-
     # Accounting Operations
     "post_invoice": {
         "description": "Post/validate a draft invoice",
@@ -407,7 +466,11 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "get_overdue_invoices": {
         "description": "Find invoices past due date",
         "model": "account.move",
-        "domain_template": [["move_type", "=", "out_invoice"], ["payment_state", "in", ["not_paid", "partial"]], ["invoice_date_due", "<", "{today}"]],
+        "domain_template": [
+            ["move_type", "=", "out_invoice"],
+            ["payment_state", "in", ["not_paid", "partial"]],
+            ["invoice_date_due", "<", "{today}"],
+        ],
     },
     "get_ar_aging": {
         "description": "Get accounts receivable aging report",
@@ -416,7 +479,6 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "groupby": ["partner_id"],
         "fields": ["amount_residual:sum"],
     },
-
     # CRM Operations
     "create_lead": {
         "description": "Create a new CRM lead",
@@ -433,7 +495,6 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "model": "crm.lead",
         "method": "action_set_won",
     },
-
     # Stock Operations
     "check_stock_levels": {
         "description": "Check current stock quantities",
@@ -447,14 +508,12 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "model": "stock.picking",
         "method": "button_validate",
     },
-
     # HR Operations
     "create_employee": {
         "description": "Create a new employee record",
         "model": "hr.employee",
         "params": {"name": "str", "department_id": "int", "job_title": "str"},
     },
-
     # Communication
     "send_message": {
         "description": "Post a message on a record (chatter)",
@@ -464,7 +523,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             "res_id": "int (target record ID)",
             "body": "html (message content)",
             "message_type": "str REQUIRED: 'comment'|'notification'|'email'",
-            "subtype_id": "int (1=visible to followers, 2=internal note)"
+            "subtype_id": "int (1=visible to followers, 2=internal note)",
         },
         "note": "Create mail.message directly. message_type is REQUIRED!",
         "example": {
@@ -472,8 +531,8 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             "res_id": 123,
             "body": "<p>Hello!</p>",
             "message_type": "comment",
-            "subtype_id": 1
-        }
+            "subtype_id": 1,
+        },
     },
     "create_channel": {
         "description": "Create a discuss channel",

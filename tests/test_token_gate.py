@@ -150,9 +150,7 @@ class TestTokenExpiry:
 
         # Fast-forward time past the TTL by patching time.time used in server module
         original = time.time()
-        monkeypatch.setattr(
-            server.time, "time", lambda: original + server._CONFIRMATION_TTL + 1
-        )
+        monkeypatch.setattr(server.time, "time", lambda: original + server._CONFIRMATION_TTL + 1)
 
         err = server._validate_confirmation_token(token, "res.partner", "unlink", digest)
         assert err is not None

@@ -37,7 +37,7 @@ def load_skill(name: str) -> str:
     if text.startswith("---"):
         end = text.find("\n---", 3)
         if end != -1:
-            text = text[end + len("\n---"):]
+            text = text[end + len("\n---") :]
     return text.strip()
 
 
@@ -48,8 +48,7 @@ def _skill_message(skill: str, request: str) -> list[Message]:
         content += f"\n\n---\n\n**User request:** {request.strip()}"
     else:
         content += (
-            "\n\n---\n\n**User request:** (none provided — "
-            "ask the user what they need, then follow the workflow)"
+            "\n\n---\n\n**User request:** (none provided — " "ask the user what they need, then follow the workflow)"
         )
     return [Message(content)]
 
