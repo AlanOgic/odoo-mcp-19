@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ----- Icon Loading -----
 
+
 def _load_icon() -> Optional[Icon]:
     """Load the Odoo icon from assets as a data URI."""
     icon_path = Path(__file__).parent / "assets" / "odoo_icon.svg"
@@ -43,9 +44,11 @@ ODOO_ICON = _load_icon()
 
 # ----- Application Lifespan -----
 
+
 @dataclass
 class AppContext:
     """Application context for the MCP server"""
+
     odoo: Optional[OdooClient]
 
 
@@ -61,9 +64,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
         odoo_client: Optional[OdooClient] = get_odoo_client()
     except (FileNotFoundError, KeyError) as e:
         if os.environ.get("USERS_DB_PATH"):
-            logger.warning(
-                "No env Odoo credentials (%s) — multi-user registry mode only", e
-            )
+            logger.warning("No env Odoo credentials (%s) — multi-user registry mode only", e)
             odoo_client = None
         else:
             raise
@@ -74,6 +75,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 
 
 # ----- Authentication -----
+
 
 def _get_auth_provider():
     """Get the auth provider.
@@ -89,10 +91,12 @@ def _get_auth_provider():
     users_db = get_users_db()
     if users_db is not None:
         from .auth_verifier import DbTokenVerifier
+
         return DbTokenVerifier(users_db, static_api_key=api_key)
 
     if api_key:
         from fastmcp.server.auth import StaticTokenVerifier
+
         return StaticTokenVerifier(
             tokens={
                 api_key: {
@@ -120,12 +124,14 @@ mcp = FastMCP(
 
 # ----- Per-user skill visibility (multi-user mode only) -----
 
+
 def _register_skill_visibility() -> None:
     from .users_db import get_users_db
 
     users_db = get_users_db()
     if users_db is not None:
         from .skill_visibility import SkillVisibilityMiddleware
+
         mcp.add_middleware(SkillVisibilityMiddleware(users_db))
 
 

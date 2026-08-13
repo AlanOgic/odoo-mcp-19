@@ -15,18 +15,19 @@ import time
 
 # Load .env
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from odoo_mcp.utils import _build_compact_schema, get_error_suggestion
-from odoo_mcp.constants import _merge_context, MODEL_STATE_MACHINES
+from odoo_mcp import constants as _constants
+from odoo_mcp.constants import MODEL_STATE_MACHINES, _merge_context
+from odoo_mcp.odoo_client import get_odoo_client
 from odoo_mcp.resources import (
+    get_bundle,
     get_model_quick_schema,
     get_model_workflow,
-    get_bundle,
     get_session_bootstrap,
 )
-from odoo_mcp import constants as _constants
-from odoo_mcp.odoo_client import get_odoo_client
+from odoo_mcp.utils import _build_compact_schema, get_error_suggestion
 
 
 def header(msg):
@@ -60,7 +61,12 @@ def run_tests():
     fake_fields = {
         "name": {"type": "char", "required": True, "readonly": False},
         "partner_id": {"type": "many2one", "required": False, "readonly": False, "relation": "res.partner"},
-        "state": {"type": "selection", "required": False, "readonly": True, "selection": [("draft", "Draft"), ("done", "Done")]},
+        "state": {
+            "type": "selection",
+            "required": False,
+            "readonly": True,
+            "selection": [("draft", "Draft"), ("done", "Done")],
+        },
         "line_ids": {"type": "one2many", "required": False, "readonly": False, "relation": "sale.order.line"},
         "amount": {"type": "float", "required": False, "readonly": True},
     }
@@ -92,7 +98,10 @@ def run_tests():
     # Test with defaults
     _constants._DEFAULT_CONTEXT = {"lang": "en_US", "tz": "UTC"}
     check("defaults + no explicit = copy of defaults", _merge_context(None) == {"lang": "en_US", "tz": "UTC"})
-    check("defaults + explicit = merged (explicit wins)", _merge_context({"lang": "fr_FR"}) == {"lang": "fr_FR", "tz": "UTC"})
+    check(
+        "defaults + explicit = merged (explicit wins)",
+        _merge_context({"lang": "fr_FR"}) == {"lang": "fr_FR", "tz": "UTC"},
+    )
 
     # Restore
     _constants._DEFAULT_CONTEXT = original_default
@@ -103,14 +112,15 @@ def run_tests():
     header("TEST 3: get_error_suggestion — template substitution")
     # Many2one error (should match fallback pattern)
     suggestion = get_error_suggestion(
-        "422: ValidationError - Expected int for Many2one field",
-        model="sale.order",
-        method="create"
+        "422: ValidationError - Expected int for Many2one field", model="sale.order", method="create"
     )
     if suggestion:
         check("Many2one pattern matched", True)
-        check("{model} substituted", "sale.order" in suggestion or "many2one" in suggestion.lower(),
-              f"suggestion: {suggestion}")
+        check(
+            "{model} substituted",
+            "sale.order" in suggestion or "many2one" in suggestion.lower(),
+            f"suggestion: {suggestion}",
+        )
     else:
         check("Many2one pattern matched", False, "No suggestion returned")
 
@@ -161,8 +171,7 @@ def run_tests():
     check(f"field_count > 10 (got {field_count})", field_count > 10)
     # Check compactness
     # res.partner has ~278 fields, so compact schema is ~13KB (still 60-80% less than full /fields ~50KB)
-    check(f"response size ({len(result_str)} bytes) < 20000", len(result_str) < 20000,
-          f"got {len(result_str)} bytes")
+    check(f"response size ({len(result_str)} bytes) < 20000", len(result_str) < 20000, f"got {len(result_str)} bytes")
     check(f"response time: {elapsed:.2f}s", elapsed < 15, f"took {elapsed:.2f}s")
     # Verify a known field
     if "name" in result.get("fields", {}):
@@ -197,8 +206,11 @@ def run_tests():
     has_state = result.get("state_field") is not None
     has_methods = len(result.get("available_methods", [])) > 0
     has_note = "note" in result
-    check("either has state/methods or a note", has_state or has_methods or has_note,
-          f"state={has_state}, methods={has_methods}, note={has_note}")
+    check(
+        "either has state/methods or a note",
+        has_state or has_methods or has_note,
+        f"state={has_state}, methods={has_methods}, note={has_note}",
+    )
 
     # ================================================================
     # TEST 8: bundle resource (LIVE)
@@ -276,8 +288,11 @@ def run_tests():
     try:
         # Search for a common name that should return multiple results
         matches = odoo.execute_method("res.partner", "name_search", name="a", limit=5)
-        check("broad search returns results", isinstance(matches, list) and len(matches) > 0,
-              f"got {len(matches) if matches else 0} matches")
+        check(
+            "broad search returns results",
+            isinstance(matches, list) and len(matches) > 0,
+            f"got {len(matches) if matches else 0} matches",
+        )
         if matches and len(matches) > 1:
             check(f"multiple matches detected ({len(matches)})", len(matches) > 1)
         else:
@@ -291,7 +306,8 @@ def run_tests():
     header("TEST 13: search_read with context (LIVE)")
     try:
         result = odoo.execute_method(
-            "res.partner", "search_read",
+            "res.partner",
+            "search_read",
             domain=[["is_company", "=", True]],
             fields=["name"],
             limit=2,
@@ -311,7 +327,7 @@ def run_tests():
     s = get_error_suggestion("422: Expected singleton: res.partner(1, 2)")
     check("422 singleton pattern", s is not None)
 
-    s = get_error_suggestion("422: null value in column \"name\" violates not-null constraint")
+    s = get_error_suggestion('422: null value in column "name" violates not-null constraint')
     check("422 null value pattern", s is not None)
 
     s = get_error_suggestion("422: Invalid field 'nonexistent' on model 'res.partner'", model="res.partner")
@@ -341,6 +357,7 @@ def run_tests():
     # ================================================================
     header("TEST 15: Resource route smoke test")
     from odoo_mcp.server import _RESOURCE_ROUTES
+
     # Verify new routes are registered
     route_patterns = [r[0] if isinstance(r, tuple) else r for r in _RESOURCE_ROUTES]
     route_str = str(route_patterns)

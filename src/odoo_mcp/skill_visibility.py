@@ -51,11 +51,7 @@ class SkillVisibilityMiddleware(Middleware):
         allowed = await asyncio.to_thread(self._allowed_skills)
         if allowed is None:
             return prompts
-        return [
-            p
-            for p in prompts
-            if not p.name.startswith(CYANVIEW_PREFIX) or p.name in allowed
-        ]
+        return [p for p in prompts if not p.name.startswith(CYANVIEW_PREFIX) or p.name in allowed]
 
     async def on_get_prompt(
         self,

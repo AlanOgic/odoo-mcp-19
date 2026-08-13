@@ -9,8 +9,8 @@ import asyncio
 
 import pytest
 
-from odoo_mcp.skill_prompts import _SKILLS_DIR, load_skill
 from odoo_mcp.app import mcp
+from odoo_mcp.skill_prompts import _SKILLS_DIR, load_skill
 
 EXPECTED_SKILLS = [
     "quote",
@@ -70,9 +70,7 @@ def test_skill_prompts_registered():
 
 
 def test_skill_prompt_renders_with_variables():
-    result = asyncio.run(
-        mcp.render_prompt("cyanview-serial-tracker", {"serial": "CY-RIO-15-042"})
-    )
+    result = asyncio.run(mcp.render_prompt("cyanview-serial-tracker", {"serial": "CY-RIO-15-042"}))
     text = result.messages[0].content.text
     assert "CY-RIO-15-042" in text
     assert "User request:" in text

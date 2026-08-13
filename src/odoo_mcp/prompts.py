@@ -5,9 +5,9 @@ All 12 @mcp.prompt decorated functions. Importing this module
 registers all prompts with the FastMCP instance.
 """
 
-from .app import mcp
 from fastmcp.prompts import Message
 
+from .app import mcp
 
 # ----- Discovery & Reference Prompts -----
 
