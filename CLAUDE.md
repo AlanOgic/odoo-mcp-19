@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **odoo-mcp-19** — Standalone MCP server for Odoo 19+ using the **v2 JSON-2 API** (`POST /json/2/{model}/{method}`, Bearer token auth, named args only). No v1 fallback.
 
-- **Version**: 1.15.0 · **Python**: 3.10+ · **MCP**: 2025-11-25 (FastMCP `>=3.4.6,<4`)
+- **Version**: 1.15.0 · **Python**: 3.10+ · **MCP**: 2025-11-25 (FastMCP `>=3.4.6,<4`; `cryptography>=42` is a *direct* dependency of `token_crypto`, not just a transitive Authlib one)
 - **The `<4` ceiling is deliberate.** FastMCP 4.x targets MCP spec 2026-07-28 and is not a drop-in — see `docs/mcp-2026-07-28-migration.md` and `tests/test_dependency_pins.py`, which fails the build if the bound is widened or the environment drifts.
 - **Surface**: 5 tools, 27 `odoo://` resources, 19 prompts (12 generic + 7 `cyanview-*` workflow skill prompts)
 - **Discovery is via resources, action is via tools** — there is no `list_models` tool, agents read `odoo://models` instead.
@@ -134,6 +134,9 @@ Activated by `USERS_DB_PATH` (HTTP transport). Key invariants:
 
 Classification also takes a `role` (multi-user mode): `readonly` users get BLOCKED for any non-safe method, before model rules are even consulted. `tests/test_safety_role.py` pins this.
 
+- **Batch rule (strict mode)**: a MEDIUM method affecting more than one record is escalated to confirmation. The count comes from `_estimate_record_count`, which reads the payload from **either** `args_json` or `kwargs_json` (`_COUNTED_ARG` in `safety.py`: `write`/`unlink`/`copy` → `ids`, `create` → `vals_list`, `load` → `data`; `action_*`/`button_*` → `ids`). v2 is named-args-only, so both spellings must be counted — counting only the positional form lets a bulk `unlink` slip past the gate by moving `ids` into `kwargs_json`.
+- **Unknown methods** classify as MEDIUM: confirm in `strict`, allow in `permissive`.
+
 - **BLOCKED_MODELS** (writes always refused): `ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `res.users`, `res.groups`, `res.users.apikeys`. The `resolve_json` parameter also rejects these as targets — agents cannot use it to read security-critical data. `res.users.apikeys` is blocked because Odoo 19.1+ exposes programmatic API-key management (`res.users.apikeys.generate` / `.revoke` over JSON-2 — Odoo restricts it to *Settings* admins by default, opt-in for others via `base.enable_programmatic_api_keys`, but the connected API user is often privileged); it's a distinct model name from `res.users`, so without an explicit entry an agent could mint a persistent API key (up to 3 months) that outlives the MCP session.
 - **SENSITIVE_MODELS** (writes always confirm, both modes): `account.move`, `account.payment`, `account.bank.statement`, `hr.payslip`, `ir.cron`, `ir.model.fields`. The last enables Studio-style custom-field creation/editing — allowed but always token-gated; whole-model changes (`ir.model`) remain BLOCKED.
 - **Cascade warnings** are surfaced for: `sale.order.action_confirm` (creates deliveries), `account.move.action_post` (irreversible journal entries), `stock.picking.button_validate` (stock changes), `purchase.order.button_confirm` (incoming receipts), `account.payment.action_post` (journal + reconciliation).
@@ -234,6 +237,7 @@ Read `odoo://model-limitations` for the full live list (static + runtime-detecte
 - **Thread safety**: `OdooClient` is a singleton with double-checked locking. `_DOC_CACHE` (100-entry LRU) and `RUNTIME_MODEL_ISSUES` use `threading.Lock`.
 - **Error sanitization**: never include Odoo `debug` tracebacks in MCP responses.
 - **Docker**: non-root user (UID 1001); `run-docker.sh` uses `--env-file`; `docker-compose.yml` uses `${MCP_API_KEY:?required}`.
+- **Docker must not restate dependency constraints.** The Dockerfile installs a stub package to resolve `pyproject.toml`'s dependency set into its own cached layer, then installs the real source with `--no-deps`. A hand-copied list drifts silently — it had already lost the `fastmcp<4` ceiling and never listed `cryptography>=42`. `tests/test_dependency_pins.py::TestDockerfileUsesDeclaredDependencies` fails if a restated pin reappears.
 - **HTTP**: `sys.exit(1)` unless `MCP_API_KEY` or `USERS_DB_PATH` is set. Wizard auto-generates keys with `secrets.token_urlsafe(32)`. Multi-user token compare uses `hmac.compare_digest` (static key) / sha256 hash lookup (registry keys — plaintext keys are never stored).
 - **Resource limits**: `MCP_DEFAULT_CONTEXT` ≤ 4KB; `MCP_BOOTSTRAP_MODELS` ≤ 20 models; `_DOC_CACHE` ≤ 100 entries.
 - **Gitignored**: `.env`, `.env.local`, `.mcp.json`, `odoo_config.json`.
