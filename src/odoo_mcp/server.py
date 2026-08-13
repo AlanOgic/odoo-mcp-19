@@ -26,15 +26,15 @@ logger = logging.getLogger(__name__)
 from fastmcp import Context
 from fastmcp.dependencies import Progress
 
-from .app import ODOO_ICON, mcp  # noqa: F401 -- mcp import triggers FastMCP setup
-from . import resources as _resources  # noqa: F401 -- import triggers resource registration
 from . import prompts as _prompts  # noqa: F401 -- import triggers prompt registration
+from . import resources as _resources  # noqa: F401 -- import triggers resource registration
 from . import skill_prompts as _skill_prompts  # noqa: F401 -- import triggers skill prompt registration
+from .app import ODOO_ICON, mcp  # noqa: F401 -- mcp import triggers FastMCP setup
 from .constants import (
+    _READ_RESOURCE_MAX_CHARS,
     DEFAULT_LIMIT,
     MAX_LIMIT,
     PRIVATE_METHOD_HINTS,
-    _READ_RESOURCE_MAX_CHARS,
     _merge_context,
     _validate_method,
     _validate_model,
@@ -47,7 +47,6 @@ from .models import (
     IssueAnalysis,
     WorkflowStepResult,
 )
-from .user_clients import current_role  # noqa: E402
 from .odoo_client import get_odoo_client
 from .safety import (
     BLOCKED_MODELS,
@@ -58,12 +57,12 @@ from .safety import (
     classify_operation,
     classify_workflow,
 )
+from .user_clients import current_role  # noqa: E402
 from .utils import (
     _get_live_doc,
     _track_model_issue,
     get_error_suggestion,
 )
-
 
 # ----- Confirmation Token Store -----
 # Stateful nonces that tie a confirmed=True re-call to the original safety classification
@@ -100,9 +99,7 @@ def _issue_confirmation_token(model: str, method: str, payload_digest: str) -> s
     return token
 
 
-def _validate_confirmation_token(
-    token: str | None, model: str, method: str, payload_digest: str
-) -> str | None:
+def _validate_confirmation_token(token: str | None, model: str, method: str, payload_digest: str) -> str | None:
     """Validate and consume a confirmation token. Returns error message or None if valid."""
     if not token:
         return "confirmed=true requires a confirmation_token from the safety gate response."
@@ -148,7 +145,7 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
 
     Common patterns:
     - search_read: kwargs_json='{"domain": [...], "fields": [...], "limit": 100}'
-    - create: kwargs_json='{"values": {"field": "value"}}'
+    - create: kwargs_json='{"vals_list": [{"field": "value"}]}'
     - write: args_json='[[ids], {"field": "value"}]'
     - unlink: args_json='[[ids]]'
     - formatted_read_group (v19): kwargs_json='{"domain": [...], "groupby": ["field"], "aggregates": ["field:sum"]}'
@@ -191,7 +188,7 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": False,
-        "openWorldHint": True
+        "openWorldHint": True,
     },
     icons=_tool_icons,
 )
@@ -305,9 +302,7 @@ def execute_method(
                         error=f"resolve_json['{field_name}']: model '{target_model}' is blocked for safety.",
                     )
                 try:
-                    matches = odoo.execute_method(
-                        target_model, "name_search", name=search_term, limit=5
-                    )
+                    matches = odoo.execute_method(target_model, "name_search", name=search_term, limit=5)
                     if not matches:
                         elapsed_ms = (time.time() - start_time) * 1000
                         return ExecuteMethodResponse(
@@ -322,7 +317,9 @@ def execute_method(
                         return ExecuteMethodResponse(
                             success=False,
                             error=f"resolve_json: Ambiguous match for '{search_term}' in {target_model} ({len(matches)} results)",
-                            hint="Multiple matches found:\n" + "\n".join(options) + "\nUse the numeric ID directly instead.",
+                            hint="Multiple matches found:\n"
+                            + "\n".join(options)
+                            + "\nUse the numeric ID directly instead.",
                             execution_time_ms=round(elapsed_ms, 2),
                         )
                     resolved_values[field_name] = matches[0][0]  # Use the ID
@@ -418,15 +415,15 @@ def execute_method(
             audit_log(classification, confirmed=confirmed, executed=True)
 
         # Apply smart limits for search methods
-        if method in ["search", "search_read"] and 'limit' not in kwargs:
-            kwargs['limit'] = DEFAULT_LIMIT
+        if method in ["search", "search_read"] and "limit" not in kwargs:
+            kwargs["limit"] = DEFAULT_LIMIT
             logger.debug("Applied default limit=%d", DEFAULT_LIMIT)
-        elif method in ["search", "search_read"] and kwargs.get('limit', 0) > MAX_LIMIT:
-            kwargs['limit'] = MAX_LIMIT
+        elif method in ["search", "search_read"] and kwargs.get("limit", 0) > MAX_LIMIT:
+            kwargs["limit"] = MAX_LIMIT
             logger.debug("Capped limit to %d", MAX_LIMIT)
 
         # Normalize domain if needed
-        if method in ['search', 'search_read', 'search_count'] and args:
+        if method in ["search", "search_read", "search_count"] and args:
             domain = args[0]
             # Handle double-wrapped domains [[domain]]
             if isinstance(domain, list) and len(domain) == 1 and isinstance(domain[0], list):
@@ -530,7 +527,7 @@ def execute_method(
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": False,
-        "openWorldHint": True
+        "openWorldHint": True,
     },
     icons=_tool_icons,
     task=True,  # Enable background task execution with progress
@@ -631,23 +628,23 @@ async def batch_execute(
 
     try:
         for idx, op in enumerate(operations):
-            model = op.get('model', 'unknown')
-            method = op.get('method', 'unknown')
+            model = op.get("model", "unknown")
+            method = op.get("method", "unknown")
             await progress.set_message(f"Operation {idx + 1}/{len(operations)}: {model}.{method}")
 
             try:
-                if not op.get('model') or not op.get('method'):
+                if not op.get("model") or not op.get("method"):
                     raise ValueError(f"Operation {idx}: 'model' and 'method' required")
 
-                model_err = _validate_model(op['model'])
+                model_err = _validate_model(op["model"])
                 if model_err:
                     raise ValueError(f"Operation {idx}: {model_err}")
-                method_err = _validate_method(op['method'])
+                method_err = _validate_method(op["method"])
                 if method_err:
                     raise ValueError(f"Operation {idx}: {method_err}")
 
-                args_json = op.get('args_json')
-                kwargs_json = op.get('kwargs_json')
+                args_json = op.get("args_json")
+                kwargs_json = op.get("kwargs_json")
 
                 args = json.loads(args_json) if args_json else []
                 if not isinstance(args, list):
@@ -717,6 +714,7 @@ async def batch_execute(
 @dataclass
 class OdooConnectionConfig:
     """Configuration collected from user elicitation."""
+
     url: str
     database: str
     auth_method: str
@@ -738,7 +736,7 @@ class OdooConnectionConfig:
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
-        "openWorldHint": False
+        "openWorldHint": False,
     },
     icons=_tool_icons,
 )
@@ -749,7 +747,7 @@ async def configure_odoo(ctx: Context) -> Dict[str, Any]:
     Returns:
         Configuration summary with environment variable instructions
     """
-    from fastmcp.server.elicitation import AcceptedElicitation, DeclinedElicitation, CancelledElicitation
+    from fastmcp.server.elicitation import AcceptedElicitation, CancelledElicitation, DeclinedElicitation
 
     results = {
         "success": False,
@@ -825,9 +823,8 @@ async def configure_odoo(ctx: Context) -> Dict[str, Any]:
             results["env_vars"]["ODOO_PASSWORD"] = "<your-password>"
             results["note"] = "Using password authentication. API keys are recommended for production."
 
-        results["instructions"] = (
-            "Set these environment variables to configure the Odoo MCP server:\n"
-            + "\n".join(f"export {k}='{v}'" for k, v in results["env_vars"].items())
+        results["instructions"] = "Set these environment variables to configure the Odoo MCP server:\n" + "\n".join(
+            f"export {k}='{v}'" for k, v in results["env_vars"].items()
         )
 
         return results
@@ -866,7 +863,7 @@ async def configure_odoo(ctx: Context) -> Dict[str, Any]:
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": False,
-        "openWorldHint": True
+        "openWorldHint": True,
     },
     icons=_tool_icons,
     task=True,  # Enable background task execution with progress
@@ -967,10 +964,16 @@ async def execute_workflow(
             try:
                 lead = odoo.search_read("crm.lead", [["id", "=", lead_id]], fields=["type"], limit=1)
                 if lead and lead[0].get("type") == "lead":
-                    odoo.execute_method("crm.lead", "convert_opportunity", [lead_id], partner_id=params.get("partner_id", False))
+                    odoo.execute_method(
+                        "crm.lead", "convert_opportunity", [lead_id], partner_id=params.get("partner_id", False)
+                    )
                     steps.append(WorkflowStepResult(step="convert_to_opportunity", success=True))
                 else:
-                    steps.append(WorkflowStepResult(step="convert_to_opportunity", success=True, skipped=True, reason="Already an opportunity"))
+                    steps.append(
+                        WorkflowStepResult(
+                            step="convert_to_opportunity", success=True, skipped=True, reason="Already an opportunity"
+                        )
+                    )
             except Exception as e:
                 steps.append(WorkflowStepResult(step="convert_to_opportunity", success=False, error=str(e)))
             await progress.increment()
@@ -1016,12 +1019,18 @@ async def execute_workflow(
             # Build invoice lines
             invoice_lines = []
             for line in lines:
-                invoice_lines.append((0, 0, {
-                    "product_id": line.get("product_id"),
-                    "quantity": line.get("quantity", 1),
-                    "price_unit": line.get("price_unit"),
-                    "name": line.get("name", "Product"),
-                }))
+                invoice_lines.append(
+                    (
+                        0,
+                        0,
+                        {
+                            "product_id": line.get("product_id"),
+                            "quantity": line.get("quantity", 1),
+                            "price_unit": line.get("price_unit"),
+                            "name": line.get("name", "Product"),
+                        },
+                    )
+                )
 
             # Step 1: Create invoice
             await progress.set_message("Creating invoice...")
@@ -1174,25 +1183,30 @@ def read_resource(uri: str, max_chars: int = _READ_RESOURCE_MAX_CHARS) -> str:
             result = handler(**args)
             if max_chars and len(result) > max_chars:
                 truncated = result[:max_chars]
-                warning = json.dumps({
-                    "_truncated": True,
-                    "_total_chars": len(result),
-                    "_returned_chars": max_chars,
-                    "_hint": f"Output truncated from {len(result):,} to {max_chars:,} chars. "
-                             f"Use max_chars=0 for full output, or use narrower queries "
-                             f"(e.g. odoo://model/{{model}}/fields instead of /schema)."
-                })
+                warning = json.dumps(
+                    {
+                        "_truncated": True,
+                        "_total_chars": len(result),
+                        "_returned_chars": max_chars,
+                        "_hint": f"Output truncated from {len(result):,} to {max_chars:,} chars. "
+                        f"Use max_chars=0 for full output, or use narrower queries "
+                        f"(e.g. odoo://model/{{model}}/fields instead of /schema).",
+                    }
+                )
                 return truncated + "\n\n" + warning
             return result
 
-    return json.dumps({
-        "error": f"Unknown resource URI: {uri}",
-        "hint": "Use odoo://templates to list all available resource URIs",
-        "examples": [
-            "odoo://model/res.partner/schema",
-            "odoo://model/sale.order/fields",
-            "odoo://methods/res.partner",
-            "odoo://find-model/invoice",
-            "odoo://domain-syntax",
-        ]
-    }, indent=2)
+    return json.dumps(
+        {
+            "error": f"Unknown resource URI: {uri}",
+            "hint": "Use odoo://templates to list all available resource URIs",
+            "examples": [
+                "odoo://model/res.partner/schema",
+                "odoo://model/sale.order/fields",
+                "odoo://methods/res.partner",
+                "odoo://find-model/invoice",
+                "odoo://domain-syntax",
+            ],
+        },
+        indent=2,
+    )

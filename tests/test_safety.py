@@ -24,7 +24,6 @@ from odoo_mcp.safety import (
     classify_workflow,
 )
 
-
 # =====================================================
 # Test: SAFE methods
 # =====================================================
@@ -149,9 +148,7 @@ class TestMediumMethodsStrict:
         assert result.record_count == 1
 
     def test_batch_create_requires_confirm(self):
-        result = classify_operation(
-            "res.partner", "create", [[{"name": "a"}, {"name": "b"}]]
-        )
+        result = classify_operation("res.partner", "create", [[{"name": "a"}, {"name": "b"}]])
         assert result.risk_level == RiskLevel.MEDIUM
         assert result.requires_confirmation is True
         assert result.record_count == 2
@@ -177,9 +174,7 @@ class TestMediumMethodsPermissive:
         assert result.requires_confirmation is False
 
     def test_batch_create_no_confirm(self):
-        result = classify_operation(
-            "res.partner", "create", [[{"name": "a"}, {"name": "b"}]]
-        )
+        result = classify_operation("res.partner", "create", [[{"name": "a"}, {"name": "b"}]])
         assert result.risk_level == RiskLevel.MEDIUM
         assert result.requires_confirmation is False
 
@@ -231,7 +226,8 @@ class TestRecordCounting:
 
     def test_create_batch(self):
         result = classify_operation(
-            "res.partner", "create",
+            "res.partner",
+            "create",
             [[{"name": "a"}, {"name": "b"}, {"name": "c"}]],
         )
         assert result.record_count == 3
@@ -244,12 +240,73 @@ class TestRecordCounting:
         result = classify_operation("sale.order", "action_confirm", [1])
         assert result.record_count == 1
 
-    def test_copy_always_one(self):
+    def test_copy_single_id(self):
         result = classify_operation("res.partner", "copy", [1])
         assert result.record_count == 1
 
     def test_no_args(self):
         result = classify_operation("res.partner", "write")
+        assert result.record_count is None
+
+
+# =====================================================
+# Test: Record counting via named (kwargs) arguments
+# =====================================================
+
+
+class TestNamedArgRecordCounting:
+    """The recordset may arrive in args_json OR kwargs_json.
+
+    JSON-2 is named-args-only, so `write(ids=[1,2,3], vals={...})` and
+    `write([1,2,3], {...})` are the same call. Counting only the positional
+    form let a bulk operation slip past the strict-mode confirmation gate by
+    simply moving the ids into kwargs_json.
+    """
+
+    def test_write_ids_in_kwargs_counts(self):
+        result = classify_operation("res.partner", "write", [], {"ids": [1, 2, 3], "vals": {"name": "x"}})
+        assert result.record_count == 3
+
+    def test_write_batch_in_kwargs_requires_confirmation(self):
+        with patch.dict(os.environ, {"MCP_SAFETY_MODE": "strict"}):
+            result = classify_operation("res.partner", "write", [], {"ids": [1, 2, 3], "vals": {"name": "x"}})
+        assert result.requires_confirmation is True
+
+    def test_positional_and_named_forms_agree(self):
+        """Both spellings of the same call must classify identically."""
+        with patch.dict(os.environ, {"MCP_SAFETY_MODE": "strict"}):
+            positional = classify_operation("res.partner", "write", [[1, 2, 3], {"name": "x"}])
+            named = classify_operation("res.partner", "write", [], {"ids": [1, 2, 3], "vals": {"name": "x"}})
+        assert positional.record_count == named.record_count
+        assert positional.requires_confirmation == named.requires_confirmation
+
+    def test_create_vals_list_in_kwargs_counts(self):
+        result = classify_operation("res.partner", "create", [], {"vals_list": [{"name": "a"}, {"name": "b"}]})
+        assert result.record_count == 2
+
+    def test_action_ids_in_kwargs_counts(self):
+        result = classify_operation("sale.order", "action_confirm", [], {"ids": [1, 2, 3, 4]})
+        assert result.record_count == 4
+
+    def test_load_data_rows_count(self):
+        """`load` bulk-imports rows; its payload is the `data` argument."""
+        rows = [["1", f"name{i}"] for i in range(50)]
+        with patch.dict(os.environ, {"MCP_SAFETY_MODE": "strict"}):
+            result = classify_operation("res.partner", "load", [], {"fields": ["id", "name"], "data": rows})
+        assert result.record_count == 50
+        assert result.requires_confirmation is True
+
+    def test_copy_batch_in_kwargs_counts(self):
+        result = classify_operation("res.partner", "copy", [], {"ids": [1, 2, 3]})
+        assert result.record_count == 3
+
+    def test_positional_wins_over_named(self):
+        """A positional recordset is what arg_mapping forwards; prefer it."""
+        result = classify_operation("res.partner", "write", [[1, 2], {"name": "x"}], {"ids": [1, 2, 3, 4, 5]})
+        assert result.record_count == 2
+
+    def test_unrelated_kwargs_do_not_count(self):
+        result = classify_operation("res.partner", "search_read", [], {"domain": [], "fields": ["a", "b", "c"]})
         assert result.record_count is None
 
 

@@ -21,6 +21,7 @@ See ``docs/mcp-2026-07-28-migration.md`` before raising either bound.
 """
 
 import importlib.metadata as metadata
+import re
 import sys
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from packaging.requirements import Requirement
 from packaging.version import Version
 
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
+DOCKERFILE = Path(__file__).resolve().parent.parent / "Dockerfile"
 
 MIGRATION_DOC = "docs/mcp-2026-07-28-migration.md"
 
@@ -113,4 +115,64 @@ class TestDeclaredConstraint:
             f"pyproject.toml allows fastmcp {older}, older than the tested"
             f" baseline {installed}. Raise the floor so a fresh install gets"
             " the version this suite actually verified."
+        )
+
+
+def _dockerfile_instructions() -> str:
+    """The Dockerfile with comment lines stripped.
+
+    Comments legitimately *name* dependencies while explaining the rule, so
+    they must not be mistaken for an install instruction.
+    """
+    lines = DOCKERFILE.read_text(encoding="utf-8").splitlines()
+    return "\n".join(ln for ln in lines if not ln.lstrip().startswith("#"))
+
+
+def _pip_install_commands(instructions: str) -> list[str]:
+    """Every `pip install` invocation, with backslash continuations joined.
+
+    Joining matters: the drifted list this module guards against lived on
+    continuation lines under a single ``pip install \\``, where a per-line
+    scan would never see the package names next to the command.
+    """
+    joined = instructions.replace("\\\n", " ")
+    return [line for line in joined.splitlines() if "pip install" in line]
+
+
+class TestDockerfileUsesDeclaredDependencies:
+    """The image must inherit pyproject's constraints, not restate them.
+
+    The Dockerfile used to `pip install` a hand-copied requirement list and
+    then `pip install --no-deps .`, so pyproject's `dependencies` never applied
+    inside the image. That list had already drifted: it carried
+    `fastmcp[tasks]>=3.2.0`, silently discarding the `<4` ceiling every other
+    test in this module defends, and it omitted `cryptography>=42` entirely —
+    token_crypto imported only because Authlib, a transitive FastMCP
+    dependency, happens to pull cryptography in. Both are the same defect: a
+    second, unchecked source of truth for the dependency set.
+    """
+
+    def test_dockerfile_does_not_restate_dependency_constraints(self):
+        commands = _pip_install_commands(_dockerfile_instructions())
+        restated = [
+            req.name
+            for req in map(Requirement, _declared_dependencies())
+            if any(re.search(rf"\b{re.escape(req.name)}\b", command) for command in commands)
+        ]
+        assert not restated, (
+            f"Dockerfile pins {', '.join(restated)} itself instead of taking"
+            " them from pyproject.toml. A duplicated list drifts silently —"
+            " that is how cryptography went missing and how the fastmcp <"
+            f"{FASTMCP_MAJOR + 1} ceiling was lost. Install the project"
+            " (`pip install .`) so the declared constraints apply."
+        )
+
+    def test_dockerfile_installs_the_project_with_dependencies(self):
+        """At least one `pip install` must resolve deps from the project."""
+        commands = _pip_install_commands(_dockerfile_instructions())
+        installs_with_deps = [command for command in commands if "--no-deps" not in command]
+        assert installs_with_deps, (
+            "Dockerfile never runs a dependency-resolving `pip install`."
+            " Every install is --no-deps, so the image would ship without"
+            " fastmcp, requests, python-dotenv or cryptography."
         )

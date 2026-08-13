@@ -23,118 +23,142 @@ logger = logging.getLogger(__name__)
 
 # ----- Risk Levels -----
 
+
 class RiskLevel(str, Enum):
     """Risk classification for Odoo operations."""
-    SAFE = "safe"           # Execute immediately, no confirmation
-    MEDIUM = "medium"       # Gate based on mode/volume
-    HIGH = "high"           # Always require confirmation
-    BLOCKED = "blocked"     # Always refuse
+
+    SAFE = "safe"  # Execute immediately, no confirmation
+    MEDIUM = "medium"  # Gate based on mode/volume
+    HIGH = "high"  # Always require confirmation
+    BLOCKED = "blocked"  # Always refuse
 
 
 # ----- Method Classification Sets -----
 
-SAFE_METHODS = frozenset({
-    "search_read", "read", "search", "search_count",
-    "fields_get", "name_get", "name_search", "default_get",
-    "read_group", "formatted_read_group",
-    "has_access", "check_access_rights", "export_data",
-})
+SAFE_METHODS = frozenset(
+    {
+        "search_read",
+        "read",
+        "search",
+        "search_count",
+        "fields_get",
+        "name_get",
+        "name_search",
+        "default_get",
+        "read_group",
+        "formatted_read_group",
+        "has_access",
+        "check_access_rights",
+        "export_data",
+    }
+)
 
-MEDIUM_METHODS = frozenset({
-    "create", "write", "copy", "name_create", "load",
-})
+MEDIUM_METHODS = frozenset(
+    {
+        "create",
+        "write",
+        "copy",
+        "name_create",
+        "load",
+    }
+)
 
-HIGH_METHODS = frozenset({
-    "unlink",
-    "action_confirm", "action_cancel", "action_done",
-    "action_draft", "action_validate", "action_post",
-    "action_assign", "action_set_won", "action_set_lost",
-    "button_confirm", "button_cancel", "button_draft",
-    "button_validate",
-})
+HIGH_METHODS = frozenset(
+    {
+        "unlink",
+        "action_confirm",
+        "action_cancel",
+        "action_done",
+        "action_draft",
+        "action_validate",
+        "action_post",
+        "action_assign",
+        "action_set_won",
+        "action_set_lost",
+        "button_confirm",
+        "button_cancel",
+        "button_draft",
+        "button_validate",
+    }
+)
 
 
 # ----- Model Classifications -----
 
-BLOCKED_MODELS = frozenset({
-    "ir.rule",
-    "ir.model.access",
-    "ir.module.module",
-    "ir.config_parameter",
-    "ir.model",
-    "res.users",
-    "res.groups",
-    # Odoo 19.1+ exposes programmatic API-key management via JSON-2
-    # (res.users.apikeys.generate / .revoke). A distinct model name from
-    # res.users, so it must be listed explicitly — otherwise an agent could
-    # mint a persistent, unscoped API key that outlives the MCP session
-    # (privilege escalation / backdoor). No legitimate agent flow needs it.
-    "res.users.apikeys",
-})
+BLOCKED_MODELS = frozenset(
+    {
+        "ir.rule",
+        "ir.model.access",
+        "ir.module.module",
+        "ir.config_parameter",
+        "ir.model",
+        "res.users",
+        "res.groups",
+        # Odoo 19.1+ exposes programmatic API-key management via JSON-2
+        # (res.users.apikeys.generate / .revoke). A distinct model name from
+        # res.users, so it must be listed explicitly — otherwise an agent could
+        # mint a persistent, unscoped API key that outlives the MCP session
+        # (privilege escalation / backdoor). No legitimate agent flow needs it.
+        "res.users.apikeys",
+    }
+)
 
-SENSITIVE_MODELS = frozenset({
-    "account.move",
-    "account.payment",
-    "account.bank.statement",
-    "hr.payslip",
-    "ir.cron",
-    # Studio-style schema customization: creating/editing custom fields is
-    # allowed but always requires explicit confirmation (token gate), in both
-    # strict and permissive modes. Whole-model changes (ir.model) stay BLOCKED.
-    "ir.model.fields",
-})
+SENSITIVE_MODELS = frozenset(
+    {
+        "account.move",
+        "account.payment",
+        "account.bank.statement",
+        "hr.payslip",
+        "ir.cron",
+        # Studio-style schema customization: creating/editing custom fields is
+        # allowed but always requires explicit confirmation (token gate), in both
+        # strict and permissive modes. Whole-model changes (ir.model) stay BLOCKED.
+        "ir.model.fields",
+    }
+)
 
 
 # ----- Cascade Warnings -----
 
 CASCADE_WARNINGS: dict[tuple[str, str], str] = {
     ("sale.order", "action_confirm"): (
-        "Confirming a sales order creates delivery orders and "
-        "may trigger procurement rules."
+        "Confirming a sales order creates delivery orders and " "may trigger procurement rules."
     ),
     ("account.move", "action_post"): (
         "Posting a journal entry creates accounting entries. "
         "This is generally irreversible without a reversal entry."
     ),
     ("stock.picking", "button_validate"): (
-        "Validating a transfer updates stock levels and creates "
-        "stock valuation entries."
+        "Validating a transfer updates stock levels and creates " "stock valuation entries."
     ),
     ("purchase.order", "button_confirm"): (
-        "Confirming a purchase order creates incoming receipts "
-        "and may trigger supplier notifications."
+        "Confirming a purchase order creates incoming receipts " "and may trigger supplier notifications."
     ),
     ("account.payment", "action_post"): (
-        "Posting a payment creates journal entries and triggers "
-        "automatic reconciliation."
+        "Posting a payment creates journal entries and triggers " "automatic reconciliation."
     ),
 }
 
 
 # ----- Pydantic Models -----
 
+
 class SafetyClassification(BaseModel):
     """Result of classifying an operation's risk level."""
+
     risk_level: RiskLevel = Field(description="Classified risk level")
     model: str = Field(description="Odoo model name")
     method: str = Field(description="Method name")
-    record_count: int | None = Field(
-        default=None, description="Estimated number of records affected"
-    )
-    requires_confirmation: bool = Field(
-        description="Whether the caller must re-call with confirmed=true"
-    )
+    record_count: int | None = Field(default=None, description="Estimated number of records affected")
+    requires_confirmation: bool = Field(description="Whether the caller must re-call with confirmed=true")
     reason: str = Field(description="Human-readable reason for the classification")
-    cascade_warning: str | None = Field(
-        default=None, description="Warning about side effects"
-    )
-    blocked_reason: str | None = Field(
-        default=None, description="Reason when operation is blocked"
-    )
+    cascade_warning: str | None = Field(default=None, description="Warning about side effects")
+    blocked_reason: str | None = Field(default=None, description="Reason when operation is blocked")
 
 
 class WorkflowStepClassification(BaseModel):
     """Classification for a single workflow step."""
+
     step: str = Field(description="Step name")
     model: str = Field(description="Model involved")
     method: str = Field(description="Method called")
@@ -144,11 +168,10 @@ class WorkflowStepClassification(BaseModel):
 
 class WorkflowSafetyPreview(BaseModel):
     """Safety preview for a complete workflow."""
+
     pending_confirmation: bool = Field(default=True)
     workflow: str = Field(description="Workflow name")
-    steps: list[WorkflowStepClassification] = Field(
-        description="Classification for each step"
-    )
+    steps: list[WorkflowStepClassification] = Field(description="Classification for each step")
     overall_risk: RiskLevel = Field(description="Highest risk across all steps")
     message: str = Field(description="User-facing summary")
 
@@ -163,39 +186,63 @@ _RISK_ORDER: dict[RiskLevel, int] = {
 
 # ----- Helpers -----
 
+
 def _get_safety_mode() -> str:
     """Get the configured safety mode (read from env on each call)."""
     return os.environ.get("MCP_SAFETY_MODE", "strict").lower()
 
 
+# Which argument carries the payload whose size determines the record count,
+# given as (positional index, JSON-2 named form). Both spellings must be
+# consulted: the v2 API is named-args-only (see arg_mapping), so an agent can
+# express the same call either positionally in args_json or by name in
+# kwargs_json. Counting only the positional form would let a bulk operation
+# slip past the strict-mode confirmation gate by moving ids into kwargs_json.
+_COUNTED_ARG: dict[str, tuple[int, str]] = {
+    "write": (0, "ids"),
+    "unlink": (0, "ids"),
+    "copy": (0, "ids"),
+    "create": (0, "vals_list"),
+    "load": (1, "data"),
+}
+
+# action_* / button_* run on a recordset passed the same way (arg_mapping
+# routes position 0 to "ids" for them, including the generic fallback).
+_RECORD_BOUND_ARG: tuple[int, str] = (0, "ids")
+
+
+def _counted_argument(method: str, args: list, kwargs: dict) -> Any:
+    """Return the argument whose size determines the operation's record count."""
+    spec = _COUNTED_ARG.get(method)
+    if spec is None and method.startswith(("action_", "button_")):
+        spec = _RECORD_BOUND_ARG
+    if spec is None:
+        return None
+    position, name = spec
+    if position < len(args):
+        return args[position]
+    return kwargs.get(name)
+
+
 def _estimate_record_count(method: str, args: list, kwargs: dict) -> int | None:
-    """Estimate the number of records affected by an operation."""
-    try:
-        if method in ("unlink", "write"):
-            # First arg is list of IDs
-            if args and isinstance(args[0], list):
-                return len(args[0])
-        elif method == "create":
-            # First arg is vals dict or list of vals dicts
-            if args:
-                val = args[0]
-                if isinstance(val, list):
-                    return len(val)
-                return 1
-        elif method.startswith("action_") or method.startswith("button_"):
-            # First arg is list of IDs
-            if args and isinstance(args[0], list):
-                return len(args[0])
-            elif args and isinstance(args[0], int):
-                return 1
-        elif method == "copy":
-            return 1
-    except (IndexError, TypeError):
-        pass
+    """Estimate the number of records affected by an operation.
+
+    Reads the recordset from args_json or kwargs_json — both are valid ways to
+    express the same JSON-2 call, so counting only one of them would leave the
+    strict-mode batch gate bypassable by choosing the other form.
+    """
+    payload = _counted_argument(method, args, kwargs)
+    if isinstance(payload, list):
+        return len(payload)
+    # A bare id or a single vals dict is one record. bool is an int subclass,
+    # so exclude it rather than counting True as a record.
+    if isinstance(payload, (dict, int)) and not isinstance(payload, bool):
+        return 1
     return None
 
 
 # ----- Core Classification -----
+
 
 def classify_operation(
     model: str,
@@ -283,10 +330,7 @@ def classify_operation(
                 method=method,
                 record_count=record_count,
                 requires_confirmation=True,
-                reason=(
-                    f"'{method}' on sensitive model '{model}' "
-                    f"requires confirmation."
-                ),
+                reason=(f"'{method}' on sensitive model '{model}' " f"requires confirmation."),
                 cascade_warning=cascade_warning,
             )
 
@@ -333,6 +377,7 @@ def classify_operation(
 
 
 # ----- Batch Classification -----
+
 
 def classify_batch(
     operations: list[dict[str, Any]],
@@ -439,10 +484,7 @@ def classify_workflow(
             overall_risk = classification.risk_level
 
     # Build human-readable message
-    high_steps = [
-        s for s in step_classifications
-        if s.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED)
-    ]
+    high_steps = [s for s in step_classifications if s.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED)]
     warnings = [s.cascade_warning for s in step_classifications if s.cascade_warning]
 
     message_parts = [
@@ -450,9 +492,7 @@ def classify_workflow(
         f"with overall risk level: {overall_risk.value}."
     ]
     if high_steps:
-        message_parts.append(
-            f"High-risk steps: {', '.join(s.step for s in high_steps)}."
-        )
+        message_parts.append(f"High-risk steps: {', '.join(s.step for s in high_steps)}.")
     if warnings:
         message_parts.append("Side effects: " + " | ".join(warnings))
 
@@ -465,6 +505,7 @@ def classify_workflow(
 
 
 # ----- Audit Logger -----
+
 
 def _is_audit_enabled() -> bool:
     """Check if audit logging is enabled (read from env on each call)."""
