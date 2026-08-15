@@ -1,6 +1,7 @@
 """Unit tests for per-user OdooClient resolution (user_clients.py)."""
 
 import sqlite3
+import time
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -82,8 +83,12 @@ def test_credential_rotation_rebuilds_client(monkeypatch, users_db_seed):
     conn.commit()
     conn.close()
 
-    # Expire the TTL
-    user_clients._cache[member_id].checked_at = 0.0
+    # Expire the TTL. checked_at is a time.monotonic() reading, which counts
+    # from boot — so 0.0 is only "long ago" on a machine that has been up for
+    # more than _TTL_SECONDS. On a freshly booted CI runner monotonic() is
+    # still in the tens of seconds and 0.0 reads as recent, leaving the entry
+    # valid. Offset from the current reading instead.
+    user_clients._cache[member_id].checked_at = time.monotonic() - user_clients._TTL_SECONDS - 1
     second = user_clients.get_client_for_current_user()
     assert second is not first
     assert second.auth_credential == "rotated-key"
