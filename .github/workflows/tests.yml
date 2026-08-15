@@ -1,0 +1,77 @@
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A newer push to the same branch makes the in-flight run obsolete.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Mirrors the classifiers in pyproject.toml — if a version is claimed
+        # as supported it gets exercised here.
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      # --frozen fails if uv.lock has drifted from pyproject.toml, so lock
+      # rot is caught here rather than on someone's machine.
+      - name: Install dependencies
+        run: uv sync --extra dev --frozen
+
+      # tests/live/ is deliberately excluded: those are script-style runners
+      # that need real Odoo credentials and mutate env state. Everything under
+      # tests/ must pass with no ODOO_* config present — CI provides none on
+      # purpose, so a unit test that quietly needs a live server shows up as a
+      # failure instead of passing on a developer machine that has a .env.
+      - name: Run unit tests
+        run: uv run --frozen pytest tests/ --ignore=tests/live -q
+
+  quality:
+    name: format / lint / types
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev --frozen
+
+      - name: black
+        run: uv run --frozen black --check .
+
+      - name: isort
+        run: uv run --frozen isort --check-only .
+
+      # ruff and mypy carry a pre-existing backlog (49 and 75 findings on
+      # master as of this workflow landing), so they report without blocking.
+      # Flip continue-on-error off once the respective backlog reaches zero.
+      - name: ruff
+        continue-on-error: true
+        run: uv run --frozen ruff check .
+
+      - name: mypy
+        continue-on-error: true
+        run: uv run --frozen mypy src/odoo_mcp
