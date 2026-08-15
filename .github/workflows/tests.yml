@@ -32,10 +32,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
 
-      # --frozen fails if uv.lock has drifted from pyproject.toml, so lock
-      # rot is caught here rather than on someone's machine.
+      # No --frozen: uv.lock is deliberately gitignored (see .gitignore:58 —
+      # the project ships via pip + pyproject.toml). Resolving fresh here is
+      # the point: it mirrors what `pip install git+...` actually gives a
+      # user, so a dependency that drifts out from under the declared bounds
+      # surfaces as a CI failure.
       - name: Install dependencies
-        run: uv sync --extra dev --frozen
+        run: uv sync --extra dev
 
       # tests/live/ is deliberately excluded: those are script-style runners
       # that need real Odoo credentials and mutate env state. Everything under
@@ -43,7 +46,7 @@ jobs:
       # purpose, so a unit test that quietly needs a live server shows up as a
       # failure instead of passing on a developer machine that has a .env.
       - name: Run unit tests
-        run: uv run --frozen pytest tests/ --ignore=tests/live -q
+        run: uv run pytest tests/ --ignore=tests/live -q
 
   quality:
     name: format / lint / types
@@ -59,21 +62,21 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev --frozen
+        run: uv sync --extra dev
 
       - name: black
-        run: uv run --frozen black --check .
+        run: uv run black --check .
 
       - name: isort
-        run: uv run --frozen isort --check-only .
+        run: uv run isort --check-only .
 
       # ruff and mypy carry a pre-existing backlog (49 and 75 findings on
       # master as of this workflow landing), so they report without blocking.
       # Flip continue-on-error off once the respective backlog reaches zero.
       - name: ruff
         continue-on-error: true
-        run: uv run --frozen ruff check .
+        run: uv run ruff check .
 
       - name: mypy
         continue-on-error: true
-        run: uv run --frozen mypy src/odoo_mcp
+        run: uv run mypy src/odoo_mcp
