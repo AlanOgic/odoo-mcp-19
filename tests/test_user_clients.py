@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 import odoo_mcp.user_clients as user_clients
-from odoo_mcp.users_db import UsersDb
 from tests.conftest import TEST_ENCRYPTION_KEY, encrypt_with_contract
 
 

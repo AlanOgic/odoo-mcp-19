@@ -139,9 +139,7 @@ def run_setup_wizard():
 
     # --- Safety ---
     print("── Safety ──")
-    config["safety_mode"] = _prompt_choice(
-        "Safety mode", ["strict", "permissive", "locked"], "strict"
-    )
+    config["safety_mode"] = _prompt_choice("Safety mode", ["strict", "permissive", "locked"], "strict")
     print()
 
     # --- Output ---
@@ -264,7 +262,6 @@ def _print_startup_banner(transport: str, host: str, port: int) -> None:
     odoo_ssl = os.environ.get("ODOO_VERIFY_SSL", "true")
     ssl_disabled = odoo_ssl.lower() in ("0", "false", "no", "off") and odoo_url.startswith("https://")
 
-    safety_mode = os.environ.get("MCP_SAFETY_MODE", "strict")
     safety_audit = os.environ.get("MCP_SAFETY_AUDIT", "false")
     default_ctx = os.environ.get("MCP_DEFAULT_CONTEXT", "(none)")
     bootstrap = os.environ.get(
@@ -303,6 +300,7 @@ def _print_startup_banner(transport: str, host: str, port: int) -> None:
     if ssl_disabled:
         parts.append("  WARNING       : SSL verification is DISABLED -- vulnerable to MITM")
     from .safety_profile import get_profile
+
     profile = get_profile()
     posture_line = (
         f"[SAFETY {profile.safety_mode.value}"

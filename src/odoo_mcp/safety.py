@@ -146,15 +146,24 @@ CASCADE_WARNINGS: dict[tuple[str, str], str] = {
 # Methods whose names are explicitly side-effects regardless of pattern.
 # action_archive/action_unarchive are also covered by the "action_" prefix
 # below — kept here for explicit defense-in-depth.
-_LITERAL_SIDE_EFFECT_METHODS = frozenset({
-    "create", "write", "unlink", "copy",
-    "name_create", "load",
-    "action_archive", "action_unarchive",
-})
+_LITERAL_SIDE_EFFECT_METHODS = frozenset(
+    {
+        "create",
+        "write",
+        "unlink",
+        "copy",
+        "name_create",
+        "load",
+        "action_archive",
+        "action_unarchive",
+    }
+)
 
 # Method-name prefixes that always indicate side effects.
 _SIDE_EFFECT_PREFIXES: tuple[str, ...] = (
-    "action_", "button_", "_action_",
+    "action_",
+    "button_",
+    "_action_",
 )
 
 # Modes whose classifier behaviour requires confirmation for unknown methods
@@ -197,10 +206,7 @@ def _allowlist_blocks(model: str, method: str, profile) -> bool:
         return False
     full_key = f"{model}.{method}"
     wildcard_key = f"{model}.*"
-    return (
-        full_key not in profile.write_allowlist
-        and wildcard_key not in profile.write_allowlist
-    )
+    return full_key not in profile.write_allowlist and wildcard_key not in profile.write_allowlist
 
 
 # ----- Pydantic Models -----
@@ -328,6 +334,7 @@ def classify_operation(
     args = args or []
     kwargs = kwargs or {}
     from .safety_profile import get_profile
+
     profile = get_profile()
     mode = _get_safety_mode()
     record_count = _estimate_record_count(method, args, kwargs)
@@ -638,6 +645,7 @@ def audit_log(
 
 # ----- Payload Pre-flight Validation (Phase 2) -----
 
+
 @dataclass(frozen=True)
 class PayloadValidationResult:
     ok: bool
@@ -708,9 +716,6 @@ def validate_payload_against_schema(
             )
             continue
         if spec.get("readonly"):
-            errors.append(
-                f"Field '{field_name}' is readonly on '{model}' and cannot "
-                f"be written."
-            )
+            errors.append(f"Field '{field_name}' is readonly on '{model}' and cannot " f"be written.")
 
     return PayloadValidationResult(ok=not errors, errors=errors)

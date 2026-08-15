@@ -431,7 +431,7 @@ def _get_documentation_urls(target: str) -> str:
 _FIELDS_CACHE: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
 _FIELDS_CACHE_LOCK = threading.Lock()
 _FIELDS_CACHE_TTL = 60  # seconds — shorter than _DOC_CACHE since model
-                        # schemas can change with module updates
+# schemas can change with module updates
 _FIELDS_CACHE_MAX = 100
 
 
