@@ -84,7 +84,8 @@ def _parse_mode(raw: str | None) -> SafetyMode:
         return SafetyMode(lowered)
     except ValueError:
         logger.warning(
-            "Unknown MCP_SAFETY_MODE=%r, falling back to 'strict'", raw,
+            "Unknown MCP_SAFETY_MODE=%r, falling back to 'strict'",
+            raw,
         )
         return SafetyMode.STRICT
 
@@ -128,7 +129,8 @@ def resolve(env: Mapping[str, str]) -> ResolvedProfile:
     # Per-flag overrides.
     read_only = _parse_bool(env.get("MCP_READ_ONLY"), default_read_only)
     validate_payloads = _parse_bool(
-        env.get("MCP_VALIDATE_PAYLOADS"), default_validate,
+        env.get("MCP_VALIDATE_PAYLOADS"),
+        default_validate,
     )
     raw_host = env.get("MCP_HOST")
     host = raw_host if raw_host else default_host
@@ -137,25 +139,17 @@ def resolve(env: Mapping[str, str]) -> ResolvedProfile:
     write_allowlist = _parse_allowlist(raw_allowlist)
     # Allowlist enforcement: locked mode always enforces. Explicit allowlist
     # under any mode also enforces (the operator opted in).
-    write_allowlist_enforced = (
-        default_allowlist_enforced or raw_allowlist is not None
-    )
+    write_allowlist_enforced = default_allowlist_enforced or raw_allowlist is not None
 
     # posture_open: maximally-loose configuration.
     posture_open = (
-        mode is SafetyMode.PERMISSIVE
-        and host == "0.0.0.0"
-        and not write_allowlist_enforced
-        and not read_only
+        mode is SafetyMode.PERMISSIVE and host == "0.0.0.0" and not write_allowlist_enforced and not read_only
     )
 
     # Warnings: surface foot-gun combinations explicitly.
     warnings: list[str] = []
     if mode is SafetyMode.LOCKED and host == "0.0.0.0":
-        warnings.append(
-            "MCP_SAFETY_MODE=locked but MCP_HOST=0.0.0.0 — "
-            "remote bind enabled despite locked profile."
-        )
+        warnings.append("MCP_SAFETY_MODE=locked but MCP_HOST=0.0.0.0 — " "remote bind enabled despite locked profile.")
     if mode is SafetyMode.LOCKED and not read_only:
         warnings.append(
             "MCP_SAFETY_MODE=locked but MCP_READ_ONLY=false — "
@@ -189,4 +183,5 @@ def get_profile() -> ResolvedProfile:
     _get_safety_mode() pattern in the codebase.
     """
     import os
+
     return resolve(os.environ)

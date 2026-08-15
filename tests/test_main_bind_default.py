@@ -22,7 +22,9 @@ def test_main_module_imports_cleanly(monkeypatch):
     """Smoke check — importing __main__ should not error after the host
     resolution change."""
     import importlib
+
     from odoo_mcp import __main__ as main_mod
+
     importlib.reload(main_mod)
     assert hasattr(main_mod, "main")
 
@@ -33,6 +35,7 @@ def test_banner_includes_posture_line(capfd, monkeypatch):
     monkeypatch.setenv("MCP_VERBOSE", "true")
 
     from odoo_mcp.__main__ import _print_startup_banner
+
     _print_startup_banner("stdio", "127.0.0.1", 8080)
 
     err = capfd.readouterr().err
@@ -45,6 +48,7 @@ def test_banner_includes_allowlist_count(capfd, monkeypatch):
     monkeypatch.setenv("MCP_WRITE_ALLOWLIST", "sale.order.action_confirm,res.partner.message_post")
 
     from odoo_mcp.__main__ import _print_startup_banner
+
     _print_startup_banner("stdio", "127.0.0.1", 8080)
 
     err = capfd.readouterr().err

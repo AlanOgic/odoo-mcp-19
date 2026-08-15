@@ -9,7 +9,7 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from .app import mcp
 from .constants import (
@@ -1366,6 +1366,7 @@ def get_tool_registry() -> str:
 
 # ----- Server-status resource -----
 
+
 @mcp.resource(
     "odoo://server-status",
     name="server-status",
@@ -1402,7 +1403,10 @@ def _server_status_payload() -> str:
     except ValueError:
         port = 8080
     audit = os.environ.get("MCP_SAFETY_AUDIT", "").lower() in (
-        "true", "1", "yes", "on",
+        "true",
+        "1",
+        "yes",
+        "on",
     )
     default_ctx_raw = os.environ.get("MCP_DEFAULT_CONTEXT", "")
     try:

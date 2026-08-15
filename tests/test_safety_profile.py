@@ -1,8 +1,8 @@
 """Tests for safety profile resolver."""
+
 import pytest
 
 from odoo_mcp.safety_profile import (
-    ResolvedProfile,
     SafetyMode,
     resolve,
 )
@@ -54,10 +54,12 @@ def test_read_only_override_beats_locked_default():
 
 
 def test_allowlist_explicit_under_strict_enables_enforcement():
-    profile = resolve({
-        "MCP_SAFETY_MODE": "strict",
-        "MCP_WRITE_ALLOWLIST": "sale.order.action_confirm,res.partner.message_post",
-    })
+    profile = resolve(
+        {
+            "MCP_SAFETY_MODE": "strict",
+            "MCP_WRITE_ALLOWLIST": "sale.order.action_confirm,res.partner.message_post",
+        }
+    )
     assert profile.write_allowlist_enforced is True
     assert "sale.order.action_confirm" in profile.write_allowlist
     assert "res.partner.message_post" in profile.write_allowlist
@@ -70,13 +72,17 @@ def test_allowlist_wildcard_normalised():
 
 
 def test_allowlist_whitespace_tolerant():
-    profile = resolve({
-        "MCP_WRITE_ALLOWLIST": "  sale.order.action_confirm , product.product.write ",
-    })
-    assert profile.write_allowlist == frozenset({
-        "sale.order.action_confirm",
-        "product.product.write",
-    })
+    profile = resolve(
+        {
+            "MCP_WRITE_ALLOWLIST": "  sale.order.action_confirm , product.product.write ",
+        }
+    )
+    assert profile.write_allowlist == frozenset(
+        {
+            "sale.order.action_confirm",
+            "product.product.write",
+        }
+    )
 
 
 def test_host_default_under_locked_is_localhost():
@@ -108,11 +114,13 @@ def test_posture_open_only_when_loose():
     locked = resolve({"MCP_SAFETY_MODE": "locked"})
     assert locked.posture_open is False
 
-    permissive_with_allowlist = resolve({
-        "MCP_SAFETY_MODE": "permissive",
-        "MCP_HOST": "0.0.0.0",
-        "MCP_WRITE_ALLOWLIST": "res.partner.message_post",
-    })
+    permissive_with_allowlist = resolve(
+        {
+            "MCP_SAFETY_MODE": "permissive",
+            "MCP_HOST": "0.0.0.0",
+            "MCP_WRITE_ALLOWLIST": "res.partner.message_post",
+        }
+    )
     assert permissive_with_allowlist.posture_open is False
 
 
@@ -137,26 +145,42 @@ def test_allowlist_drops_invalid_entries():
     """Cross-model wildcards and malformed entries should be dropped with a
     warning rather than silently stored. Odoo models are dotted (e.g.
     'sale.order', 'product.product') — single-segment names are rejected."""
-    profile = resolve({
-        "MCP_WRITE_ALLOWLIST": "*.write,sale.order.action_confirm,nonsense, ,product.product.*",
-    })
+    profile = resolve(
+        {
+            "MCP_WRITE_ALLOWLIST": "*.write,sale.order.action_confirm,nonsense, ,product.product.*",
+        }
+    )
     # Valid entries remain.
     assert "sale.order.action_confirm" in profile.write_allowlist
     assert "product.product.*" in profile.write_allowlist
     # Cross-model wildcard and bare junk are dropped.
     assert "*.write" not in profile.write_allowlist
     assert "nonsense" not in profile.write_allowlist
-    assert profile.write_allowlist == frozenset({
-        "sale.order.action_confirm",
-        "product.product.*",
-    })
+    assert profile.write_allowlist == frozenset(
+        {
+            "sale.order.action_confirm",
+            "product.product.*",
+        }
+    )
 
 
-@pytest.mark.parametrize("raw,expected", [
-    ("true", True), ("True", True), ("1", True), ("yes", True), ("on", True),
-    ("false", False), ("False", False), ("0", False), ("no", False), ("off", False),
-    ("", False), ("garbage", False),
-])
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("true", True),
+        ("True", True),
+        ("1", True),
+        ("yes", True),
+        ("on", True),
+        ("false", False),
+        ("False", False),
+        ("0", False),
+        ("no", False),
+        ("off", False),
+        ("", False),
+        ("garbage", False),
+    ],
+)
 def test_bool_env_parsing(raw: str, expected: bool):
     profile = resolve({"MCP_READ_ONLY": raw})
     assert profile.read_only is expected

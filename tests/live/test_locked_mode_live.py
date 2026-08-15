@@ -5,6 +5,7 @@ Mutates env state. Run directly with python:
 
 Requires .env in cwd with valid Odoo credentials.
 """
+
 import json
 import os
 import sys
@@ -21,8 +22,11 @@ load_dotenv()
 
 def _reset_env():
     for key in (
-        "MCP_SAFETY_MODE", "MCP_READ_ONLY", "MCP_WRITE_ALLOWLIST",
-        "MCP_HOST", "MCP_VALIDATE_PAYLOADS",
+        "MCP_SAFETY_MODE",
+        "MCP_READ_ONLY",
+        "MCP_WRITE_ALLOWLIST",
+        "MCP_HOST",
+        "MCP_VALIDATE_PAYLOADS",
     ):
         os.environ.pop(key, None)
 
@@ -30,8 +34,9 @@ def _reset_env():
 def test_locked_blocks_write():
     _reset_env()
     os.environ["MCP_SAFETY_MODE"] = "locked"
-    from odoo_mcp.server import execute_method
     from unittest.mock import MagicMock
+
+    from odoo_mcp.server import execute_method
 
     response = execute_method(
         ctx=MagicMock(),
@@ -47,14 +52,15 @@ def test_locked_blocks_write():
 def test_locked_allows_safe_read():
     _reset_env()
     os.environ["MCP_SAFETY_MODE"] = "locked"
-    from odoo_mcp.server import execute_method
     from unittest.mock import MagicMock
+
+    from odoo_mcp.server import execute_method
 
     response = execute_method(
         ctx=MagicMock(),
         model="res.partner",
         method="search_read",
-        args_json='[[]]',
+        args_json="[[]]",
         kwargs_json='{"fields": ["name"], "limit": 1}',
     )
     assert response.success, f"locked should permit reads, got: {response.error}"
@@ -66,14 +72,18 @@ def test_allowlist_unblocks_named_method():
     os.environ["MCP_SAFETY_MODE"] = "locked"
     os.environ["MCP_READ_ONLY"] = "false"  # Allow writes generally...
     os.environ["MCP_WRITE_ALLOWLIST"] = "res.partner.message_post"
-    from odoo_mcp.safety import classify_operation, RiskLevel
+    from odoo_mcp.safety import RiskLevel, classify_operation
 
     # ...but only message_post on res.partner is allowed.
     permitted = classify_operation(
-        "res.partner", "message_post", args=[[1], "live test"],
+        "res.partner",
+        "message_post",
+        args=[[1], "live test"],
     )
     blocked = classify_operation(
-        "res.partner", "write", args=[[1], {"name": "X"}],
+        "res.partner",
+        "write",
+        args=[[1], {"name": "X"}],
     )
     assert permitted.risk_level is not RiskLevel.BLOCKED
     assert blocked.risk_level is RiskLevel.BLOCKED
@@ -97,8 +107,9 @@ def test_payload_validation_catches_bad_field():
     _reset_env()
     os.environ["MCP_SAFETY_MODE"] = "strict"  # so writes are allowed
     os.environ["MCP_VALIDATE_PAYLOADS"] = "true"
-    from odoo_mcp.server import execute_method
     from unittest.mock import MagicMock
+
+    from odoo_mcp.server import execute_method
 
     response = execute_method(
         ctx=MagicMock(),

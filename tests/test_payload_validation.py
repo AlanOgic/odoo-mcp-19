@@ -1,10 +1,10 @@
 """Tests for live fields_get pre-flight validation."""
+
 from unittest.mock import MagicMock
 
 import pytest
 
 from odoo_mcp.safety import (
-    PayloadValidationResult,
     validate_payload_against_schema,
 )
 
@@ -19,6 +19,7 @@ def _client_with_fields(fields: dict):
 def clear_fields_cache():
     """Each test must see fresh fields_get behaviour."""
     from odoo_mcp.utils import _FIELDS_CACHE, _FIELDS_CACHE_LOCK
+
     with _FIELDS_CACHE_LOCK:
         _FIELDS_CACHE.clear()
     yield
@@ -27,13 +28,18 @@ def clear_fields_cache():
 
 
 def test_valid_payload_passes():
-    client = _client_with_fields({
-        "name": {"type": "char", "readonly": False, "required": True},
-        "email": {"type": "char", "readonly": False, "required": False},
-    })
+    client = _client_with_fields(
+        {
+            "name": {"type": "char", "readonly": False, "required": True},
+            "email": {"type": "char", "readonly": False, "required": False},
+        }
+    )
 
     result = validate_payload_against_schema(
-        client, "res.partner", "write", args=[[1], {"name": "X", "email": "a@b"}],
+        client,
+        "res.partner",
+        "write",
+        args=[[1], {"name": "X", "email": "a@b"}],
     )
 
     assert result.ok is True
@@ -44,7 +50,10 @@ def test_unknown_field_fails():
     client = _client_with_fields({"name": {"type": "char"}})
 
     result = validate_payload_against_schema(
-        client, "res.partner", "write", args=[[1], {"name": "X", "made_up_field": 42}],
+        client,
+        "res.partner",
+        "write",
+        args=[[1], {"name": "X", "made_up_field": 42}],
     )
 
     assert result.ok is False
@@ -52,13 +61,18 @@ def test_unknown_field_fails():
 
 
 def test_readonly_field_fails():
-    client = _client_with_fields({
-        "name": {"type": "char", "readonly": False},
-        "id": {"type": "integer", "readonly": True},
-    })
+    client = _client_with_fields(
+        {
+            "name": {"type": "char", "readonly": False},
+            "id": {"type": "integer", "readonly": True},
+        }
+    )
 
     result = validate_payload_against_schema(
-        client, "res.partner", "write", args=[[1], {"id": 42, "name": "X"}],
+        client,
+        "res.partner",
+        "write",
+        args=[[1], {"id": 42, "name": "X"}],
     )
 
     assert result.ok is False
@@ -71,7 +85,10 @@ def test_empty_fields_response_fails():
     client = _client_with_fields({})
 
     result = validate_payload_against_schema(
-        client, "res.partner", "create", args=[{"name": "X"}],
+        client,
+        "res.partner",
+        "create",
+        args=[{"name": "X"}],
     )
 
     assert result.ok is False
@@ -82,7 +99,10 @@ def test_create_validates_first_arg_dict():
     client = _client_with_fields({"name": {"type": "char"}})
 
     result = validate_payload_against_schema(
-        client, "res.partner", "create", args=[{"name": "X"}],
+        client,
+        "res.partner",
+        "create",
+        args=[{"name": "X"}],
     )
     assert result.ok is True
 
@@ -92,7 +112,10 @@ def test_non_dict_payload_skipped():
     client = _client_with_fields({"name": {"type": "char"}})
 
     result = validate_payload_against_schema(
-        client, "sale.order", "action_confirm", args=[[1]],
+        client,
+        "sale.order",
+        "action_confirm",
+        args=[[1]],
     )
     assert result.ok is True
 
@@ -102,9 +125,15 @@ def test_validator_uses_fields_cache():
     client = _client_with_fields({"name": {"type": "char"}})
 
     validate_payload_against_schema(
-        client, "res.partner", "write", args=[[1], {"name": "A"}],
+        client,
+        "res.partner",
+        "write",
+        args=[[1], {"name": "A"}],
     )
     validate_payload_against_schema(
-        client, "res.partner", "write", args=[[1], {"name": "B"}],
+        client,
+        "res.partner",
+        "write",
+        args=[[1], {"name": "B"}],
     )
     assert client.execute_method.call_count == 1

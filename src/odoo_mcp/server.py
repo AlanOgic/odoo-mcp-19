@@ -19,7 +19,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastmcp import Context
 from fastmcp.dependencies import Progress
@@ -402,8 +402,13 @@ def execute_method(
             # Only when the profile asks for it AND this is a write-shaped call.
             if get_profile().validate_payloads and is_side_effect_method(method):
                 from .safety import validate_payload_against_schema as _validate_payload
+
                 _validation = _validate_payload(
-                    odoo, model, method, args=args, kwargs=kwargs,
+                    odoo,
+                    model,
+                    method,
+                    args=args,
+                    kwargs=kwargs,
                 )
                 if not _validation.ok:
                     elapsed_ms = (time.time() - start_time) * 1000

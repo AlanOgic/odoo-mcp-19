@@ -1,5 +1,4 @@
 """Tests for MCP_WRITE_ALLOWLIST enforcement in classify_operation."""
-import pytest
 
 from odoo_mcp.safety import RiskLevel, classify_operation
 
@@ -88,6 +87,8 @@ def test_locked_mode_batch_medium_requires_confirmation(monkeypatch):
     monkeypatch.setenv("MCP_WRITE_ALLOWLIST", "res.partner.create")
     # create() with a list of dicts → batch
     result = classify_operation(
-        "res.partner", "create", args=[[{"name": "A"}, {"name": "B"}]],
+        "res.partner",
+        "create",
+        args=[[{"name": "A"}, {"name": "B"}]],
     )
     assert result.requires_confirmation is True

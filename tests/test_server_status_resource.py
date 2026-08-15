@@ -1,10 +1,12 @@
 """Tests for odoo://server-status resource."""
+
 import json
 
 
 def _read_status() -> dict:
     """Read the server-status resource via the read_resource bridge."""
     from odoo_mcp.server import read_resource
+
     raw = read_resource("odoo://server-status")
     return json.loads(raw)
 

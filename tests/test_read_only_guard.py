@@ -1,4 +1,5 @@
 """Tests for MCP_READ_ONLY enforcement in execute_method."""
+
 import asyncio
 from unittest.mock import MagicMock
 
@@ -12,6 +13,7 @@ def mock_ctx():
 
 def _import_execute_method():
     from odoo_mcp.server import execute_method
+
     return execute_method
 
 
@@ -54,7 +56,7 @@ def test_read_only_blocks_action_method(monkeypatch, mock_ctx):
         ctx=mock_ctx,
         model="sale.order",
         method="action_confirm",
-        args_json='[[1]]',
+        args_json="[[1]]",
     )
 
     assert response.success is False
@@ -71,7 +73,7 @@ def test_read_only_allows_safe_method(monkeypatch, mock_ctx):
 
     response = execute_method(
         ctx=mock_ctx,
-        model="not a model",   # Will fail _validate_model regex
+        model="not a model",  # Will fail _validate_model regex
         method="search_read",
     )
 
@@ -101,11 +103,13 @@ def test_read_only_blocks_batch_with_writes(monkeypatch):
     monkeypatch.setenv("MCP_READ_ONLY", "true")
     from odoo_mcp.server import batch_execute
 
-    response = asyncio.run(batch_execute(
-        operations=[
-            {"model": "res.partner", "method": "write", "args_json": '[[1], {"name": "X"}]'},
-        ],
-    ))
+    response = asyncio.run(
+        batch_execute(
+            operations=[
+                {"model": "res.partner", "method": "write", "args_json": '[[1], {"name": "X"}]'},
+            ],
+        )
+    )
 
     assert response.success is False
     assert "read-only" in (response.error or "").lower()
@@ -124,11 +128,13 @@ def test_read_only_allows_batch_of_reads(monkeypatch):
     from odoo_mcp.server import batch_execute
 
     try:
-        response = asyncio.run(batch_execute(
-            operations=[
-                {"model": "not a model", "method": "search_read"},
-            ],
-        ))
+        response = asyncio.run(
+            batch_execute(
+                operations=[
+                    {"model": "not a model", "method": "search_read"},
+                ],
+            )
+        )
         # If we got a response, the error must not be about read-only.
         assert "read-only" not in (response.error or "").lower()
     except AssertionError as exc:
@@ -142,10 +148,12 @@ def test_read_only_blocks_workflow(monkeypatch):
     monkeypatch.setenv("MCP_READ_ONLY", "true")
     from odoo_mcp.server import execute_workflow
 
-    response = asyncio.run(execute_workflow(
-        workflow="quote_to_cash",
-        params_json='{"partner_id": 1, "product_id": 1, "quantity": 1}',
-    ))
+    response = asyncio.run(
+        execute_workflow(
+            workflow="quote_to_cash",
+            params_json='{"partner_id": 1, "product_id": 1, "quantity": 1}',
+        )
+    )
 
     assert response.success is False
     assert "read-only" in (response.error or "").lower()
@@ -157,10 +165,12 @@ def test_read_only_off_allows_workflow_to_proceed_to_validation(monkeypatch):
     monkeypatch.delenv("MCP_READ_ONLY", raising=False)
     from odoo_mcp.server import execute_workflow
 
-    response = asyncio.run(execute_workflow(
-        workflow="quote_to_cash",
-        params_json='{"partner_id": 1, "product_id": 1, "quantity": 1}',
-    ))
+    response = asyncio.run(
+        execute_workflow(
+            workflow="quote_to_cash",
+            params_json='{"partner_id": 1, "product_id": 1, "quantity": 1}',
+        )
+    )
 
     # Whatever happens downstream, the error (if any) must not be about read-only.
     assert "read-only" not in (response.error or "").lower()
