@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Development commands
 
 ```bash
-# Install (local workflow — repo is uv-managed: uv.lock + .venv)
+# Install (local workflow — uv-managed .venv; uv.lock is deliberately gitignored, the project ships via pip + pyproject.toml)
 uv sync --extra dev
 # then prefix commands with `uv run`, e.g.:
 uv run pytest tests/test_safety.py
@@ -59,7 +59,11 @@ Note: live tests under `tests/live/` are **script-style runners**, not pytest mo
 - **Unit (no Odoo)**: everything in `tests/` except `tests/live/` — run with `pytest --ignore=tests/live`. Highlights: `test_resources.py` patches `get_odoo_client` with a stub (pins resource-layer validation/error handling); `test_arg_mapping.py` pins the positional → JSON-2 named-arg contract; `test_odoo_client.py` pins bearer auth + no `result`-envelope unwrap; `test_token_gate.py` / `test_safety.py` / `test_safety_role.py` cover the gate and role-based classification; the multi-user tests (`test_auth_verifier.py`, `test_token_crypto.py`, `test_user_clients.py`, `test_skill_visibility.py`, `test_skill_prompts.py`) use the `users_db_seed` fixture in `tests/conftest.py`, which builds a temp registry with the **exact CLORAG DDL and crypto contract** — keep that fixture contract-true.
 - **Live (need `.env`)**: anything under `tests/live/` — run with `python <file>`, not pytest.
 
-**CI**: the only workflow is `.github/workflows/claude-code-review.yml` — an automated Claude code review on every PR. There is **no build/test CI**; run the unit tests, lint, and typecheck locally before pushing.
+**CI**: two workflows in `.github/workflows/`:
+- `tests.yml` — on every PR and push to master: the unit suite (`pytest tests/ --ignore=tests/live`) across Python 3.10–3.13 (matrix mirrors the pyproject classifiers), plus a quality job where `black --check` and `isort --check-only` **block** while `ruff` and `mypy` run `continue-on-error` (pre-existing backlog — flip them blocking once their counts hit zero). CI deliberately provides no `ODOO_*` env and no lockfile (`uv sync` resolves fresh, mirroring what `pip install git+…` gives a user), so unit tests that quietly need a live server or drifting dependencies surface as failures.
+- `claude-code-review.yml` — automated Claude code review on every PR.
+
+Run `black . && isort .` before pushing — CI enforces formatting.
 
 ## High-level architecture
 
