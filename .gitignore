@@ -53,6 +53,7 @@ wiki/
 # Claude Code / tooling scratch
 .claude/
 .superpowers/
+.omc/
 
 # uv lockfile (project uses pip + pyproject.toml)
 uv.lock
