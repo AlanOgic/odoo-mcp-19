@@ -21,8 +21,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
-
 from fastmcp import Context
 from fastmcp.dependencies import Progress
 
@@ -57,12 +55,14 @@ from .safety import (
     classify_operation,
     classify_workflow,
 )
-from .user_clients import current_role  # noqa: E402
+from .user_clients import current_role
 from .utils import (
     _get_live_doc,
     _track_model_issue,
     get_error_suggestion,
 )
+
+logger = logging.getLogger(__name__)
 
 # ----- Confirmation Token Store -----
 # Stateful nonces that tie a confirmed=True re-call to the original safety classification

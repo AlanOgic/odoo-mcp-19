@@ -12,8 +12,6 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
-
 from .constants import (
     _DOC_CACHE,
     _DOC_CACHE_LOCK,
@@ -25,6 +23,8 @@ from .constants import (
     RUNTIME_MODEL_ISSUES,
 )
 from .odoo_client import get_odoo_client
+
+logger = logging.getLogger(__name__)
 
 # ----- Compact Schema Builder -----
 
