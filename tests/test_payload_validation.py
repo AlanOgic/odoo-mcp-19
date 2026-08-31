@@ -27,6 +27,41 @@ def clear_fields_cache():
         _FIELDS_CACHE.clear()
 
 
+def test_write_vals_in_kwargs_is_validated():
+    """v2 is named-args-only: vals can arrive as kwargs, and must still be checked.
+
+    Reading only the positional form let a write skip validation entirely by
+    moving its payload into kwargs_json.
+    """
+    client = _client_with_fields({"name": {"type": "char", "readonly": False}})
+
+    result = validate_payload_against_schema(
+        client,
+        "res.partner",
+        "write",
+        args=[],
+        kwargs={"ids": [1], "vals": {"nonexistent_field": "X"}},
+    )
+
+    assert result.ok is False
+    assert any("nonexistent_field" in e for e in result.errors)
+
+
+def test_create_vals_list_in_kwargs_is_validated():
+    client = _client_with_fields({"name": {"type": "char", "readonly": False}})
+
+    result = validate_payload_against_schema(
+        client,
+        "res.partner",
+        "create",
+        args=[],
+        kwargs={"vals_list": [{"bogus": 1}]},
+    )
+
+    assert result.ok is False
+    assert any("bogus" in e for e in result.errors)
+
+
 def test_valid_payload_passes():
     client = _client_with_fields(
         {

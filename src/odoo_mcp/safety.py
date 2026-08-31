@@ -143,29 +143,6 @@ CASCADE_WARNINGS: dict[tuple[str, str], str] = {
 
 # ----- Side-Effect Method Predicate -----
 
-# Methods whose names are explicitly side-effects regardless of pattern.
-# action_archive/action_unarchive are also covered by the "action_" prefix
-# below — kept here for explicit defense-in-depth.
-_LITERAL_SIDE_EFFECT_METHODS = frozenset(
-    {
-        "create",
-        "write",
-        "unlink",
-        "copy",
-        "name_create",
-        "load",
-        "action_archive",
-        "action_unarchive",
-    }
-)
-
-# Method-name prefixes that always indicate side effects.
-_SIDE_EFFECT_PREFIXES: tuple[str, ...] = (
-    "action_",
-    "button_",
-    "_action_",
-)
-
 # Modes whose classifier behaviour requires confirmation for unknown methods
 # and for batch (record_count > 1) MEDIUM operations. "locked" inherits the
 # "strict" classifier semantics in addition to its own profile-layer gates
@@ -174,23 +151,26 @@ _STRICT_EQUIV: frozenset[str] = frozenset({"strict", "locked"})
 
 
 def is_side_effect_method(method: str) -> bool:
-    """Return True if calling this method should be treated as a side effect.
+    """Return True if calling this method must be treated as a side effect.
 
     Single source of truth for the read-only guard, the write allowlist, and
-    the payload pre-flight. Cheap pattern match — does NOT call the classifier.
+    the payload pre-flight. Cheap set lookup — does NOT call the classifier.
 
-    Side-effect methods include:
-      * Literal CRUD names (create, write, unlink, copy, action_archive, ...)
-      * Anything matching action_*, button_*, _action_*
+    **Fail-closed: anything outside SAFE_METHODS counts as a side effect.**
+    Recognising writes by name shape (a literal CRUD set plus action_* /
+    button_* prefixes) is not sufficient for a kill-switch, because Odoo is
+    full of write methods that match neither. `module_knowledge.json` alone
+    documents `add_members`, `article_create`, `article_duplicate`,
+    `channel_create`, `convert_opportunity`, `create_from_urls`,
+    `create_from_attachments`, `create_from_binary_files`, `document_create`,
+    `get_direct_response` and `open_agent_chat`; the standard ORM adds
+    ubiquitous ones like `message_post` and `toggle_active`. Under
+    MCP_READ_ONLY none of those may reach Odoo, so the only defensible
+    default is to gate everything we cannot prove is a read.
 
-    SAFE methods (search_read, read, fields_get, ...) and unknown read-like
-    methods return False.
+    SAFE_METHODS (search_read, read, fields_get, ...) return False.
     """
-    if not method:
-        return False
-    if method in _LITERAL_SIDE_EFFECT_METHODS:
-        return True
-    return any(method.startswith(p) for p in _SIDE_EFFECT_PREFIXES)
+    return method not in SAFE_METHODS
 
 
 def _allowlist_blocks(model: str, method: str, profile) -> bool:
@@ -652,23 +632,37 @@ class PayloadValidationResult:
     errors: list[str]
 
 
-def _extract_vals_dict(method: str, args: list) -> dict | None:
-    """Pull the vals dict out of an operation's args, depending on method."""
-    if not args:
-        return None
-    if method == "create":
-        # create([{...}]) or create({...})
-        first = args[0]
-        if isinstance(first, dict):
-            return first
-        if isinstance(first, list) and first and isinstance(first[0], dict):
-            return first[0]  # validate first record only
-        return None
-    if method in ("write", "copy"):
-        # write([ids], {...})
-        if len(args) >= 2 and isinstance(args[1], dict):
-            return args[1]
-    return None  # action_*, button_*, unlink: no vals dict
+# Where the vals payload lives for each method: (positional index, kwargs key).
+# The v2 API is named-args-only, so the same payload reaches us either way and
+# both spellings must be read — checking only the positional form lets a write
+# skip validation by moving its vals into kwargs_json. Same class of bug as
+# _estimate_record_count before it learned to read _COUNTED_ARG from kwargs.
+_VALS_ARG: dict[str, tuple[int, str]] = {
+    "create": (0, "vals_list"),
+    "write": (1, "vals"),
+    "copy": (1, "default"),
+}
+
+
+def _extract_vals_dict(method: str, args: list, kwargs: dict | None = None) -> dict | None:
+    """Pull the vals dict out of an operation's args or kwargs, by method."""
+    spec = _VALS_ARG.get(method)
+    if spec is None:
+        return None  # action_*, button_*, unlink: no vals dict
+    position, key = spec
+    kwargs = kwargs or {}
+
+    raw: Any = None
+    if args and len(args) > position:
+        raw = args[position]
+    elif key in kwargs:
+        raw = kwargs[key]
+
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list) and raw and isinstance(raw[0], dict):
+        return raw[0]  # create([{...}]) — validate the first record only
+    return None
 
 
 def validate_payload_against_schema(
@@ -689,7 +683,7 @@ def validate_payload_against_schema(
     from .utils import get_fields_for_model
 
     args = args or []
-    vals = _extract_vals_dict(method, args)
+    vals = _extract_vals_dict(method, args, kwargs)
     if vals is None:
         return PayloadValidationResult(ok=True, errors=[])
 

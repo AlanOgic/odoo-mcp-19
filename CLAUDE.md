@@ -194,7 +194,7 @@ Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py
 | `MCP_SAFETY_AUDIT` | No | — | `true` to log audit entries to stderr |
 | `MCP_DEFAULT_CONTEXT` | No | — | JSON merged into all op contexts. Max 4KB. e.g. `{"lang":"fr_FR"}` |
 | `MCP_BOOTSTRAP_MODELS` | No | `res.partner,sale.order,account.move,product.product,stock.picking` | Models for `odoo://session-bootstrap`. Max 20. |
-| `MCP_READ_ONLY` | No | derived from mode | `true` to globally reject all side-effect methods (writes, `action_*`, `button_*`). |
+| `MCP_READ_ONLY` | No | derived from mode | `true` to reject every method that is not a known read. Fail-closed: the gate is `method not in SAFE_METHODS`, so unrecognised methods (`message_post`, `toggle_active`, `convert_opportunity`, `create_from_urls`, …) are blocked rather than assumed safe. The 13 SAFE_METHODS (`search_read`, `read`, `fields_get`, …) pass through. |
 | `MCP_WRITE_ALLOWLIST` | No | empty | Comma-separated `model.method` (or `model.*`) entries permitted as side effects. Enforced under `locked`, or explicitly via this var. |
 | `MCP_VALIDATE_PAYLOADS` | No | derived from mode | `true` to validate write payloads against live `fields_get` before issuing a confirmation token. |
 
