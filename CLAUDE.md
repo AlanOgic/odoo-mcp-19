@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **odoo-mcp-19** — Standalone MCP server for Odoo 19+ using the **v2 JSON-2 API** (`POST /json/2/{model}/{method}`, Bearer token auth, named args only). No v1 fallback.
 
 - **Version**: 1.15.0 · **Python**: 3.10+ · **MCP**: 2025-11-25 (FastMCP `>=3.4.6,<4`; `cryptography>=42` is a *direct* dependency of `token_crypto`, not just a transitive Authlib one)
-- **The `<4` ceiling is deliberate.** FastMCP 4.x targets MCP spec 2026-07-28 and is not a drop-in — see `docs/mcp-2026-07-28-migration.md` and `tests/test_dependency_pins.py`, which fails the build if the bound is widened or the environment drifts.
+- **The `<4` ceiling is deliberate.** FastMCP 4.x targets MCP spec 2026-07-28 and is not a drop-in — see `docs/mcp-2026-07-28-migration.md` and `tests/test_dependency_pins.py`, which fails the build if the bound is widened or the environment drifts. **`uv.lock` is gitignored** (`.gitignore`: *"project uses pip + pyproject.toml"*) — it pins only your local `.venv`, never the documented `pip install git+…` path, so `pyproject.toml` is the only thing between a fresh install and FastMCP 4.x. Do not relax the ceiling on the strength of the lockfile.
 - **Surface**: 5 tools, 27 `odoo://` resources, 19 prompts (12 generic + 7 `cyanview-*` workflow skill prompts)
 - **Discovery is via resources, action is via tools** — there is no `list_models` tool, agents read `odoo://models` instead.
 - **Two deployment shapes**: single-user (STDIO or HTTP with one static `MCP_API_KEY`) and **multi-user HTTP** (per-user `cv_odoo_…` keys from the CLORAG-managed registry, personal Odoo clients, per-user skill visibility — see "Multi-user mode" below).
@@ -36,16 +36,19 @@ python -m odoo_mcp --setup
 # Tests — unit (no Odoo needed)
 uv run pytest tests/ --ignore=tests/live
 uv run pytest tests/test_safety.py::TestClassifyOperation::test_safe_methods_are_safe   # single test
-# Note: bare `pytest tests/` also collects tests/live/ (test_*_live.py) — those need .env and mutate env state. Always --ignore=tests/live.
+# Note: bare `pytest tests/` collects NO live tests (they are __main__-guarded scripts with no test_* functions),
+# but it does *import* them, and their module-level load_dotenv() pushes real .env credentials into os.environ
+# for the whole session. Always --ignore=tests/live.
 
 # Tests — live (requires .env with real Odoo creds; script-style runners)
 python tests/live/test_safety_live.py
 python tests/live/test_v1110_live.py
 
 # Format + lint + typecheck
-black . && isort .
-ruff check .
-mypy src/odoo_mcp
+black . && isort src tests   # `isort .` exits 1: it walks the stale .venv_old/ (isort has no gitignore
+                             # awareness; black does, so `black .` is fine). Both are clean over src+tests.
+ruff check .                 # known baseline: 49 errors (27 E501, 19 E402, 3 F401) — see below
+mypy src/odoo_mcp            # known baseline: 75 errors, mostly [index]/[assignment] in resources.py + server.py
 
 # Docker
 docker build -t odoo-mcp-19 .
@@ -64,6 +67,8 @@ Note: live tests under `tests/live/` are **script-style runners**, not pytest mo
 - `claude-code-review.yml` — automated Claude code review on every PR.
 
 Run `black . && isort .` before pushing — CI enforces formatting.
+
+**Lint and typecheck are not clean gates.** Baseline as of v1.15.0: `pytest --ignore=tests/live` → **243 passed**; `black --check .` and `isort --check-only src tests` → **clean**; `ruff check .` → **49 errors**; `mypy src/odoo_mcp` → **75 errors** (38 in `resources.py`, 24 in `server.py`, 10 in `utils.py`). Judge a change by *no new errors against that baseline*, not by a zero exit code. The 19 E402s are a red herring: they come from a statement sitting above the imports (`logger = logging.getLogger(__name__)` at `server.py:24`, the same shape in `utils.py`, `load_dotenv()` in the live scripts) — **not** from the deliberate "import `app.py` first" ordering. Do not reorder module imports to chase them.
 
 ## High-level architecture
 
@@ -90,7 +95,8 @@ src/odoo_mcp/
 ├── models.py          Pydantic response schemas (structured output)
 ├── utils.py           Compact schema builder, error suggestions, /doc-bearer LRU cache
 ├── skills/*.md        Packaged Cyanview skill bodies (copied from curated ~/.claude/skills/cyanview-*)
-└── module_knowledge.json   Special methods for 13 modules (loaded at startup, shipped as package data)
+└── module_knowledge.json   Special methods for 13 modules + the static `model_limitations` block
+                            (loaded at startup, shipped as package data)
 ```
 
 ### Cross-cutting flows
@@ -106,7 +112,7 @@ src/odoo_mcp/
 8. Send to Odoo. On 500 from `search_read` → automatically fall back to `search` + `read`, categorize the error (timeout / relational_filter / computed_field / …), record runtime issue, return enriched `issue_analysis`.
 9. On any error: match against ~25 patterns in `utils.get_error_suggestion` (with `{model}` templating). Server tracebacks are logged to stderr, **never** forwarded to clients.
 
-**2. Resource bridge** — `read_resource(uri)` exists because some clients (Claude Desktop) don't speak resource templates. The `_RESOURCE_ROUTES` table in `server.py` maps URIs to the same handlers `resources.py` registers, so the same `odoo://...` URI works either way.
+**2. Resource bridge** — `read_resource(uri)` exists because some clients (Claude Desktop) don't speak resource templates. The `_RESOURCE_ROUTES` table in `server.py` maps URIs to the same handlers `resources.py` registers, so the same `odoo://...` URI works either way. Two properties nothing tests: **parity** — 27 routes ↔ 27 `@mcp.resource` handlers today, and adding a resource without adding a route silently 404s the bridge while the template client keeps working; and **order** — the list is matched top-down, so `odoo://module-knowledge/{name}` must stay above `odoo://module-knowledge`, and the specific `odoo://model/{m}/…` variants above the catch-all `odoo://model/{m}`. `read_resource` also **truncates at 15 000 chars** (`_READ_RESOURCE_MAX_CHARS`), appending a `_truncated` JSON marker — so `odoo://model/{m}/schema` (~300 KB) returns a fragment unless the caller passes `max_chars=0`.
 
 **3. Live doc enrichment** — `odoo://methods/{model}` and `@api.private` detection both consult `/doc-bearer/<model>.json` (provided by Odoo's `api_doc` module, requires `api_doc.group_allow_doc` on the API user). Cached in `_DOC_CACHE`: 5-min TTL, 100-entry LRU, `threading.Lock`. Falls back silently to static data if unavailable.
 
@@ -198,6 +204,8 @@ Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py
 | `odoo://methods/{model}` | Live-enriched (signatures, return types, decorators) via `/doc-bearer/`; static fallback |
 | `odoo://model-limitations` | Known issues + runtime-detected problematic combos |
 | `odoo://domain-syntax` / `odoo://aggregation` / `odoo://pagination` / `odoo://hierarchical` | Reference docs |
+
+When read through the `read_resource` tool (rather than a native resource client), every one of these is capped at 15 000 chars by default — `odoo://model/{model}/schema` needs `max_chars=0` to come back whole.
 
 ## Key conventions
 
