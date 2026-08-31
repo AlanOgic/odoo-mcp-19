@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-08-31
+
+### Added
+- **`MCP_SAFETY_MODE=locked`** — a hardened deployment profile, with per-flag overrides.
+  The mode picks defaults; individual env vars override them. `locked` turns on
+  `MCP_READ_ONLY=true`, `MCP_WRITE_ALLOWLIST` enforcement, `MCP_VALIDATE_PAYLOADS=true`,
+  and flips the HTTP bind default from `0.0.0.0` to `127.0.0.1`.
+  - `MCP_READ_ONLY` — global write kill-switch, enforced in `execute_method`,
+    `batch_execute` and `execute_workflow` before any Odoo round-trip.
+  - `MCP_WRITE_ALLOWLIST` — comma-separated `model.method` (or `model.*`) entries
+    permitted as side effects. Cross-model wildcards (`*.method`) are deliberately
+    rejected as over-granting.
+  - `MCP_VALIDATE_PAYLOADS` — pre-flight write payloads against a live `fields_get`
+    before issuing a confirmation token, catching hallucinated and readonly fields.
+    An empty `fields_get` response counts as a failure: a dropped connection must not
+    grant a write token.
+  - `odoo://server-status` — resolved posture at runtime (mode, host, allowlist contents,
+    foot-gun warnings such as `locked` + `MCP_HOST=0.0.0.0`). Resource surface: 27 → 28.
+  - Startup banner gained a posture line:
+    `[SAFETY locked · READ-ONLY · BIND 127.0.0.1 · ALLOWLIST 0 entries]`.
+- **Build/test CI.** `.github/workflows/tests.yml` runs the unit suite on every PR and
+  push to master across Python 3.10–3.13 (matrix mirrors the pyproject classifiers), plus
+  a quality job where `black` and `isort` block and `ruff`/`mypy` report without blocking.
+  CI deliberately supplies no `ODOO_*` config and no lockfile, so a unit test that quietly
+  needs a live server — or a dependency drifting out from under the declared bounds —
+  fails there instead of passing on a developer machine. Previously the only workflow was
+  the Claude code review, which reads code but never executes it.
+- `tests/test_dependency_pins.py` — guards the FastMCP and MCP SDK majors from two angles:
+  the installed versions (catches a stale or bypassed lock) and the constraint declared in
+  `pyproject.toml` (catches the bound being widened without doing the migration).
+
+### Security
+- **The read-only kill-switch was a name filter, not a kill-switch.** `is_side_effect_method()`
+  matched a literal CRUD set plus `action_*` / `button_*` / `_action_*` prefixes, so any write
+  method outside that shape passed the guard. `module_knowledge.json` alone documents eleven
+  that do not match (`add_members`, `article_create`, `article_duplicate`, `channel_create`,
+  `convert_opportunity`, `create_from_attachments`, `create_from_binary_files`,
+  `create_from_urls`, `document_create`, `get_direct_response`, `open_agent_chat`), and the
+  standard ORM adds ubiquitous ones like `message_post` and `toggle_active`. They fell through
+  to "unknown method → MEDIUM + requires_confirmation", which is not a human gate — an agent
+  satisfies it itself by re-calling with the token. The predicate is now **fail-closed**
+  (`method not in SAFE_METHODS`), which also closes the same hole in `MCP_WRITE_ALLOWLIST`,
+  since allowlist enforcement short-circuited on the same predicate.
+- **Write payloads could skip pre-flight validation via `kwargs`.** `_extract_vals_dict()` read
+  only positional args while the v2 API is named-args-only, so moving a payload into
+  `kwargs_json` bypassed validation entirely. Now table-driven (`_VALS_ARG`, mirroring
+  `_COUNTED_ARG`): `create → vals_list`, `write → vals`, `copy → default`, checked positionally
+  first and then by kwargs key. Same class of bug as `_estimate_record_count` before it learned
+  to read kwargs.
+- **`execute_workflow` built the Odoo client before consulting the read-only guard**, so under
+  `MCP_READ_ONLY=true` with no configuration it raised `FileNotFoundError` instead of returning
+  the rejection. Building the client is what reads config and opens a session — exactly what a
+  kill-switch must precede. `execute_method` and `batch_execute` already had the order right.
+
 ### Changed
 - **FastMCP dependency is now bounded: `fastmcp[tasks]>=3.4.6,<4`** (was `>=3.2.0`, unbounded).
   Because the package is installed from git rather than PyPI, `uv.lock` does not apply to the
@@ -24,6 +78,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and locally built Docker images. The package is deliberately **not** published to PyPI or
   Docker Hub; the previously documented `pip install odoo-mcp-19` and
   `docker pull alanogik/odoo-mcp-19` paths never existed.
+- `isort` now skips gitignored paths (`skip_gitignore = true`), matching black. A bare
+  `isort .` previously exited 1 by walking stale local virtualenvs.
+- `logger = logging.getLogger(__name__)` moved below the imports in `server.py` and
+  `utils.py`; it sat above them, which accounted for 13 of the 19 `E402` findings. The
+  deliberate "import `app.py` first" ordering is untouched.
 
 ### Fixed
 - **Documentation accuracy pass.** Three claims in the wiki and tool descriptions were wrong:
@@ -38,6 +97,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The CHANGELOG link block pointed at 10 release tags that were never pushed. Only
     v1.0.0, v1.6.0, v1.11.0, v1.14.0 and v1.15.0 exist; the dead links are gone and
     `[Unreleased]` now resolves.
+- **CLAUDE.md accuracy pass.** Three further claims did not survive a check against the code:
+  the `tests/live` warning named the wrong mechanism (collection imports those modules and
+  their `load_dotenv()` leaks real `.env` credentials into `os.environ`; no live tests are
+  collected at all); `isort .` was documented as clean when it exited 1; and "repo is
+  uv-managed: uv.lock + .venv" implied a lockfile that is gitignored and never covers the
+  documented `pip install git+…` path. Added the lint/typecheck baselines, the untested
+  `_RESOURCE_ROUTES` parity and ordering constraints, and the 15 000-char `read_resource`
+  truncation.
+- `test_credential_rotation_rebuilds_client` expired the client cache with `checked_at = 0.0`.
+  `checked_at` holds a `time.monotonic()` reading, which counts from boot, so `0.0` only reads
+  as "long ago" on a machine up longer than the 300s TTL — it passed on developer machines and
+  failed on every CI runner. Now offsets from the current reading. Production logic unchanged.
 
 ### Added
 - `tests/test_dependency_pins.py` — guards the FastMCP and MCP SDK majors from two angles:
@@ -591,7 +662,8 @@ This reduces cognitive load and keeps the tool interface minimal:
 
 <!-- Only versions with a published git tag are linked. Intermediate releases were
      cut without tags; their entries above remain the record for those versions. -->
-[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v1.15.0...HEAD
+[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v1.16.0...HEAD
+[1.16.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.16.0
 [1.15.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.15.0
 [1.14.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.14.0
 [1.11.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.11.0
