@@ -568,8 +568,7 @@ env `ODOO_*` credentials become optional (only the `env-admin` fallback uses the
 | `MCP_PORT` | No | `8080` | HTTP port |
 | `MCP_VERBOSE` | No | `true` | Slant-ASCII startup banner to stderr (version, transport, masked creds, safety mode, capability counts). `false` to silence |
 | `MCP_SAFETY_MODE` | No | `strict` | `permissive`, `strict`, or **`locked`** (v1.15.0). `locked` activates `MCP_READ_ONLY=true`, `MCP_WRITE_ALLOWLIST` enforcement, `MCP_HOST=127.0.0.1` default, and `MCP_VALIDATE_PAYLOADS=true`. |
-| `MCP_SAFETY_MODE` | No | `strict` | `permissive`, `strict`, or **`locked`** (v1.15.0). `locked` activates `MCP_READ_ONLY=true`, `MCP_WRITE_ALLOWLIST` enforcement, `MCP_HOST=127.0.0.1` default, and `MCP_VALIDATE_PAYLOADS=true`. |
-| `MCP_READ_ONLY` | No | derived from mode | `true` to globally reject all side-effect methods (`create`, `write`, `unlink`, `copy`, `name_create`, `load`, `action_*`, `button_*`, `_action_*`). Reads pass through. |
+| `MCP_READ_ONLY` | No | derived from mode | `true` to reject every method that is not a known read. Fail-closed: the gate is `method not in SAFE_METHODS`, so unrecognised methods (`message_post`, `toggle_active`, `convert_opportunity`, `create_from_urls`, …) are blocked rather than assumed safe. The 13 SAFE_METHODS (`search_read`, `read`, `fields_get`, …) pass through. |
 | `MCP_WRITE_ALLOWLIST` | No | empty | Comma-separated `model.method` (or `model.*`) entries permitted as side effects. Enforced under `locked` mode, or whenever set explicitly. |
 | `MCP_VALIDATE_PAYLOADS` | No | derived from mode | `true` to validate write payloads against live `fields_get` before issuing a confirmation token. Catches hallucinated fields and readonly writes. |
 | `MCP_SAFETY_AUDIT` | No | — | `true` to log safety audit to stderr |
