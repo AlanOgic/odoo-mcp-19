@@ -948,17 +948,6 @@ async def execute_workflow(
         Results from each step of the workflow
     """
     start_time = time.time()
-    # Get Odoo client directly (works in both sync and background task modes)
-    odoo = get_odoo_client()
-
-    try:
-        params = json.loads(params_json) if params_json else {}
-    except json.JSONDecodeError as e:
-        return ExecuteWorkflowResponse(
-            workflow=workflow,
-            success=False,
-            error=f"Invalid params_json: {e}",
-        )
 
     # Read-only kill-switch — workflows are by definition multi-step actions.
     profile = get_profile()
@@ -973,6 +962,18 @@ async def execute_workflow(
                 f"MCP_SAFETY_MODE away from 'locked' if MCP_READ_ONLY is "
                 f"not set explicitly)."
             ),
+        )
+
+    # Get Odoo client directly (works in both sync and background task modes)
+    odoo = get_odoo_client()
+
+    try:
+        params = json.loads(params_json) if params_json else {}
+    except json.JSONDecodeError as e:
+        return ExecuteWorkflowResponse(
+            workflow=workflow,
+            success=False,
+            error=f"Invalid params_json: {e}",
         )
 
     # --- Safety Classification for workflow ---

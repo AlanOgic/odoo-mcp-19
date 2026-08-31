@@ -125,6 +125,9 @@ def test_read_only_allows_batch_of_reads(monkeypatch):
     we get through it (either a response without 'read-only' or the Progress exception).
     """
     monkeypatch.setenv("MCP_READ_ONLY", "true")
+    # Stub the client: these paths run past the read-only guard, and a real
+    # get_odoo_client() would need ODOO_* config that CI deliberately omits.
+    monkeypatch.setattr("odoo_mcp.server.get_odoo_client", lambda: MagicMock())
     from odoo_mcp.server import batch_execute
 
     try:
@@ -163,6 +166,9 @@ def test_read_only_off_allows_workflow_to_proceed_to_validation(monkeypatch):
     """When read-only is off, the workflow guard does not fire. (We don't actually
     expect a successful run — just absence of the read-only error.)"""
     monkeypatch.delenv("MCP_READ_ONLY", raising=False)
+    # Stub the client: these paths run past the read-only guard, and a real
+    # get_odoo_client() would need ODOO_* config that CI deliberately omits.
+    monkeypatch.setattr("odoo_mcp.server.get_odoo_client", lambda: MagicMock())
     from odoo_mcp.server import execute_workflow
 
     response = asyncio.run(
