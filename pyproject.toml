@@ -79,3 +79,6 @@ target-version = ["py310"]
 [tool.isort]
 profile = "black"
 line_length = 120
+# Match black, which skips gitignored paths. Without this, a bare `isort .`
+# walks stale local virtualenvs (e.g. .venv_old/) and exits 1 on their contents.
+skip_gitignore = true

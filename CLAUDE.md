@@ -45,10 +45,9 @@ python tests/live/test_safety_live.py
 python tests/live/test_v1110_live.py
 
 # Format + lint + typecheck
-black . && isort src tests   # `isort .` exits 1: it walks the stale .venv_old/ (isort has no gitignore
-                             # awareness; black does, so `black .` is fine). Both are clean over src+tests.
-ruff check .                 # known baseline: 49 errors (27 E501, 19 E402, 3 F401) — see below
-mypy src/odoo_mcp            # known baseline: 75 errors, mostly [index]/[assignment] in resources.py + server.py
+black . && isort .   # both clean; isort has skip_gitignore=true so it skips venvs like black does
+ruff check .         # known baseline: 36 errors (27 E501, 6 E402, 3 F401) — see below
+mypy src/odoo_mcp    # known baseline: 75 errors, mostly [index]/[assignment] in resources.py + server.py
 
 # Docker
 docker build -t odoo-mcp-19 .
@@ -68,7 +67,7 @@ Note: live tests under `tests/live/` are **script-style runners**, not pytest mo
 
 Run `black . && isort .` before pushing — CI enforces formatting.
 
-**Lint and typecheck are not clean gates.** Baseline as of v1.15.0: `pytest --ignore=tests/live` → **243 passed**; `black --check .` and `isort --check-only src tests` → **clean**; `ruff check .` → **49 errors**; `mypy src/odoo_mcp` → **75 errors** (38 in `resources.py`, 24 in `server.py`, 10 in `utils.py`). Judge a change by *no new errors against that baseline*, not by a zero exit code. The 19 E402s are a red herring: they come from a statement sitting above the imports (`logger = logging.getLogger(__name__)` at `server.py:24`, the same shape in `utils.py`, `load_dotenv()` in the live scripts) — **not** from the deliberate "import `app.py` first" ordering. Do not reorder module imports to chase them.
+**Lint and typecheck are not clean gates.** Baseline as of v1.15.0: `pytest --ignore=tests/live` → **243 passed**; `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **36 errors** (27 E501, 6 E402, 3 F401); `mypy src/odoo_mcp` → **75 errors** (38 in `resources.py`, 24 in `server.py`, 10 in `utils.py`). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
 
 ## High-level architecture
 
