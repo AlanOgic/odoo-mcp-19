@@ -55,6 +55,7 @@ wiki/
 .claude/
 .superpowers/
 .omc/
+docs/superpowers/
 
 # uv lockfile (project uses pip + pyproject.toml)
 uv.lock
