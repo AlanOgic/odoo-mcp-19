@@ -560,6 +560,7 @@ env `ODOO_*` credentials become optional (only the `env-admin` fallback uses the
 | `ODOO_PASSWORD` | No | — | Password (fallback if no API key) |
 | `ODOO_TIMEOUT` | No | `30` | Request timeout in seconds |
 | `ODOO_VERIFY_SSL` | No | `true` | SSL certificate verification |
+| `ODOO_CONFIG_DIR` | No | — | Extra directory searched first for a `.env`, ahead of `./.env` then `~/.config/odoo/.env` |
 | `MCP_TRANSPORT` | No | `stdio` | Transport: `stdio` or `streamable-http` |
 | `MCP_API_KEY` | HTTP: this **or** `USERS_DB_PATH` | — | Static bearer token (single-user HTTP, or admin fallback in multi-user mode). HTTP server `sys.exit(1)` if neither is set |
 | `USERS_DB_PATH` | No | — | Path to the CLORAG registry (`users.db`) → enables [multi-user mode](#multi-user-mode) |

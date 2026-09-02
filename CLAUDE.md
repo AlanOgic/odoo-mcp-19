@@ -87,7 +87,11 @@ src/odoo_mcp/
 ├── resources.py       28 odoo:// resource handlers
 ├── prompts.py         12 generic guided prompts
 ├── skill_prompts.py   7 cyanview-* workflow prompts, bodies loaded from skills/*.md (frontmatter stripped)
-├── safety.py          Risk classification + token gate + role-based blocking
+├── safety.py          Risk classification + token gate + role-based blocking + read-only/
+│                      allowlist guards; `is_side_effect_method()` is the write predicate
+├── safety_profile.py  `ResolvedProfile` — folds MCP_SAFETY_MODE + MCP_READ_ONLY +
+│                      MCP_WRITE_ALLOWLIST + MCP_HOST + MCP_VALIDATE_PAYLOADS into one
+│                      posture with foot-gun warnings; backs `odoo://server-status`
 ├── odoo_client.py     v2 JSON-2 client (thread-safe singleton, sanitized errors, always-Bearer auth)
 │                      get_odoo_client() dispatches: per-user client if registry user, else env singleton
 ├── auth_verifier.py   DbTokenVerifier — sha256(token) lookup in registry; static MCP_API_KEY → env-admin identity
@@ -95,14 +99,13 @@ src/odoo_mcp/
 ├── user_clients.py    Per-user OdooClient cache (300s TTL, re-checks creds updated_at) + current_role()
 ├── token_crypto.py    Fernet/PBKDF2 decrypt of registry secrets — MUST match CLORAG token_encryption.py
 ├── skill_visibility.py  Middleware filtering cyanview-* prompts by the user_skills allowlist
-├── safety_profile.py  Resolves MCP_SAFETY_MODE + the four override env vars into a
-│                      frozen ResolvedProfile (read_only, write_allowlist, host,
-│                      validate_payloads, warnings). Read via get_profile()
-├── arg_mapping.py     Positional → named args for 30 ORM methods + record-bound `ids` fallback
+├── arg_mapping.py     Positional → named args for 30 ORM methods + record-bound `ids` fallback;
+│                      raises ValueError on any positional it has no JSON-2 name for
 ├── constants.py       Limits, regex validators, MODEL_STATE_MACHINES, default context
 ├── models.py          Pydantic response schemas (structured output)
-├── utils.py           Compact schema builder, error suggestions, /doc-bearer LRU cache,
-│                      get_fields_for_model() live fields_get cache (60s TTL, 100-entry LRU)
+├── utils.py           Compact schema builder, error suggestions, and two TTL+LRU caches:
+│                      `_DOC_CACHE` (/doc-bearer, 300s) and `_FIELDS_CACHE` (live fields_get via
+│                      `get_fields_for_model()`, 60s — shorter, it backs the locked-mode payload pre-flight)
 ├── skills/*.md        Packaged Cyanview skill bodies (copied from curated ~/.claude/skills/cyanview-*)
 └── module_knowledge.json   Special methods for 13 modules + the static `model_limitations` block
                             (loaded at startup, shipped as package data)
@@ -201,6 +204,7 @@ Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py
 | `ODOO_URL` / `ODOO_DB` / `ODOO_USERNAME` / `ODOO_API_KEY` | Yes (optional in multi-user mode) | — | Odoo connection (API key preferred over `ODOO_PASSWORD`). With `USERS_DB_PATH`, only the env-admin fallback uses these; per-user clients still need `ODOO_URL`/`ODOO_DB`. |
 | `ODOO_TIMEOUT` | No | `30` | Request timeout (seconds) |
 | `ODOO_VERIFY_SSL` | No | `true` | Set `false` to disable cert check (visible startup warning) |
+| `ODOO_CONFIG_DIR` | No | — | Extra directory searched **first** for a `.env`, ahead of `./.env` then `~/.config/odoo/.env` (`odoo_client.load_config`) |
 | `MCP_TRANSPORT` | No | `stdio` | Or `streamable-http` |
 | `MCP_API_KEY` | HTTP: this **or** `USERS_DB_PATH` | — | Static bearer token (single-user HTTP, or admin fallback in multi-user mode). HTTP `sys.exit(1)` if neither is set. |
 | `USERS_DB_PATH` | No | — | Path to the CLORAG registry (`users.db`) → enables multi-user mode |
@@ -281,12 +285,12 @@ Read `odoo://model-limitations` for the full live list (static + runtime-detecte
 ## Security hardening (v1.13.0 — keep this enforced)
 
 - **Input validation**: model `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$` (max 128); method `^[a-zA-Z_][a-zA-Z0-9_]*$` (max 64); URIs must be `odoo://`.
-- **Thread safety**: `OdooClient` is a singleton with double-checked locking. `_DOC_CACHE` (100-entry LRU) and `RUNTIME_MODEL_ISSUES` use `threading.Lock`.
+- **Thread safety**: `OdooClient` is a singleton with double-checked locking. `_DOC_CACHE` (100-entry LRU), `_FIELDS_CACHE` (100-entry LRU), and `RUNTIME_MODEL_ISSUES` each use their own `threading.Lock`.
 - **Error sanitization**: never include Odoo `debug` tracebacks in MCP responses.
 - **Docker**: non-root user (UID 1001); `run-docker.sh` uses `--env-file`; `docker-compose.yml` uses `${MCP_API_KEY:?required}`.
 - **Docker must not restate dependency constraints.** The Dockerfile installs a stub package to resolve `pyproject.toml`'s dependency set into its own cached layer, then installs the real source with `--no-deps`. A hand-copied list drifts silently — it had already lost the `fastmcp<4` ceiling and never listed `cryptography>=42`. `tests/test_dependency_pins.py::TestDockerfileUsesDeclaredDependencies` fails if a restated pin reappears.
 - **HTTP**: `sys.exit(1)` unless `MCP_API_KEY` or `USERS_DB_PATH` is set. Wizard auto-generates keys with `secrets.token_urlsafe(32)`. Multi-user token compare uses `hmac.compare_digest` (static key) / sha256 hash lookup (registry keys — plaintext keys are never stored).
-- **Resource limits**: `MCP_DEFAULT_CONTEXT` ≤ 4KB; `MCP_BOOTSTRAP_MODELS` ≤ 20 models; `_DOC_CACHE` ≤ 100 entries.
+- **Resource limits**: `MCP_DEFAULT_CONTEXT` ≤ 4KB; `MCP_BOOTSTRAP_MODELS` ≤ 20 models; `_DOC_CACHE` and `_FIELDS_CACHE` ≤ 100 entries each.
 - **Gitignored**: `.env`, `.env.local`, `.mcp.json`, `odoo_config.json`.
 
 ## Release process
