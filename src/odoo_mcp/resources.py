@@ -1,7 +1,7 @@
 """
 MCP Resource handlers for the Odoo MCP Server.
 
-All 27 @mcp.resource decorated functions. Importing this module
+All 28 @mcp.resource decorated functions. Importing this module
 registers all resources with the FastMCP instance.
 """
 
