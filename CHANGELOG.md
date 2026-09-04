@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Positional arguments past the first were silently dropped** (`arg_mapping.py`).
+  `convert_args_to_v2` iterated the `V2_ARG_MAPPING` table rather than the supplied
+  args, so any positional at a position the table did not list was discarded without
+  error. The call still succeeded and returned plausible — but wrong — data.
+  Verified against `odoo/odoo` @ 19.0 (`odoo/orm/models.py`,
+  `addons/web/models/models.py`), the mappings are now complete:
+  - `search` gained `offset`/`limit`/`order`; `search_count` gained `limit`.
+    `search([], 0, 3)` returned 100 records instead of 3.
+  - `search_read` gained `fields`/`offset`/`limit`/`order`; `read` gained `fields`/`load`.
+    A single-field `read` of one `res.users` record returned every field —
+    334,723 characters, enough to blow an MCP client's output cap.
+  - `name_search` gained `domain`/`operator`/`limit`. This was the dangerous one:
+    a dropped domain widened the search, so `name_search('a', [['id','=',-1]])`
+    returned ~100 partners where the domain admits none.
+  - `copy` gained `default`, so a duplicate no longer silently ignores the caller's
+    field overrides.
+  - `read_group` and `formatted_read_group` gained their full parameter lists;
+    `fields_get`, `check_access_rights` and `load` gained their second parameters.
+- **`default_get` was broken outright** — the table mapped position 0 to `fields_list`,
+  but the parameter is `fields` (the docstring is stale). Every call failed with
+  `missing a required argument: 'fields'` (422).
+- **`read_group(orderby=...)` was renamed to `order` by `V2_KWARGS_MAPPING`**, a
+  parameter that method does not accept. `read_group` is now exempt from the rename;
+  the search family still gets it.
+
+### Changed
+- `convert_args_to_v2` now raises `ValueError` when a positional argument has no
+  JSON-2 parameter name, instead of dropping it. The message names the method, the
+  offending position and the method's known parameters, and points at `kwargs_json`.
+  This converts the whole class of bug above from a silent wrong answer into a loud
+  failure, and makes the next method added to the table fail closed. The generic
+  record-bound `ids` fallback is unaffected.
+
 ## [1.16.0] - 2026-08-31
 
 ### Added

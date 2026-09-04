@@ -1,0 +1,391 @@
+<!DOCTYPE html><html lang="en"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>odoo-mcp-19 | Industrial Safety MCP Server</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@7..96,75..125,200..800&amp;family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            paper: '#E8E4DA',
+            'paper-2': '#DDD8CB',
+            ink: '#16150F',
+            'ink-soft': '#4A4638',
+            steel: '#8A8474',
+            signal: '#FF4A17',
+            caution: '#D9F03C',
+            verify: '#1F6F4A',
+          },
+          fontFamily: {
+            display: ['"Bricolage Grotesque"', 'sans-serif'],
+            mono: ['"IBM Plex Mono"', 'monospace'],
+          },
+          spacing: {
+            'safe': '4rem',
+          },
+          boxShadow: {
+            'hard': '4px 4px 0 0 #16150F',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * {
+      border-radius: 0 !important;
+      cursor: crosshair;
+    }
+    body {
+      background-color: #E8E4DA;
+      color: #16150F;
+      -webkit-font-smoothing: antialiased;
+    }
+    .grid-bg {
+      background-image: 
+        linear-gradient(to right, rgba(138, 132, 116, 0.12) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(138, 132, 116, 0.12) 1px, transparent 1px);
+      background-size: 8.333333% 40px;
+    }
+    .hazard-stripes {
+      background: repeating-linear-gradient(
+        45deg,
+        #16150F,
+        #16150F 10px,
+        #D9F03C 10px,
+        #D9F03C 20px
+      );
+    }
+    .pressable:hover {
+      transform: translate(4px, 4px);
+      box-shadow: none !important;
+    }
+    .pressable {
+      transition: all 80ms steps(2);
+    }
+    .scroll-reveal {
+      opacity: 0;
+      transform: translateY(8px);
+      animation: reveal 120ms forwards ease-out;
+    }
+    @keyframes reveal {
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    .tabular { font-variant-numeric: tabular-nums; }
+    .ticket-punched {
+      position: relative;
+      border: 1px dashed #16150F;
+    }
+    .ticket-punched::before, .ticket-punched::after {
+      content: '';
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      background: #E8E4DA;
+      border: 1px solid #16150F;
+      border-radius: 50% !important;
+      top: 50%;
+      margin-top: -10px;
+      z-index: 10;
+    }
+    .ticket-punched::before { left: -11px; }
+    .ticket-punched::after { right: -11px; }
+  </style>
+</head>
+<body>
+  <div class="min-h-screen grid-bg selection:bg-caution selection:text-ink font-mono" data-sd-id="1">
+    <!-- 01 MASTHEAD -->
+    <header class="border-b-2 border-ink pt-12 pb-20 px-6 lg:px-12 max-w-[1440px] mx-auto" data-sd-id="2">
+      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-12" data-sd-id="3">
+        <div class="flex-1" data-sd-id="4">
+          <p class="text-xs uppercase tracking-[0.12em] mb-4 text-steel" data-sd-id="5">01 — PROJECT_NAME</p>
+          <h1 class="font-display font-extrabold text-7xl md:text-9xl leading-[0.85] tracking-[-0.03em] uppercase" data-sd-id="6">
+            odoo-<br>mcp-19
+          </h1>
+        </div>
+        <div class="w-full lg:w-[450px] border-2 border-ink bg-paper p-6 shadow-hard scroll-reveal" data-sd-id="7">
+          <div class="flex justify-between border-b border-ink pb-2 mb-4" data-sd-id="8">
+            <span class="text-[10px] uppercase tracking-widest text-steel font-bold italic" data-sd-id="9">SPEC_PLATE_V.2025</span>
+            <span class="text-[10px] uppercase tracking-widest text-steel font-bold" data-sd-id="10">AUTH: ALANOGIC</span>
+          </div>
+          <table class="w-full text-xs" data-sd-id="11">
+            <tbody data-sd-id="12"><tr class="border-b border-steel/30" data-sd-id="13"><td class="py-1 text-steel" data-sd-id="14">MCP REVISION</td><td class="py-1 text-right tabular" data-sd-id="15">2025-11-25</td></tr>
+            <tr class="border-b border-steel/30" data-sd-id="16"><td class="py-1 text-steel" data-sd-id="17">FAST_MCP</td><td class="py-1 text-right tabular" data-sd-id="18">&gt;=3.4.6, &lt;4</td></tr>
+            <tr class="border-b border-steel/30" data-sd-id="19"><td class="py-1 text-steel" data-sd-id="20">PYTHON</td><td class="py-1 text-right tabular" data-sd-id="21">3.10+</td></tr>
+            <tr class="border-b border-steel/30" data-sd-id="22"><td class="py-1 text-steel" data-sd-id="23">API_VERSION</td><td class="py-1 text-right tabular" data-sd-id="24">v2 JSON-2</td></tr>
+            <tr data-sd-id="25"><td class="py-1 text-steel" data-sd-id="26">TRANSPORT</td><td class="py-1 text-right tabular" data-sd-id="27">STDIO + HTTP</td></tr>
+          </tbody></table>
+        </div>
+      </div>
+      
+      <div class="mt-16 max-w-2xl" data-sd-id="28">
+        <p class="text-xl md:text-2xl leading-relaxed text-ink mb-8" data-sd-id="29">
+          Ask Claude to read and write your Odoo 19 data in plain language — and stop it from doing the dangerous parts by accident.
+        </p>
+        <div class="bg-ink text-paper p-4 overflow-x-auto border-t-4 border-signal" data-sd-id="30">
+          <code class="text-sm">$ pip install git+https://github.com/AlanOgic/odoo-mcp-19.git</code>
+        </div>
+      </div>
+    </header>
+
+    <!-- 02 PREMISE -->
+    <section class="border-b border-ink px-6 lg:px-12 py-24 max-w-[1440px] mx-auto" data-sd-id="31">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-12" data-sd-id="32">
+        <div class="lg:col-span-4" data-sd-id="33">
+          <p class="text-xs uppercase tracking-[0.12em] text-steel mb-8" data-sd-id="34">02 — PREMISE</p>
+          <h2 class="font-display text-5xl leading-none tracking-tight uppercase mb-6" data-sd-id="35">It reads the schema first, then queries.</h2>
+          <p class="text-ink-soft" data-sd-id="36">Standard MCP servers guess field names, wasting API calls and triggering security errors. We fetch metadata before the first byte of data moves.</p>
+        </div>
+        <div class="lg:col-span-8" data-sd-id="37">
+          <div class="border border-ink bg-paper-2 p-6" data-sd-id="38">
+            <div class="flex gap-2 mb-4" data-sd-id="39">
+              <div class="w-3 h-3 border border-ink bg-signal" data-sd-id="40"></div>
+              <div class="w-3 h-3 border border-ink" data-sd-id="41"></div>
+              <div class="w-3 h-3 border border-ink" data-sd-id="42"></div>
+            </div>
+            <pre class="text-sm overflow-x-auto" data-sd-id="43"><span class="text-steel" data-sd-id="44"># Step 1: Resource Discovery</span>
+read_resource(<span class="text-signal" data-sd-id="45">"odoo://model/sale.order/quick-schema"</span>)
+
+<span class="text-steel" data-sd-id="46"># Step 2: Validated Execution</span>
+execute_method(<span class="text-signal" data-sd-id="47">"sale.order"</span>, <span class="text-signal" data-sd-id="48">"search_read"</span>, 
+  kwargs_json='{"domain": [["state","=","sale"]], "fields": ["name","amount_total"], "limit": 10}')</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 03 THE SAFETY LAYER -->
+    <section class="border-b border-ink px-6 lg:px-12 py-24 max-w-[1440px] mx-auto" data-sd-id="49">
+      <p class="text-xs uppercase tracking-[0.12em] text-steel mb-8" data-sd-id="50">03 — THE_SAFETY_LAYER</p>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-20" data-sd-id="51">
+        <div class="scroll-reveal" data-sd-id="52">
+          <h3 class="text-xs uppercase font-bold tracking-widest mb-4" data-sd-id="53">CLASSIFICATION_MATRIX</h3>
+          <table class="w-full border-2 border-ink" data-sd-id="54">
+            <thead data-sd-id="55">
+              <tr class="bg-ink text-paper text-xs uppercase tracking-widest" data-sd-id="56">
+                <th class="p-3 text-left border-r border-paper/20" data-sd-id="57">LEVEL</th>
+                <th class="p-3 text-left" data-sd-id="58">PROTOCOL</th>
+              </tr>
+            </thead>
+            <tbody class="text-sm" data-sd-id="59">
+              <tr class="border-b border-ink" data-sd-id="60">
+                <td class="p-4 border-r border-ink bg-verify text-paper font-bold" data-sd-id="61">SAFE</td>
+                <td class="p-4" data-sd-id="62">Execute immediately. Read-only operations and non-destructive methods.</td>
+              </tr>
+              <tr class="border-b border-ink" data-sd-id="63">
+                <td class="p-4 border-r border-ink bg-steel text-paper font-bold" data-sd-id="64">MEDIUM</td>
+                <td class="p-4" data-sd-id="65">Confirm in strict mode. Operations with potential minor side-effects.</td>
+              </tr>
+              <tr class="border-b border-ink" data-sd-id="66">
+                <td class="p-4 border-r border-ink bg-signal text-paper font-bold" data-sd-id="67">HIGH</td>
+                <td class="p-4" data-sd-id="68">ALWAYS confirm. Financial records, inventory moves, status transitions.</td>
+              </tr>
+              <tr class="bg-ink text-paper" data-sd-id="69">
+                <td class="p-4 border-r border-paper/20 hazard-stripes text-ink font-bold" data-sd-id="70">BLOCKED</td>
+                <td class="p-4 uppercase tracking-tighter" data-sd-id="71">Security-critical models. Always refuse outright.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="flex flex-col justify-center items-center" data-sd-id="72">
+          <div class="w-full max-w-md" data-sd-id="73">
+            <div class="ticket-punched bg-paper p-8 mb-0 border-b-0" data-sd-id="74">
+               <p class="text-[10px] text-steel mb-2" data-sd-id="75">GATED_CALL_RESPONSE</p>
+               <code class="text-xs block bg-paper-2 p-3 border border-ink/20">
+                 {
+                   "pending_confirmation": true,
+                   "reason": "HIGH_RISK_OP",
+                   "requires": "confirmation_token"
+                 }
+               </code>
+            </div>
+            <div class="ticket-punched bg-caution p-8 border-t-0 shadow-hard" data-sd-id="76">
+               <p class="text-[10px] text-ink mb-2" data-sd-id="77">CONFIRMATION_EXCHANGE</p>
+               <div class="text-center py-4 border-2 border-ink border-dashed" data-sd-id="78">
+                 <span class="text-lg font-bold tracking-[0.3em] uppercase tabular" data-sd-id="79">ymzyOtsZTDTJpKKysu_xWQ</span>
+               </div>
+               <p class="text-[10px] text-ink-soft mt-6 leading-tight italic" data-sd-id="80">
+                 * Single-use, 120s TTL, bound to (model, method, payload_digest). 
+                 Confirmed=true alone DOES NOT bypass this gate.
+               </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 04 REFUSED OUTRIGHT -->
+    <section class="hazard-stripes py-16 px-6 lg:px-12 relative overflow-hidden border-y-2 border-ink" data-sd-id="81">
+      <div class="max-w-[1440px] mx-auto flex flex-col md:flex-row items-center gap-12" data-sd-id="82">
+        <div class="bg-paper border-4 border-ink p-8 transform -rotate-2 shadow-hard flex-1" data-sd-id="83">
+          <p class="text-xs font-bold uppercase tracking-widest text-signal mb-4" data-sd-id="84">04 — REFUSED_OUTRIGHT</p>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs font-bold" data-sd-id="85">
+            <span class="hover:text-signal cursor-default" data-sd-id="86">ir.rule</span>
+            <span class="hover:text-signal cursor-default" data-sd-id="87">ir.model.access</span>
+            <span class="hover:text-signal cursor-default" data-sd-id="88">ir.module.module</span>
+            <span class="hover:text-signal cursor-default" data-sd-id="89">ir.config_parameter</span>
+            <span class="hover:text-signal cursor-default" data-sd-id="90">ir.model</span>
+            <span class="hover:text-signal cursor-default" data-sd-id="91">res.users</span>
+            <span class="hover:text-signal cursor-default" data-sd-id="92">res.groups</span>
+            <span class="hover:text-signal cursor-default" data-sd-id="93">res.users.apikeys</span>
+          </div>
+        </div>
+        <div class="hidden lg:block" data-sd-id="94">
+          <div class="border-[6px] border-signal text-signal px-8 py-4 font-display font-black text-6xl uppercase tracking-tighter transform rotate-[-8deg] opacity-80" data-sd-id="95">
+            BLOCKED
+          </div>
+        </div>
+        <div class="bg-paper border-2 border-ink p-6 max-w-xs scroll-reveal" data-sd-id="96">
+          <p class="text-[10px] uppercase font-bold text-steel mb-2" data-sd-id="97">SENSITIVE_CONFIRMATION</p>
+          <p class="text-xs leading-tight" data-sd-id="98">Models requiring explicit confirmation: account.move, account.payment, account.bank.statement, hr.payslip, ir.cron, ir.model.fields.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 05 SURFACE -->
+    <section class="px-6 lg:px-12 py-32 max-w-[1440px] mx-auto border-b border-ink" data-sd-id="99">
+      <p class="text-xs uppercase tracking-[0.12em] text-steel mb-12" data-sd-id="100">05 — SERVER_SURFACE</p>
+      <div class="flex flex-col lg:flex-row justify-between items-baseline gap-12 border-b border-steel/20 pb-16" data-sd-id="101">
+        <div class="flex flex-col" data-sd-id="102">
+          <span class="font-display text-9xl tracking-tighter tabular" data-sd-id="103">05</span>
+          <span class="text-xs uppercase tracking-widest font-bold" data-sd-id="104">Tools</span>
+          <p class="text-[10px] text-steel mt-2 max-w-[160px]" data-sd-id="105">execute_method, batch_execute, execute_workflow, configure_odoo, read_resource</p>
+        </div>
+        <div class="flex flex-col" data-sd-id="106">
+          <span class="font-display text-9xl tracking-tighter tabular" data-sd-id="107">28</span>
+          <span class="text-xs uppercase tracking-widest font-bold" data-sd-id="108">Resources</span>
+          <p class="text-[10px] text-steel mt-2 max-w-[160px]" data-sd-id="109">Dynamic schema endpoints and model metadata trees</p>
+        </div>
+        <div class="flex flex-col" data-sd-id="110">
+          <span class="font-display text-9xl tracking-tighter tabular" data-sd-id="111">19</span>
+          <span class="text-xs uppercase tracking-widest font-bold" data-sd-id="112">Prompts</span>
+          <p class="text-[10px] text-steel mt-2 max-w-[160px]" data-sd-id="113">Pre-flight system instructions for ERP context awareness</p>
+        </div>
+      </div>
+      <div class="mt-8 flex justify-end" data-sd-id="114">
+         <p class="text-xs text-ink-soft max-w-md text-right" data-sd-id="115">
+           Discovery is handled via <strong>Resources</strong>; <br>
+           State changes are handled exclusively via <strong>Tools</strong>.
+         </p>
+      </div>
+    </section>
+
+    <!-- 06 LOCKED MODE -->
+    <section class="px-6 lg:px-12 py-24 max-w-[1440px] mx-auto border-b border-ink" data-sd-id="116">
+      <div class="flex items-center gap-4 mb-12" data-sd-id="117">
+        <p class="text-xs uppercase tracking-[0.12em] text-steel" data-sd-id="118">06 — LOCKED_MODE</p>
+        <div class="flex-1 h-px bg-steel/20" data-sd-id="119"></div>
+        <code class="bg-ink text-caution px-3 py-1 text-xs">MCP_SAFETY_MODE=locked</code>
+      </div>
+      
+      <div class="overflow-x-auto" data-sd-id="120">
+        <table class="w-full border border-ink text-sm" data-sd-id="121">
+          <thead class="bg-paper-2" data-sd-id="122">
+            <tr class="text-left" data-sd-id="123">
+              <th class="p-4 border-r border-ink uppercase tracking-widest text-[10px]" data-sd-id="124">PROTECTION_LAYER</th>
+              <th class="p-4 border-r border-ink uppercase tracking-widest text-[10px]" data-sd-id="125">ENVIRONMENT_OVERRIDE</th>
+              <th class="p-4 uppercase tracking-widest text-[10px]" data-sd-id="126">STATUS</th>
+            </tr>
+          </thead>
+          <tbody data-sd-id="127">
+            <tr class="border-t border-ink" data-sd-id="128">
+              <td class="p-4 border-r border-ink" data-sd-id="129">Global write kill-switch</td>
+              <td class="p-4 border-r border-ink" data-sd-id="130"><code class="text-xs text-signal">MCP_READ_ONLY=false</code></td>
+              <td class="p-4 font-bold text-verify" data-sd-id="131">ACTIVE</td>
+            </tr>
+            <tr class="border-t border-ink" data-sd-id="132">
+              <td class="p-4 border-r border-ink" data-sd-id="133">Side-effect allowlist (explicit methods)</td>
+              <td class="p-4 border-r border-ink" data-sd-id="134"><code class="text-xs text-signal">MCP_WRITE_ALLOWLIST</code></td>
+              <td class="p-4 font-bold text-verify" data-sd-id="135">ENFORCED</td>
+            </tr>
+            <tr class="border-t border-ink" data-sd-id="136">
+              <td class="p-4 border-r border-ink" data-sd-id="137">HTTP loopback bind (127.0.0.1 only)</td>
+              <td class="p-4 border-r border-ink" data-sd-id="138"><code class="text-xs text-signal">MCP_HOST</code></td>
+              <td class="p-4 font-bold text-verify" data-sd-id="139">LOCKED</td>
+            </tr>
+            <tr class="border-t border-ink" data-sd-id="140">
+              <td class="p-4 border-r border-ink" data-sd-id="141">Live fields_get payload pre-flight</td>
+              <td class="p-4 border-r border-ink" data-sd-id="142"><code class="text-xs text-signal">MCP_VALIDATE_PAYLOADS=false</code></td>
+              <td class="p-4 font-bold text-verify" data-sd-id="143">ACTIVE</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 07 DEPLOYMENT -->
+    <section class="max-w-[1440px] mx-auto grid grid-cols-1 lg:grid-cols-2" data-sd-id="144">
+      <div class="p-12 border-b lg:border-b-0 lg:border-r border-ink" data-sd-id="145">
+        <p class="text-xs uppercase tracking-[0.12em] text-steel mb-8" data-sd-id="146">07A — SINGLE_USER</p>
+        <h4 class="text-2xl font-display mb-6 uppercase" data-sd-id="147">STDIO / STATIC HTTP</h4>
+        <ul class="space-y-4 text-sm" data-sd-id="148">
+          <li class="flex gap-3" data-sd-id="149"><iconify-icon icon="lucide:check-circle" class="text-verify mt-1"></iconify-icon> Single static MCP_API_KEY</li>
+          <li class="flex gap-3" data-sd-id="150"><iconify-icon icon="lucide:check-circle" class="text-verify mt-1"></iconify-icon> Runs as a local service or sidecar</li>
+          <li class="flex gap-3" data-sd-id="151"><iconify-icon icon="lucide:check-circle" class="text-verify mt-1"></iconify-icon> Hard-coded Odoo credentials</li>
+        </ul>
+      </div>
+      <div class="p-12 border-b border-ink" data-sd-id="152">
+        <p class="text-xs uppercase tracking-[0.12em] text-steel mb-8" data-sd-id="153">07B — MULTI_USER</p>
+        <h4 class="text-2xl font-display mb-6 uppercase" data-sd-id="154">REGISTRY / BEARER</h4>
+        <ul class="space-y-4 text-sm" data-sd-id="155">
+          <li class="flex gap-3" data-sd-id="156"><iconify-icon icon="lucide:check-circle" class="text-verify mt-1"></iconify-icon> Per-user bearer keys</li>
+          <li class="flex gap-3" data-sd-id="157"><iconify-icon icon="lucide:check-circle" class="text-verify mt-1"></iconify-icon> Writes attributed to real persons</li>
+          <li class="flex gap-3" data-sd-id="158"><iconify-icon icon="lucide:check-circle" class="text-verify mt-1"></iconify-icon> Granular per-user tool visibility</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 08 INSTALL + FOOTER -->
+    <footer class="bg-ink text-paper py-24 px-6 lg:px-12" data-sd-id="159">
+      <div class="max-w-[1440px] mx-auto" data-sd-id="160">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 mb-20" data-sd-id="161">
+          <div class="lg:col-span-8" data-sd-id="162">
+            <p class="text-xs uppercase tracking-[0.12em] text-steel mb-8" data-sd-id="163">08 — INSTALLATION_PROTOCOLS</p>
+            <div class="space-y-8" data-sd-id="164">
+              <div data-sd-id="165">
+                <p class="text-[10px] text-steel mb-2 uppercase" data-sd-id="166">PIPELINE_DOCKER</p>
+                <div class="bg-paper/5 p-4 border border-paper/10 pressable shadow-[4px_4px_0_0_#E8E4DA]" data-sd-id="167">
+                  <code class="text-sm text-paper">docker build -t odoo-mcp-19 . &amp;&amp; docker compose up -d</code>
+                </div>
+              </div>
+              <div data-sd-id="168">
+                <p class="text-[10px] text-steel mb-2 uppercase" data-sd-id="169">PIPELINE_PIP</p>
+                <div class="bg-paper/5 p-4 border border-paper/10 pressable shadow-[4px_4px_0_0_#E8E4DA]" data-sd-id="170">
+                  <code class="text-sm text-paper">pip install git+https://github.com/AlanOgic/odoo-mcp-19.git</code>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="lg:col-span-4 flex flex-col justify-end items-end" data-sd-id="171">
+            <a href="#" id="nav-github" class="group flex items-center gap-4 text-paper hover:text-signal transition-colors mb-4" data-sd-id="172">
+              <span class="text-xs uppercase tracking-widest" data-sd-id="173">SOURCE_REPO</span>
+              <iconify-icon icon="lucide:github" class="text-3xl"></iconify-icon>
+            </a>
+            <p class="text-[10px] text-steel uppercase tracking-widest" data-sd-id="174">LICENSE: MIT</p>
+          </div>
+        </div>
+
+        <div class="border-t border-paper/10 pt-12 flex flex-col md:flex-row justify-between gap-8 items-end" data-sd-id="175">
+          <div data-sd-id="176">
+            <h2 class="font-display text-4xl leading-none uppercase tracking-tighter mb-2" data-sd-id="177">odoo-mcp-19</h2>
+            <p class="text-[10px] text-steel uppercase tracking-widest" data-sd-id="178">SYSTEM_ID: ERP-SAFETY-GATEWAY-V19</p>
+          </div>
+          <div class="flex gap-8 text-[10px] uppercase tracking-[0.2em] font-bold" data-sd-id="179">
+             <a href="#" id="foot-docs" class="hover:text-signal" data-sd-id="180">DOCUMENTATION</a>
+             <a href="#" id="foot-security" class="hover:text-signal" data-sd-id="181">SECURITY_ADVISORY</a>
+             <a href="#" id="foot-contact" class="hover:text-signal" data-sd-id="182">REPORT_INCIDENT</a>
+          </div>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+</body></html>

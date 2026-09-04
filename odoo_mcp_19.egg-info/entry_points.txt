@@ -1,0 +1,2 @@
+[console_scripts]
+odoo-mcp-19 = odoo_mcp.__main__:main

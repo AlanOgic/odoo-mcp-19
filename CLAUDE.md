@@ -43,11 +43,17 @@ uv run pytest tests/test_safety.py::TestClassifyOperation::test_safe_methods_are
 # Tests — live (requires .env with real Odoo creds; script-style runners)
 python tests/live/test_safety_live.py
 python tests/live/test_v1110_live.py
+python tests/live/test_locked_mode_live.py
 
 # Format + lint + typecheck
 black . && isort .   # both clean; isort has skip_gitignore=true so it skips venvs like black does
-ruff check .         # known baseline: 36 errors (27 E501, 6 E402, 3 F401) — see below
+ruff check .         # known baseline: 33 errors (27 E501, 6 E402) — see below
 mypy src/odoo_mcp    # known baseline: 75 errors, mostly [index]/[assignment] in resources.py + server.py
+
+# If `uv run pytest` reports ModuleNotFoundError: No module named 'odoo_mcp' (17 collection
+# errors), the dev extras are not installed — run `uv sync --extra dev` first. uv also ignores a
+# VIRTUAL_ENV pointing anywhere other than ./.venv (it warns and uses .venv regardless), so an
+# activated sibling venv silently gives you a system pytest/ruff/mypy or none at all.
 
 # Docker
 docker build -t odoo-mcp-19 .
@@ -58,7 +64,7 @@ docker compose -f docker-compose.yml -f docker-compose.multiuser.yml up -d
 
 Note: live tests under `tests/live/` are **script-style runners**, not pytest modules — invoke them directly with `python`. They mutate environment state.
 
-- **Unit (no Odoo)**: everything in `tests/` except `tests/live/` — run with `pytest --ignore=tests/live`. Highlights: `test_resources.py` patches `get_odoo_client` with a stub (pins resource-layer validation/error handling); `test_arg_mapping.py` pins the positional → JSON-2 named-arg contract; `test_odoo_client.py` pins bearer auth + no `result`-envelope unwrap; `test_token_gate.py` / `test_safety.py` / `test_safety_role.py` cover the gate and role-based classification; the multi-user tests (`test_auth_verifier.py`, `test_token_crypto.py`, `test_user_clients.py`, `test_skill_visibility.py`, `test_skill_prompts.py`) use the `users_db_seed` fixture in `tests/conftest.py`, which builds a temp registry with the **exact CLORAG DDL and crypto contract** — keep that fixture contract-true.
+- **Unit (no Odoo)**: everything in `tests/` except `tests/live/` — run with `pytest --ignore=tests/live`. Highlights: `test_resources.py` patches `get_odoo_client` with a stub (pins resource-layer validation/error handling); `test_arg_mapping.py` pins the positional → JSON-2 named-arg contract; `test_odoo_client.py` pins bearer auth + no `result`-envelope unwrap; `test_token_gate.py` / `test_safety.py` / `test_safety_role.py` cover the gate and role-based classification; the multi-user tests (`test_auth_verifier.py`, `test_token_crypto.py`, `test_user_clients.py`, `test_skill_visibility.py`, `test_skill_prompts.py`) use the `users_db_seed` fixture in `tests/conftest.py`, which builds a temp registry with the **exact CLORAG DDL and crypto contract** — keep that fixture contract-true. Locked mode (v1.16.0) is pinned by `test_safety_profile.py` (env → profile resolution), `test_read_only_guard.py`, `test_write_allowlist.py`, `test_payload_validation.py`, `test_side_effect_predicate.py`, `test_fields_cache.py`, `test_main_bind_default.py`, and `test_server_status_resource.py`.
 - **Live (need `.env`)**: anything under `tests/live/` — run with `python <file>`, not pytest.
 
 **CI**: two workflows in `.github/workflows/`:
@@ -67,7 +73,7 @@ Note: live tests under `tests/live/` are **script-style runners**, not pytest mo
 
 Run `black . && isort .` before pushing — CI enforces formatting.
 
-**Lint and typecheck are not clean gates.** Baseline as of v1.16.0: `pytest --ignore=tests/live` → **358 passed**; `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **33 errors** (27 E501, 6 E402); `mypy src/odoo_mcp` → **76 errors** (38 in `resources.py`, 24 in `server.py`, 11 in `utils.py`). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
+**Lint and typecheck are not clean gates.** Baseline as of v1.16.0: `pytest --ignore=tests/live` → **382 passed**; `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **33 errors** (27 E501, 6 E402); `mypy src/odoo_mcp` → **75 errors** (38 `resources.py`, 24 `server.py`, 10 `utils.py`, 1 each in `prompts.py` / `constants.py` / `user_clients.py`; counts drift slightly with the mypy version — 2.1.0 here). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
 
 ## High-level architecture
 
@@ -89,10 +95,14 @@ src/odoo_mcp/
 ├── user_clients.py    Per-user OdooClient cache (300s TTL, re-checks creds updated_at) + current_role()
 ├── token_crypto.py    Fernet/PBKDF2 decrypt of registry secrets — MUST match CLORAG token_encryption.py
 ├── skill_visibility.py  Middleware filtering cyanview-* prompts by the user_skills allowlist
+├── safety_profile.py  Resolves MCP_SAFETY_MODE + the four override env vars into a
+│                      frozen ResolvedProfile (read_only, write_allowlist, host,
+│                      validate_payloads, warnings). Read via get_profile()
 ├── arg_mapping.py     Positional → named args for 30 ORM methods + record-bound `ids` fallback
 ├── constants.py       Limits, regex validators, MODEL_STATE_MACHINES, default context
 ├── models.py          Pydantic response schemas (structured output)
-├── utils.py           Compact schema builder, error suggestions, /doc-bearer LRU cache
+├── utils.py           Compact schema builder, error suggestions, /doc-bearer LRU cache,
+│                      get_fields_for_model() live fields_get cache (60s TTL, 100-entry LRU)
 ├── skills/*.md        Packaged Cyanview skill bodies (copied from curated ~/.claude/skills/cyanview-*)
 └── module_knowledge.json   Special methods for 13 modules + the static `model_limitations` block
                             (loaded at startup, shipped as package data)
@@ -172,6 +182,13 @@ execute_method("sale.order", "action_confirm", args_json='[[15]]',
 | Live `fields_get` payload pre-flight | on | `MCP_VALIDATE_PAYLOADS=false` |
 
 Each protection is independently overridable. Read `odoo://server-status` to see the resolved profile at runtime, including any foot-gun warnings.
+
+Three helpers are the single sources of truth — reuse them rather than re-deriving the rules:
+- `safety_profile.resolve(env)` / `get_profile()` → the frozen `ResolvedProfile`. The umbrella mode picks defaults; each of the four env vars overrides its own field. Unparseable booleans and malformed allowlist entries are warned about and dropped, never fatal.
+- `safety.is_side_effect_method(method)` → **fail-closed** `method not in SAFE_METHODS`. Shared by the read-only guard, the allowlist check, and the payload pre-flight. Do not add a name-shape heuristic (`write`/`action_*`/`button_*`) beside it — Odoo write methods like `message_post`, `toggle_active`, `convert_opportunity` and `create_from_urls` match no such shape, which is exactly why the predicate is a set complement.
+- `safety.validate_payload_against_schema(...)` → live `fields_get` pre-flight (via `utils.get_fields_for_model`, 60s TTL) run *before* a confirmation token is issued, so a typo'd field name fails without burning a gate round-trip.
+
+`locked` inherits `strict`'s classifier semantics (`safety._STRICT_EQUIV`) and adds its gates on top — it is not a separate classification path.
 
 **Allowlist syntax**: `MCP_WRITE_ALLOWLIST="sale.order.action_confirm,res.partner.message_post,product.product.*"`. The wildcard matches any method on the named model. There is no `*.method` form (too easy to over-grant).
 
@@ -292,6 +309,7 @@ Release commit convention: `chore(release): X.Y.Z — <summary>`.
 - The registry schema (`users_db.py` docstring) and crypto parameters (`token_crypto.py`, 480k PBKDF2 iterations) are **contracts owned by CLORAG** (the registry-managing app, separate repo at `~/dev/clorag` — schema source `core/user_db.py`, crypto source `utils/token_encryption.py`) — changes must happen there first; this repo only mirrors them. `tests/conftest.py` re-implements both contracts to seed test registries; keep it in sync.
 - `skills/*.md` are copies of the curated `~/.claude/skills/cyanview-*` sources with frontmatter intact (stripped at load by `skill_prompts.load_skill`). When updating a skill, update the source and re-copy.
 - `arg_mapping.py` is mandatory — v2 API rejects positional args. Adding a new ORM method = entry in `arg_mapping`. **Record-bound methods take their recordset in the JSON-2 body `ids` key**: all `action_*`/`button_*` entries map position 0 → `"ids"` (so does `copy`), and `convert_args_to_v2` has a generic fallback that routes a leading list-of-ints to `ids` for unmapped record-bound methods (e.g. `action_set_won`) instead of dropping it. `tests/test_arg_mapping.py` pins this contract.
+- **Every positional parameter a method accepts must appear in its `V2_ARG_MAPPING` entry.** `convert_args_to_v2` iterates the supplied args, not the table, and raises `ValueError` on a positional it has no name for — JSON-2 is named-args-only, so an unmappable positional cannot be forwarded, and dropping it silently sends a *different but still valid* request (a `name_search` minus its domain matched everything; a `search` minus its limit returned the server default). Transcribe entries from the Odoo source, **not the docstrings** — `default_get`'s still says `fields_list` while the parameter has been `fields` (`odoo/orm/models.py` @ 19.0), which made every `default_get` call 422. `read_group` is the one method whose sort parameter really is `orderby`, so it is exempt from the `V2_KWARGS_MAPPING` `orderby`→`order` rename via `_KWARGS_MAPPING_EXEMPT`.
 - `odoo_client.py` always sends `Authorization: Bearer` and returns the JSON-2 response body as-is — **no `{"result": ...}` envelope unwrap** (that was the legacy `/jsonrpc` convention; unwrapping would corrupt methods that legitimately return a dict with a `result` key). `tests/test_odoo_client.py` pins this.
 - The canonical MCP server name in client configs (README, setup wizard, Claude Desktop config) is **`odoo19-mcp`** — keep it consistent when touching docs or the wizard.
 - `live` tests are not pytest-collected; they are direct scripts that mutate env state. Don't reorganize them into pytest fixtures without checking the in-file note.
