@@ -680,6 +680,7 @@ def validate_payload_against_schema(
     Empty fields_get response counts as a failure: a silent connection
     drop must not grant a write token.
     """
+    from .constants import COMPACT_FIELD_ATTRIBUTES
     from .utils import get_fields_for_model
 
     args = args or []
@@ -687,7 +688,9 @@ def validate_payload_against_schema(
     if vals is None:
         return PayloadValidationResult(ok=True, errors=[])
 
-    fields = get_fields_for_model(client, model)
+    # Same attribute subset as the compact schema resources, so a quick-schema
+    # read followed by a gated write costs one fields_get, not two.
+    fields = get_fields_for_model(client, model, attributes=COMPACT_FIELD_ATTRIBUTES)
     if not fields:
         return PayloadValidationResult(
             ok=False,

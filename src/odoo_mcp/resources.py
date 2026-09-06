@@ -1,20 +1,27 @@
 """
 MCP Resource handlers for the Odoo MCP Server.
 
-All 28 @mcp.resource decorated functions. Importing this module
-registers all resources with the FastMCP instance.
+All 28 resource handlers. Importing this module registers them with the
+FastMCP instance: static URIs via ``@mcp.resource``, parameterized URIs via
+``_threaded_resource`` (same registration, but the blocking body is offloaded
+to the worker threadpool — see the decorator's docstring).
 """
 
+import functools
+import inspect
 import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Sequence, TypeVar
+
+import anyio
 
 from .app import mcp
 from .constants import (
     _DEFAULT_BOOTSTRAP_MODELS,
     _RUNTIME_ISSUES_LOCK,
+    COMPACT_FIELD_ATTRIBUTES,
     CONCEPT_ALIASES,
     ERROR_CATEGORIES,
     MODEL_STATE_MACHINES,
@@ -31,19 +38,64 @@ from .utils import (
     _get_module_knowledge,
     _get_module_knowledge_by_name,
     _strip_html,
+    fields_cache_get,
+    fields_cache_key,
+    fields_cache_put,
 )
 
 # ----- Internal helpers -----
+
+_F = TypeVar("_F", bound=Callable[..., str])
+
+
+def _threaded_resource(uri: str, **resource_kwargs: Any) -> Callable[[_F], _F]:
+    """Register a *parameterized* resource whose sync body runs off the event loop.
+
+    FastMCP 3.x runs sync ``@mcp.tool`` bodies and *static* ``@mcp.resource``
+    bodies in the anyio worker threadpool, but ``FunctionResourceTemplate.read``
+    calls a sync template body inline on the loop thread. Every ``odoo://…/{x}``
+    handler does a blocking ``requests`` round-trip, so registering it directly
+    would stall all sessions (pings included) for the duration of the Odoo call.
+
+    This decorator registers an ``async`` wrapper that offloads the body via
+    ``anyio.to_thread`` (contextvars propagate, so ``get_odoo_client()`` still
+    resolves the per-user client), and returns the *sync* body unchanged so the
+    ``read_resource`` bridge in ``server.py`` and the unit tests keep calling it
+    directly. ``tests/test_event_loop_offload.py`` fails if any template is
+    registered without it.
+    """
+
+    def decorator(fn: _F) -> _F:
+        @functools.wraps(fn)
+        async def _offloaded(**params: Any) -> str:
+            return await anyio.to_thread.run_sync(functools.partial(fn, **params))
+
+        # ``functools.wraps`` copies annotations; the explicit signature keeps
+        # FastMCP's template-parameter matching on the body's parameter names.
+        _offloaded.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
+        mcp.resource(uri, **resource_kwargs)(_offloaded)
+        return fn
+
+    return decorator
+
 
 # Hint appended to model-resolution errors so agents know where to look next.
 _MODEL_LOOKUP_HINT = "Use odoo://models or odoo://find-model/{concept} to find the right model."
 
 
-def _fetch_model_fields(model_name: str) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
+def _fetch_model_fields(
+    model_name: str, attributes: Sequence[str] | None = None
+) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
     """Validate a model name and fetch its ``fields_get`` definition.
 
     Returns ``(fields, None)`` on success or ``(None, error_dict)`` when the
     name is malformed or the model does not exist / is inaccessible.
+
+    ``attributes`` narrows the request to that subset (pass
+    ``COMPACT_FIELD_ATTRIBUTES`` for the compact views). Results go through the
+    shared TTL+LRU cache in ``utils`` keyed by (client, model, attributes), so
+    quick-schema, /fields, bundle, session-bootstrap and the locked-mode payload
+    pre-flight all reuse one fetch per model.
 
     Centralizing this guard keeps the schema builders from ever receiving the
     ``{"error": ...}`` sentinel that ``OdooClient.get_model_fields`` returns on
@@ -55,7 +107,12 @@ def _fetch_model_fields(model_name: str) -> tuple[Dict[str, Any] | None, Dict[st
     err = _validate_model(model_name)
     if err:
         return None, {"error": err, "hint": _MODEL_LOOKUP_HINT}
-    fields = get_odoo_client().get_model_fields(model_name)
+    client = get_odoo_client()
+    key = fields_cache_key(client, model_name, attributes)
+    cached = fields_cache_get(key)
+    if cached is not None:
+        return cached, None
+    fields = client.get_model_fields(model_name, attributes=list(attributes) if attributes else None)
     # get_model_fields returns {"error": "<msg>"} on failure. A real field can
     # be named "error", but its value is always a dict, never a str — so an
     # str-valued "error" key unambiguously identifies the failure sentinel.
@@ -64,6 +121,7 @@ def _fetch_model_fields(model_name: str) -> tuple[Dict[str, Any] | None, Dict[st
             "error": f"Model '{model_name}' not found or inaccessible: {fields['error']}",
             "hint": _MODEL_LOOKUP_HINT,
         }
+    fields_cache_put(key, fields)
     return fields, None
 
 
@@ -81,7 +139,7 @@ def get_models() -> str:
     return json.dumps(models, indent=2)
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://model/{model_name}",
     description="Get information about a specific model including fields",
 )
@@ -97,7 +155,7 @@ def get_model_info(model_name: str) -> str:
         return json.dumps({"error": str(e)}, indent=2)
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://model/{model_name}/schema",
     description="Complete schema for a model including fields and relationships",
 )
@@ -139,7 +197,7 @@ def get_model_schema(model_name: str) -> str:
         return json.dumps({"error": str(e)}, indent=2)
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://model/{model_name}/fields",
     description="Lightweight field list: names, types, labels (much smaller than /schema)",
 )
@@ -150,7 +208,7 @@ def get_model_fields_light(model_name: str) -> str:
     relation model (for relational fields), and selection values.
     Much smaller than /schema; use /quick-schema for the densest form.
     """
-    fields, error = _fetch_model_fields(model_name)
+    fields, error = _fetch_model_fields(model_name, attributes=COMPACT_FIELD_ATTRIBUTES)
     if fields is None:
         return json.dumps(error, indent=2)
     try:
@@ -171,7 +229,7 @@ def get_model_fields_light(model_name: str) -> str:
         return json.dumps({"error": str(e)}, indent=2)
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://model/{model_name}/quick-schema",
     description="Ultra-compact schema: short keys, no labels/help. ~60-80% smaller than /fields, best for tokens.",
 )
@@ -181,7 +239,7 @@ def get_model_quick_schema(model_name: str) -> str:
     Returns minimal field info with short keys (t=type, req=required, ro=readonly, rel=relation).
     No indentation, no labels, no help text. Typically 60-80% smaller than /fields.
     """
-    fields, error = _fetch_model_fields(model_name)
+    fields, error = _fetch_model_fields(model_name, attributes=COMPACT_FIELD_ATTRIBUTES)
     if fields is None:
         return json.dumps(error)
     try:
@@ -193,7 +251,7 @@ def get_model_quick_schema(model_name: str) -> str:
         return json.dumps({"error": str(e)})
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://model/{model_name}/workflow",
     description="State machine transitions for a model: states, methods, side effects, irreversibility",
 )
@@ -213,9 +271,10 @@ def get_model_workflow(model_name: str) -> str:
         return json.dumps(result, indent=2)
 
     # Dynamic fallback: try to infer workflow from model metadata
-    odoo_client = get_odoo_client()
     try:
-        fields = odoo_client.get_model_fields(model_name)
+        fields, error = _fetch_model_fields(model_name, attributes=COMPACT_FIELD_ATTRIBUTES)
+        if fields is None:
+            return json.dumps(error, indent=2)
         result = {
             "model": model_name,
             "source": "dynamic",
@@ -264,7 +323,7 @@ def get_model_workflow(model_name: str) -> str:
         return json.dumps({"error": str(e)}, indent=2)
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://bundle/{models_csv}",
     description="Batch quick-schema for multiple models in one call (comma-separated, max 10)",
 )
@@ -284,7 +343,7 @@ def get_bundle(models_csv: str) -> str:
     bundle: Dict[str, Any] = {"models": {}, "errors": {}}
 
     def _fetch(name: str) -> tuple[str, Any]:
-        fields, error = _fetch_model_fields(name)
+        fields, error = _fetch_model_fields(name, attributes=COMPACT_FIELD_ATTRIBUTES)
         if fields is None:
             return name, error
         try:
@@ -317,7 +376,6 @@ def get_session_bootstrap() -> str:
     Configure via MCP_BOOTSTRAP_MODELS env var (comma-separated model names).
     Default: res.partner,sale.order,account.move,product.product,stock.picking
     """
-    odoo_client = get_odoo_client()
     models_csv = os.environ.get("MCP_BOOTSTRAP_MODELS", _DEFAULT_BOOTSTRAP_MODELS)
     model_names = [m.strip() for m in models_csv.split(",") if m.strip()][:20]
 
@@ -325,7 +383,9 @@ def get_session_bootstrap() -> str:
 
     def _fetch(name: str) -> tuple[str, Any]:
         try:
-            fields = odoo_client.get_model_fields(name)
+            fields, error = _fetch_model_fields(name, attributes=COMPACT_FIELD_ATTRIBUTES)
+            if fields is None:
+                return name, RuntimeError(str((error or {}).get("error", "unknown error")))
             schema = _build_compact_schema(fields)
             schema["field_count"] = len(schema["fields"])
             return name, schema
@@ -352,7 +412,7 @@ def get_session_bootstrap() -> str:
     return json.dumps(result, separators=(",", ":"))
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://record/{model_name}/{record_id}",
     description="Get a specific record by ID",
 )
@@ -371,7 +431,7 @@ def get_record(model_name: str, record_id: str) -> str:
         return json.dumps({"error": str(e)}, indent=2)
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://methods/{model_name}",
     description="Available methods for a model including module-specific special methods",
 )
@@ -552,7 +612,7 @@ def get_methods(model_name: str) -> str:
     return json.dumps(common_methods, indent=2)
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://model/{model_name}/docs",
     description="Rich documentation for a model: labels, field help, selection options, action help",
 )
@@ -734,7 +794,7 @@ def get_module_knowledge() -> str:
     return _get_module_knowledge()
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://module-knowledge/{module_name}",
     description="Get knowledge for a specific module (sale, crm, account, etc.)",
 )
@@ -743,7 +803,7 @@ def get_module_knowledge_by_name(module_name: str) -> str:
     return _get_module_knowledge_by_name(module_name)
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://docs/{target}",
     description="Documentation URLs and GitHub links for any Odoo model or module",
 )
@@ -1125,7 +1185,7 @@ def get_aggregation_guide() -> str:
     )
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://find-model/{concept}",
     description="Find Odoo model from natural language concept (contact, invoice, quote, etc.)",
 )
@@ -1211,7 +1271,7 @@ def find_model_resource(concept: str) -> str:
     return json.dumps(result, indent=2)
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://tools/{query}",
     description="Search available operations by keyword (invoice, sales, stock, etc.)",
 )
@@ -1254,7 +1314,7 @@ def search_tools_resource(query: str) -> str:
     )
 
 
-@mcp.resource(
+@_threaded_resource(
     "odoo://actions/{model}",
     description="Discover all available actions for a specific model",
 )

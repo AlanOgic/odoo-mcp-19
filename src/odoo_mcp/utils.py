@@ -12,7 +12,7 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, cast
 
 from .constants import (
     _DOC_CACHE,
@@ -426,35 +426,74 @@ def _get_documentation_urls(target: str) -> str:
     return json.dumps(result, indent=2)
 
 
-# ----- Live fields_get cache (used by payload pre-flight) -----
+# ----- Live fields_get cache (shared by the schema resources and the payload pre-flight) -----
 
-_FIELDS_CACHE: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
+# key: (client url, client username, model, attributes tuple | None) → (fetched_at, fields)
+# The client identity is part of the key because fields_get is filtered by the
+# caller's access rights — in multi-user mode two users must never share an entry.
+_FieldsCacheKey = tuple[Any, Any, str, tuple[str, ...] | None]
+_FIELDS_CACHE: "OrderedDict[_FieldsCacheKey, tuple[float, dict]]" = OrderedDict()
 _FIELDS_CACHE_LOCK = threading.Lock()
 _FIELDS_CACHE_TTL = 60  # seconds — shorter than _DOC_CACHE since model
 # schemas can change with module updates
 _FIELDS_CACHE_MAX = 100
 
 
-def get_fields_for_model(client, model: str) -> dict:
+def fields_cache_key(client: Any, model: str, attributes: Sequence[str] | None = None) -> _FieldsCacheKey:
+    """Build the cache key for one (client, model, attribute subset) fetch."""
+    return (
+        getattr(client, "url", None),
+        getattr(client, "username", None),
+        model,
+        tuple(attributes) if attributes else None,
+    )
+
+
+def fields_cache_get(key: _FieldsCacheKey) -> dict | None:
+    """Return the cached fields for ``key`` if present and fresh, else ``None``."""
+    now = time.time()
+    with _FIELDS_CACHE_LOCK:
+        cached = _FIELDS_CACHE.get(key)
+        if cached and (now - cached[0]) < _FIELDS_CACHE_TTL:
+            _FIELDS_CACHE.move_to_end(key)
+            return cached[1]
+    return None
+
+
+def fields_cache_put(key: _FieldsCacheKey, fields: dict) -> None:
+    """Store ``fields`` under ``key`` (LRU-bounded). Empty payloads are never cached."""
+    if not fields or not isinstance(fields, dict):
+        return
+    with _FIELDS_CACHE_LOCK:
+        _FIELDS_CACHE[key] = (time.time(), fields)
+        _FIELDS_CACHE.move_to_end(key)
+        while len(_FIELDS_CACHE) > _FIELDS_CACHE_MAX:
+            _FIELDS_CACHE.popitem(last=False)
+
+
+def get_fields_for_model(client: Any, model: str, attributes: Sequence[str] | None = None) -> dict:
     """Return the fields_get response for a model, with TTL+LRU caching.
+
+    ``attributes`` narrows the request (and the cache key) to that subset —
+    callers that only need type/required/readonly share one entry per model
+    instead of each pulling the full definition.
 
     Empty responses are NOT cached — they typically indicate a silently-failed
     Odoo connection, and we don't want to grant a write token based on
     'no fields exist therefore validation passes'.
     """
-    now = time.time()
-    with _FIELDS_CACHE_LOCK:
-        cached = _FIELDS_CACHE.get(model)
-        if cached and (now - cached[0]) < _FIELDS_CACHE_TTL:
-            _FIELDS_CACHE.move_to_end(model)
-            return cached[1]
+    key = fields_cache_key(client, model, attributes)
+    cached = fields_cache_get(key)
+    if cached is not None:
+        return cached
 
     # Cache miss or expired — fetch fresh.
     # Treat any exception (network failure, model-not-found, auth error) as
     # an empty schema — the caller's pre-flight will refuse to issue a
     # token without a verified field list, which is the safe behaviour.
+    kwargs: dict[str, Any] = {"attributes": list(attributes)} if attributes else {}
     try:
-        fields = client.execute_method(model, "fields_get")
+        fields = client.execute_method(model, "fields_get", **kwargs)
     except Exception as exc:
         logger.warning("fields_get for %r failed: %s", model, exc)
         return {}
@@ -464,9 +503,5 @@ def get_fields_for_model(client, model: str) -> dict:
         # want to remember a failure.
         return {}
 
-    with _FIELDS_CACHE_LOCK:
-        _FIELDS_CACHE[model] = (now, fields)
-        _FIELDS_CACHE.move_to_end(model)
-        while len(_FIELDS_CACHE) > _FIELDS_CACHE_MAX:
-            _FIELDS_CACHE.popitem(last=False)
-    return fields
+    fields_cache_put(key, fields)
+    return cast(dict, fields)

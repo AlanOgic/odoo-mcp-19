@@ -84,3 +84,42 @@ def test_lru_eviction():
 
     with _FIELDS_CACHE_LOCK:
         assert len(_FIELDS_CACHE) <= 100
+
+
+# ----- attribute-scoped and client-scoped keys -----
+
+
+def test_attributes_are_forwarded_on_cache_miss():
+    client = MagicMock()
+    client.execute_method.return_value = {"name": {"type": "char"}}
+
+    get_fields_for_model(client, "res.partner", attributes=("type", "required"))
+
+    assert client.execute_method.call_args.kwargs == {"attributes": ["type", "required"]}
+
+
+def test_different_attribute_sets_are_cached_separately():
+    """A compact fetch must never be served for a request that needs the full definition."""
+    client = MagicMock()
+    client.execute_method.return_value = {"name": {"type": "char"}}
+
+    get_fields_for_model(client, "res.partner", attributes=("type",))
+    get_fields_for_model(client, "res.partner")
+    get_fields_for_model(client, "res.partner", attributes=("type",))
+
+    assert client.execute_method.call_count == 2
+
+
+def test_cache_is_scoped_per_client_identity():
+    """fields_get depends on the caller's access rights; users must not share entries."""
+    alice = MagicMock(url="https://erp.example.com", username="alice")
+    bob = MagicMock(url="https://erp.example.com", username="bob")
+    alice.execute_method.return_value = {"name": {"type": "char"}}
+    bob.execute_method.return_value = {"name": {"type": "char"}}
+
+    get_fields_for_model(alice, "res.partner")
+    get_fields_for_model(bob, "res.partner")
+    get_fields_for_model(alice, "res.partner")
+
+    assert alice.execute_method.call_count == 1
+    assert bob.execute_method.call_count == 1

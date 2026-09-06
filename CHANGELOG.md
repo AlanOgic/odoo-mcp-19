@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Odoo round-trips no longer block the event loop.** FastMCP 3.x calls a sync
+  *template* resource body (`odoo://model/{model}/…`, `odoo://bundle/…`, …) inline
+  on the loop thread, and `batch_execute` / `execute_workflow` are `async def`
+  around the synchronous `requests` client — so one slow `fields_get` or a 100-op
+  batch froze every session (pings included) for the duration of the Odoo calls.
+  Every parameterized resource is now registered through `_threaded_resource`
+  (an `async` wrapper that offloads the body via `anyio.to_thread`; the sync body
+  is still what `read_resource` and the tests call), and the two async tools run
+  their client calls through `_run_blocking`. `tests/test_event_loop_offload.py`
+  fails if a template is ever registered without the wrapper. `anyio` is now a
+  declared dependency (it was already a transitive one via FastMCP).
+- **Compact schema views request only the attributes they use.** `quick-schema`,
+  `/fields`, `odoo://bundle`, `session-bootstrap`, the dynamic `/workflow`
+  fallback and the locked-mode payload pre-flight now call
+  `fields_get(attributes=COMPACT_FIELD_ATTRIBUTES)` — six keys instead of the
+  full ~300 KB-per-model definition — and share one TTL+LRU cache entry per
+  `(client, model, attributes)`. A 10-model bundle previously transferred ~3 MB
+  to emit 15 KB; a quick-schema read followed by a gated write cost two
+  `fields_get`. The cache key includes the client identity, so multi-user
+  callers never share a definition filtered by someone else's access rights.
+  `/schema` and `odoo://model/{model}` still fetch the full definition.
+- **`execute_method` split into phases** (`server.py`): JSON parsing,
+  `resolve_json` lookup + injection, private-method rejection,
+  classify-and-gate, search defaults, `search_read` fallback and error
+  enrichment are now separate helpers (cyclomatic complexity 71 → 14, 359 → 86
+  lines). The confirmation gate (`_confirmation_gate`) and the read-only
+  rejection text (`_read_only_error`) are shared by `execute_method`,
+  `batch_execute` and `execute_workflow` instead of being copied three times.
+  `resolve_json` injection now returns new arg lists instead of mutating the
+  parsed payload in place, and a non-dict `resolve_json` entry gets the clear
+  "requires 'model' and 'search' keys" message instead of an `AttributeError`
+  text. The read-only rejection wording is now identical across the three
+  tools ("… Set MCP_READ_ONLY=false to enable writes …"); `execute_workflow`
+  previously said "enable workflows". Behaviour is pinned by
+  `tests/test_tool_execution_paths.py`, which covers the previously untested
+  `resolve_json`, fallback, search-default, workflow and non-atomic batch paths
+  (unit coverage 50 % → 66 %; `server.py` 25 % → 74 %).
+
 ### Fixed
 - **Positional arguments past the first were silently dropped** (`arg_mapping.py`).
   `convert_args_to_v2` iterated the `V2_ARG_MAPPING` table rather than the supplied

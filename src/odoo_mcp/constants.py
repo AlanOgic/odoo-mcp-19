@@ -426,6 +426,14 @@ CONCEPT_ALIASES: Dict[str, List[str]] = {
 
 # ----- Bootstrap Models -----
 
+# Attribute subset requested from ``fields_get`` by the compact schema views
+# (quick-schema, /fields, bundle, session-bootstrap) and by the locked-mode
+# payload pre-flight. A full definition of a big model is ~300 KB (help text,
+# translations, domains, contexts…); these six attributes are all the compact
+# views and the validator read, and requesting them explicitly cuts the
+# transfer to a few KB. One shared tuple = one shared cache entry per model.
+COMPACT_FIELD_ATTRIBUTES: tuple[str, ...] = ("type", "string", "required", "readonly", "relation", "selection")
+
 _DEFAULT_BOOTSTRAP_MODELS = "res.partner,sale.order,account.move,product.product,stock.picking"
 
 

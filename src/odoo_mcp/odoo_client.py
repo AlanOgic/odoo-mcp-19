@@ -10,7 +10,7 @@ import os
 import re
 import threading
 import urllib.parse
-from typing import Any, cast
+from typing import Any, Sequence, cast
 
 import requests
 from dotenv import load_dotenv
@@ -202,10 +202,17 @@ class OdooClient:
         except Exception as e:
             return {"error": str(e)}
 
-    def get_model_fields(self, model_name: str) -> dict[str, Any]:
-        """Get field definitions for a model."""
+    def get_model_fields(self, model_name: str, attributes: Sequence[str] | None = None) -> dict[str, Any]:
+        """Get field definitions for a model.
+
+        ``attributes`` narrows the per-field payload to the named keys (Odoo's
+        ``fields_get(attributes=...)``). A full definition of a large model is
+        ~300 KB; the compact schema views only need a handful of attributes.
+        ``None`` requests the complete definition.
+        """
+        kwargs: dict[str, Any] = {"attributes": list(attributes)} if attributes else {}
         try:
-            return cast(dict[str, Any], self._execute(model_name, "fields_get"))
+            return cast(dict[str, Any], self._execute(model_name, "fields_get", **kwargs))
         except Exception as e:
             return {"error": str(e)}
 

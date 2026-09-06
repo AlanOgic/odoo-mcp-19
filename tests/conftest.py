@@ -129,3 +129,15 @@ def users_db_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RegistrySe
     conn.commit()
     conn.close()
     return seed
+
+
+@pytest.fixture(autouse=True)
+def _clear_fields_cache():
+    """The live fields_get cache is process-global; never let one test feed another."""
+    from odoo_mcp.utils import _FIELDS_CACHE, _FIELDS_CACHE_LOCK
+
+    with _FIELDS_CACHE_LOCK:
+        _FIELDS_CACHE.clear()
+    yield
+    with _FIELDS_CACHE_LOCK:
+        _FIELDS_CACHE.clear()
