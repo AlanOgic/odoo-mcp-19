@@ -141,7 +141,7 @@ def get_models() -> str:
     """Lists all available models"""
     odoo_client = get_odoo_client()
     models = odoo_client.get_models()
-    return json.dumps(models, indent=2)
+    return json.dumps(models, separators=(",", ":"))
 
 
 @_threaded_resource(
@@ -149,15 +149,15 @@ def get_models() -> str:
     description="Get information about a specific model including fields",
 )
 def get_model_info(model_name: str) -> str:
-    """Get information about a specific model"""
-    odoo_client = get_odoo_client()
+    """Model metadata plus its full field definition (the latter via the shared fields cache)."""
+    fields, error = _fetch_model_fields(model_name)
+    if fields is None:
+        return json.dumps(error, separators=(",", ":"))
     try:
-        model_info = odoo_client.get_model_info(model_name)
-        fields = odoo_client.get_model_fields(model_name)
-        model_info["fields"] = fields
-        return json.dumps(model_info, indent=2)
+        model_info = get_odoo_client().get_model_info(model_name)
+        return json.dumps({**model_info, "fields": fields}, separators=(",", ":"))
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return json.dumps({"error": str(e)}, separators=(",", ":"))
 
 
 @_threaded_resource(
@@ -197,9 +197,9 @@ def get_model_schema(model_name: str) -> str:
                     "values": field_def.get("selection"),
                 }
 
-        return json.dumps(schema, indent=2)
+        return json.dumps(schema, separators=(",", ":"))
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return json.dumps({"error": str(e)}, separators=(",", ":"))
 
 
 @_threaded_resource(
@@ -442,7 +442,33 @@ def get_record(model_name: str, record_id: str) -> str:
 )
 def get_methods(model_name: str) -> str:
     """Get available methods for a model: static catalog + module knowledge + live /doc-bearer/ enrichment."""
-    return json.dumps(build_methods_payload(model_name, _get_live_doc(model_name)), indent=2)
+    return json.dumps(build_methods_payload(model_name, _get_live_doc(model_name)), separators=(",", ":"))
+
+
+def _selection_options(odoo_client: Any, model_name: str, fields_meta: list) -> Dict[str, list]:
+    """Selection values for every selection field of the model, grouped by field name.
+
+    One ``ir.model.fields.selection`` query for the whole model — the previous
+    per-field loop cost one round-trip per selection field (up to 20). Options
+    are ordered by ``sequence`` within each field.
+    """
+    field_names_by_id = {f["id"]: f["name"] for f in fields_meta if f.get("ttype") == "selection" and "id" in f}
+    if not field_names_by_id:
+        return {}
+    rows = odoo_client.search_read(
+        "ir.model.fields.selection",
+        [["field_id.model", "=", model_name]],
+        fields=["field_id", "value", "name", "sequence"],
+        limit=1000,
+    )
+    grouped: Dict[str, list] = {}
+    for row in sorted(rows, key=lambda r: (r.get("sequence") or 0, r.get("id") or 0)):
+        field_id = row["field_id"][0] if isinstance(row.get("field_id"), (list, tuple)) else row.get("field_id")
+        field_name = field_names_by_id.get(field_id)
+        if field_name is None:
+            continue
+        grouped[field_name] = [*grouped.get(field_name, []), {"value": row["value"], "label": row["name"]}]
+    return grouped
 
 
 @_threaded_resource(
@@ -489,21 +515,8 @@ def get_model_docs(model_name: str) -> str:
                 "required": f.get("required"),
             }
 
-        # 3. Get selection field options with labels
-        selection_fields = [f["name"] for f in fields_meta if f.get("ttype") == "selection"]
-        if selection_fields:
-            for field_name in selection_fields[:20]:  # Limit to avoid too many queries
-                selections = odoo_client.search_read(
-                    "ir.model.fields.selection",
-                    [["field_id.model", "=", model_name], ["field_id.name", "=", field_name]],
-                    fields=["value", "name", "sequence"],
-                    limit=50,
-                )
-                if selections:
-                    result["selection_options"][field_name] = [
-                        {"value": s["value"], "label": s["name"]}
-                        for s in sorted(selections, key=lambda x: x.get("sequence", 0))
-                    ]
+        # 3. Selection options with labels — one query for the whole model
+        result["selection_options"] = _selection_options(odoo_client, model_name, fields_meta)
 
         # 4. Get action help text (contextual documentation)
         actions = odoo_client.search_read(
@@ -516,10 +529,10 @@ def get_model_docs(model_name: str) -> str:
                 help_text = " ".join(help_text.split())  # Normalize whitespace
                 result["actions_help"].append({"action_name": action.get("name"), "help": help_text})
 
-        return json.dumps(result, indent=2)
+        return json.dumps(result, separators=(",", ":"))
 
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return json.dumps({"error": str(e)}, separators=(",", ":"))
 
 
 @mcp.resource(
