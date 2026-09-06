@@ -11,6 +11,7 @@ MCP 2025-11-25 Features:
 """
 
 import asyncio
+import functools
 import hashlib
 import json
 import logging
@@ -19,8 +20,9 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, TypeVar
 
+import anyio
 from fastmcp import Context
 from fastmcp.dependencies import Progress
 
@@ -65,6 +67,22 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+async def _run_blocking(fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
+    """Run a synchronous OdooClient call in the anyio worker threadpool.
+
+    ``batch_execute`` and ``execute_workflow`` are ``async def`` (they report
+    progress), but ``OdooClient`` is built on synchronous ``requests``. Calling
+    it inline would block the event loop for the whole round-trip — in HTTP
+    multi-user mode a 100-op batch would freeze every session for 100 × RTT.
+    Contextvars propagate through ``anyio.to_thread``, so ``get_odoo_client()``
+    and the current access token resolve exactly as on the loop thread.
+    """
+    return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+
 
 # ----- Confirmation Token Store -----
 # Stateful nonces that tie a confirmed=True re-call to the original safety classification
@@ -121,6 +139,356 @@ def _validate_confirmation_token(token: str | None, model: str, method: str, pay
             "confirmed=true to get a new token for the current payload."
         )
     return None
+
+
+# ----- Shared guards for the write-capable tools -----
+
+
+def _elapsed_ms(start_time: float) -> float:
+    return round((time.time() - start_time) * 1000, 2)
+
+
+def _read_only_error(subject: str) -> str:
+    """Uniform rejection text for the MCP_READ_ONLY / locked-mode kill-switch."""
+    return (
+        f"read-only mode is active: {subject}. Set MCP_READ_ONLY=false to enable "
+        f"writes (or change MCP_SAFETY_MODE away from 'locked' if MCP_READ_ONLY "
+        f"is not set explicitly)."
+    )
+
+
+@dataclass(frozen=True)
+class _GateDecision:
+    """Outcome of the confirmation gate for one gated operation.
+
+    ``outcome`` is ``"issue"`` (first call — hand ``token`` back to the caller),
+    ``"reject"`` (confirmed re-call with a bad token — surface ``error``) or
+    ``"proceed"`` (token validated and consumed).
+    """
+
+    outcome: str
+    token: str | None = None
+    error: str | None = None
+
+
+def _confirmation_gate(
+    model_key: str,
+    method_key: str,
+    payload: Any,
+    confirmed: bool,
+    confirmation_token: str | None,
+) -> _GateDecision:
+    """Issue a token on the first call; validate and consume it on the confirmed re-call.
+
+    ``payload`` is the exact operation content the token must be bound to —
+    post-resolve args/kwargs for ``execute_method``, the operations list for
+    ``batch_execute``, the params dict for ``execute_workflow``. Its digest is
+    what stops a re-call from substituting arguments after the gate was shown.
+    """
+    digest = _payload_digest(payload)
+    if not confirmed:
+        return _GateDecision("issue", token=_issue_confirmation_token(model_key, method_key, digest))
+    error = _validate_confirmation_token(confirmation_token, model_key, method_key, digest)
+    if error:
+        return _GateDecision("reject", error=f"Confirmation rejected: {error}")
+    return _GateDecision("proceed")
+
+
+# ----- execute_method phases -----
+
+
+def _parse_json_args(args_json: str | None, kwargs_json: str | None) -> tuple[list, dict, str | None]:
+    """Decode the JSON-string parameters and merge MCP_DEFAULT_CONTEXT.
+
+    Returns ``(args, kwargs, error)``; ``error`` is set on malformed input.
+    """
+    args: list = []
+    kwargs: dict = {}
+    if args_json:
+        try:
+            args = json.loads(args_json)
+        except json.JSONDecodeError as e:
+            return [], {}, f"Invalid args_json: {e}"
+        if not isinstance(args, list):
+            return [], {}, "args_json must be a JSON array"
+    if kwargs_json:
+        try:
+            kwargs = json.loads(kwargs_json)
+        except json.JSONDecodeError as e:
+            return [], {}, f"Invalid kwargs_json: {e}"
+        if not isinstance(kwargs, dict):
+            return [], {}, "kwargs_json must be a JSON object"
+    merged_ctx = _merge_context(kwargs.get("context"))
+    if merged_ctx is not None:
+        kwargs = {**kwargs, "context": merged_ctx}
+    return args, kwargs, None
+
+
+def _lookup_resolve_target(
+    odoo: Any, field_name: str, spec: Any, start_time: float
+) -> tuple[int | None, ExecuteMethodResponse | None]:
+    """Resolve one ``resolve_json`` entry to a record id via ``name_search``."""
+    target_model = spec.get("model") if isinstance(spec, dict) else None
+    search_term = spec.get("search") if isinstance(spec, dict) else None
+    if not target_model or not search_term:
+        return None, ExecuteMethodResponse(
+            success=False, error=f"resolve_json['{field_name}'] requires 'model' and 'search' keys"
+        )
+    model_err = _validate_model(target_model)
+    if model_err:
+        return None, ExecuteMethodResponse(success=False, error=f"resolve_json['{field_name}']: {model_err}")
+    # Block reads against security-critical models
+    if target_model in BLOCKED_MODELS:
+        return None, ExecuteMethodResponse(
+            success=False, error=f"resolve_json['{field_name}']: model '{target_model}' is blocked for safety."
+        )
+    # The lookup *and* the unpacking of its result share one boundary: a malformed
+    # name_search tuple must surface as a resolve_json failure, not as a generic error.
+    try:
+        matches = odoo.execute_method(target_model, "name_search", name=search_term, limit=5)
+        if not matches:
+            return None, ExecuteMethodResponse(
+                success=False,
+                error=f"resolve_json: No match for '{search_term}' in {target_model}",
+                hint=f"Search {target_model} manually to find the correct record",
+                execution_time_ms=_elapsed_ms(start_time),
+            )
+        if len(matches) > 1:
+            options = [f"  {m[0]}: {m[1]}" for m in matches[:5]]
+            return None, ExecuteMethodResponse(
+                success=False,
+                error=f"resolve_json: Ambiguous match for '{search_term}' in {target_model} ({len(matches)} results)",
+                hint="Multiple matches found:\n" + "\n".join(options) + "\nUse the numeric ID directly instead.",
+                execution_time_ms=_elapsed_ms(start_time),
+            )
+        return matches[0][0], None
+    except Exception as e:
+        return None, ExecuteMethodResponse(
+            success=False,
+            error=f"resolve_json: Failed to resolve '{field_name}': {e}",
+            execution_time_ms=_elapsed_ms(start_time),
+        )
+
+
+def _inject_resolved_values(method: str, args: list, resolved: dict[str, int]) -> list:
+    """Return a copy of ``args`` with the resolved ids merged into the vals dict(s)."""
+    if not resolved or not args:
+        return args
+    if method == "write" and len(args) >= 2 and isinstance(args[1], dict):
+        return [args[0], {**args[1], **resolved}, *args[2:]]
+    if method == "create":
+        if isinstance(args[0], dict):
+            return [{**args[0], **resolved}, *args[1:]]
+        if isinstance(args[0], list):
+            vals_list = [{**vals, **resolved} if isinstance(vals, dict) else vals for vals in args[0]]
+            return [vals_list, *args[1:]]
+    return args
+
+
+def _resolve_many2one_names(
+    odoo: Any, resolve_json: str, method: str, args: list, start_time: float
+) -> tuple[list, ExecuteMethodResponse | None]:
+    """Apply ``resolve_json``: name_search every entry and inject the ids into the payload."""
+    try:
+        resolves = json.loads(resolve_json)
+    except json.JSONDecodeError as e:
+        return args, ExecuteMethodResponse(success=False, error=f"Invalid resolve_json: {e}")
+    if not isinstance(resolves, dict):
+        return args, ExecuteMethodResponse(success=False, error="resolve_json must be a JSON object")
+    resolved: dict[str, int] = {}
+    for field_name, spec in resolves.items():
+        record_id, failure = _lookup_resolve_target(odoo, field_name, spec, start_time)
+        if failure:
+            return args, failure
+        resolved[field_name] = record_id  # type: ignore[assignment]
+    return _inject_resolved_values(method, args, resolved), None
+
+
+def _reject_private_method(model: str, method: str, start_time: float) -> ExecuteMethodResponse | None:
+    """Refuse ``@api.private`` methods: static hint table first, then the live /doc-bearer/ check."""
+    if method in PRIVATE_METHOD_HINTS:
+        return ExecuteMethodResponse(
+            success=False,
+            error=f"Method '{method}' is @api.private and cannot be called via RPC.",
+            hint=PRIVATE_METHOD_HINTS[method],
+            execution_time_ms=_elapsed_ms(start_time),
+        )
+    if method.startswith("_"):
+        live_doc = _get_live_doc(model)
+        if live_doc and method not in live_doc.get("methods", {}):
+            return ExecuteMethodResponse(
+                success=False,
+                error=f"Method '{method}' is not a public method on {model}. It may be @api.private or doesn't exist.",
+                hint=f"Use odoo://methods/{model} to see available public methods.",
+                execution_time_ms=_elapsed_ms(start_time),
+            )
+    return None
+
+
+def _classify_and_gate(
+    odoo: Any,
+    model: str,
+    method: str,
+    args: list,
+    kwargs: dict,
+    confirmed: bool,
+    confirmation_token: str | None,
+    start_time: float,
+) -> ExecuteMethodResponse | None:
+    """Run the safety classifier, the payload pre-flight and the confirmation gate.
+
+    Returns the response to send when the call must stop here (blocked, token
+    issued, token rejected, payload invalid), or ``None`` when execution may proceed.
+    """
+    classification = classify_operation(model, method, args, kwargs, role=current_role())
+
+    if classification.risk_level == RiskLevel.BLOCKED:
+        audit_log(classification, confirmed=confirmed, executed=False)
+        return ExecuteMethodResponse(
+            success=False,
+            pending_confirmation=True,
+            safety=classification,
+            error=classification.blocked_reason,
+            hint="Use the Odoo web interface instead.",
+            execution_time_ms=_elapsed_ms(start_time),
+        )
+
+    if classification.requires_confirmation:
+        # Payload pre-flight against live fields_get — only when the profile asks
+        # for it AND this is a write-shaped call — so a typo'd field fails before
+        # a gate round-trip is spent on it.
+        if get_profile().validate_payloads and is_side_effect_method(method):
+            from .safety import validate_payload_against_schema as _validate_payload
+
+            validation = _validate_payload(odoo, model, method, args=args, kwargs=kwargs)
+            if not validation.ok:
+                return ExecuteMethodResponse(
+                    success=False,
+                    error="Payload validation failed:\n  - " + "\n  - ".join(validation.errors),
+                    hint=f"Read odoo://model/{model}/quick-schema for the field list.",
+                    execution_time_ms=_elapsed_ms(start_time),
+                )
+
+        # Args/kwargs are post-resolve_json and post-context-merge, so the digest
+        # captures what would actually be sent to Odoo.
+        decision = _confirmation_gate(model, method, {"args": args, "kwargs": kwargs}, confirmed, confirmation_token)
+        if decision.outcome == "issue":
+            audit_log(classification, confirmed=False, executed=False)
+            message = classification.reason
+            if classification.cascade_warning:
+                message += f"\n\nWARNING: {classification.cascade_warning}"
+            return ExecuteMethodResponse(
+                success=False,
+                pending_confirmation=True,
+                safety=classification,
+                error=message,
+                hint=(
+                    f"Re-call execute_method with confirmed=true and "
+                    f"confirmation_token='{decision.token}' to proceed."
+                ),
+                execution_time_ms=_elapsed_ms(start_time),
+            )
+        if decision.outcome == "reject":
+            return ExecuteMethodResponse(success=False, error=decision.error, execution_time_ms=_elapsed_ms(start_time))
+
+    if classification.risk_level != RiskLevel.SAFE:
+        audit_log(classification, confirmed=confirmed, executed=True)
+    return None
+
+
+def _apply_search_defaults(method: str, args: list, kwargs: dict) -> tuple[list, dict]:
+    """Default/cap the search limit and unwrap a double-wrapped ``[[domain]]``."""
+    if method in ("search", "search_read"):
+        if "limit" not in kwargs:
+            kwargs = {**kwargs, "limit": DEFAULT_LIMIT}
+            logger.debug("Applied default limit=%d", DEFAULT_LIMIT)
+        elif kwargs.get("limit", 0) > MAX_LIMIT:
+            kwargs = {**kwargs, "limit": MAX_LIMIT}
+            logger.debug("Capped limit to %d", MAX_LIMIT)
+    if method in ("search", "search_read", "search_count") and args:
+        domain = args[0]
+        if isinstance(domain, list) and len(domain) == 1 and isinstance(domain[0], list):
+            if domain[0] and isinstance(domain[0][0], list):
+                args = [domain[0], *args[1:]]
+    return args, kwargs
+
+
+def _search_read_fallback(
+    odoo: Any, model: str, kwargs: dict, error_msg: str, start_time: float
+) -> ExecuteMethodResponse:
+    """Retry a failed ``search_read`` as ``search`` + ``read`` and record the runtime issue."""
+    domain = kwargs.get("domain", [])
+    fields = kwargs.get("fields", [])
+    context = kwargs.get("context")
+    try:
+        search_kwargs: dict[str, Any] = {
+            "domain": domain,
+            "limit": kwargs.get("limit", 100),
+            "offset": kwargs.get("offset", 0),
+        }
+        if kwargs.get("order"):
+            search_kwargs["order"] = kwargs["order"]
+        if context:
+            search_kwargs["context"] = context
+        ids = odoo.execute_method(model, "search", **search_kwargs)
+
+        result: Any = []
+        if ids:
+            read_kwargs: dict[str, Any] = {}
+            if fields:
+                read_kwargs["fields"] = fields
+            if context:
+                read_kwargs["context"] = context
+            result = odoo.execute_method(model, "read", ids, **read_kwargs)
+
+        analysis = _track_model_issue(model, "search_read", error_msg, domain=domain, fields=fields)
+        return ExecuteMethodResponse(
+            success=True,
+            result=result,
+            fallback_used=True,
+            issue_analysis=IssueAnalysis(
+                category=analysis["category"],
+                cause=analysis["cause"],
+                domain_patterns=analysis["domain_patterns"],
+                problematic_fields=analysis.get("problematic_fields", []),
+                suggested_solutions=analysis["solutions"][:2],
+                model_specific_advice=analysis.get("model_specific_advice", []),
+            ),
+            note=f"Fallback search+read used. Cause: {analysis['cause']}",
+            execution_time_ms=_elapsed_ms(start_time),
+        )
+    except Exception as fallback_error:
+        return ExecuteMethodResponse(
+            success=False,
+            error=f"{error_msg}; Fallback also failed: {fallback_error}",
+            suggestion=(
+                "Both search_read and fallback search+read failed. " "Check odoo://model-limitations for known issues."
+            ),
+            execution_time_ms=_elapsed_ms(start_time),
+        )
+
+
+_FIELD_ERROR_PATTERNS = ("invalid field", "unknown field", "field_get", "keyerror", "no field", "does not exist")
+
+
+def _failure_response(model: str, method: str, error_msg: str, start_time: float) -> ExecuteMethodResponse:
+    """Wrap an Odoo error with a pattern-matched suggestion and a schema hint."""
+    suggestion = get_error_suggestion(error_msg, model, method)
+    hint = None
+    if any(p in error_msg.lower() for p in _FIELD_ERROR_PATTERNS):
+        hint = (
+            f"Field name error detected. Read odoo://model/{model}/fields to get exact field names, "
+            f"or odoo://model/{model}/schema for full details."
+        )
+    elif suggestion:
+        hint = f"Check odoo://methods/{model} or odoo://module-knowledge for special methods"
+    return ExecuteMethodResponse(
+        success=False,
+        error=error_msg,
+        suggestion=suggestion,
+        hint=hint,
+        execution_time_ms=_elapsed_ms(start_time),
+    )
 
 
 # ----- MCP Tools (execute_method, batch_execute, execute_workflow, configure_odoo, read_resource) -----
@@ -237,7 +605,6 @@ def execute_method(
     """
     start_time = time.time()
 
-    # Validate model and method names
     model_err = _validate_model(model)
     if model_err:
         return ExecuteMethodResponse(success=False, error=model_err, execution_time_ms=0)
@@ -245,314 +612,45 @@ def execute_method(
     if method_err:
         return ExecuteMethodResponse(success=False, error=method_err, execution_time_ms=0)
 
-    # Read-only kill-switch (MCP_READ_ONLY / MCP_SAFETY_MODE=locked).
-    # Runs before the classifier — cheap pattern match, no Odoo round-trip.
-    profile = get_profile()
-    if profile.read_only and is_side_effect_method(method):
+    # Read-only kill-switch — cheap set lookup, runs before the classifier and any round-trip.
+    if get_profile().read_only and is_side_effect_method(method):
         return ExecuteMethodResponse(
             success=False,
-            error=(
-                f"read-only mode is active: '{method}' on '{model}' is a "
-                f"side-effect operation. Set MCP_READ_ONLY=false to enable "
-                f"writes (or change MCP_SAFETY_MODE away from 'locked' if "
-                f"MCP_READ_ONLY is not set explicitly)."
-            ),
-            execution_time_ms=int((time.time() - start_time) * 1000),
+            error=_read_only_error(f"'{method}' on '{model}' is a side-effect operation"),
+            execution_time_ms=_elapsed_ms(start_time),
         )
 
     odoo = get_odoo_client()
+    # Runs outside the try below on purpose: _parse_json_args reports malformed input
+    # as a response and must never raise (json errors are caught inside it and
+    # _merge_context swallows its own). Keep that invariant if you touch either.
+    args, kwargs, parse_err = _parse_json_args(args_json, kwargs_json)
+    if parse_err:
+        return ExecuteMethodResponse(success=False, error=parse_err)
 
     try:
-        args = []
-        kwargs = {}
-
-        if args_json:
-            try:
-                args = json.loads(args_json)
-                if not isinstance(args, list):
-                    return ExecuteMethodResponse(success=False, error="args_json must be a JSON array")
-            except json.JSONDecodeError as e:
-                return ExecuteMethodResponse(success=False, error=f"Invalid args_json: {e}")
-
-        if kwargs_json:
-            try:
-                kwargs = json.loads(kwargs_json)
-                if not isinstance(kwargs, dict):
-                    return ExecuteMethodResponse(success=False, error="kwargs_json must be a JSON object")
-            except json.JSONDecodeError as e:
-                return ExecuteMethodResponse(success=False, error=f"Invalid kwargs_json: {e}")
-
-        # Merge default context if configured (no-op when env var unset)
-        merged_ctx = _merge_context(kwargs.get("context"))
-        if merged_ctx is not None:
-            kwargs["context"] = merged_ctx
-
-        # --- resolve_json: auto-resolve Many2one names to IDs ---
         if resolve_json:
-            try:
-                resolves = json.loads(resolve_json)
-                if not isinstance(resolves, dict):
-                    return ExecuteMethodResponse(success=False, error="resolve_json must be a JSON object")
-            except json.JSONDecodeError as e:
-                return ExecuteMethodResponse(success=False, error=f"Invalid resolve_json: {e}")
+            args, failure = _resolve_many2one_names(odoo, resolve_json, method, args, start_time)
+            if failure:
+                return failure
 
-            resolved_values = {}
-            for field_name, spec in resolves.items():
-                target_model = spec.get("model")
-                search_term = spec.get("search")
-                if not target_model or not search_term:
-                    return ExecuteMethodResponse(
-                        success=False,
-                        error=f"resolve_json['{field_name}'] requires 'model' and 'search' keys",
-                    )
-                # Validate target model name format
-                model_err = _validate_model(target_model)
-                if model_err:
-                    return ExecuteMethodResponse(
-                        success=False,
-                        error=f"resolve_json['{field_name}']: {model_err}",
-                    )
-                # Block reads against security-critical models
-                if target_model in BLOCKED_MODELS:
-                    return ExecuteMethodResponse(
-                        success=False,
-                        error=f"resolve_json['{field_name}']: model '{target_model}' is blocked for safety.",
-                    )
-                try:
-                    matches = odoo.execute_method(target_model, "name_search", name=search_term, limit=5)
-                    if not matches:
-                        elapsed_ms = (time.time() - start_time) * 1000
-                        return ExecuteMethodResponse(
-                            success=False,
-                            error=f"resolve_json: No match for '{search_term}' in {target_model}",
-                            hint=f"Search {target_model} manually to find the correct record",
-                            execution_time_ms=round(elapsed_ms, 2),
-                        )
-                    if len(matches) > 1:
-                        options = [f"  {m[0]}: {m[1]}" for m in matches[:5]]
-                        elapsed_ms = (time.time() - start_time) * 1000
-                        return ExecuteMethodResponse(
-                            success=False,
-                            error=f"resolve_json: Ambiguous match for '{search_term}' in {target_model} ({len(matches)} results)",
-                            hint="Multiple matches found:\n"
-                            + "\n".join(options)
-                            + "\nUse the numeric ID directly instead.",
-                            execution_time_ms=round(elapsed_ms, 2),
-                        )
-                    resolved_values[field_name] = matches[0][0]  # Use the ID
-                except Exception as e:
-                    elapsed_ms = (time.time() - start_time) * 1000
-                    return ExecuteMethodResponse(
-                        success=False,
-                        error=f"resolve_json: Failed to resolve '{field_name}': {e}",
-                        execution_time_ms=round(elapsed_ms, 2),
-                    )
+        rejected = _reject_private_method(model, method, start_time)
+        if rejected:
+            return rejected
 
-            # Inject resolved IDs into args (for write/create methods)
-            if resolved_values and args:
-                if method == "write" and len(args) >= 2 and isinstance(args[1], dict):
-                    args[1].update(resolved_values)
-                elif method == "create":
-                    if isinstance(args[0], dict):
-                        args[0].update(resolved_values)
-                    elif isinstance(args[0], list):
-                        for vals in args[0]:
-                            if isinstance(vals, dict):
-                                vals.update(resolved_values)
+        gated = _classify_and_gate(odoo, model, method, args, kwargs, confirmed, confirmation_token, start_time)
+        if gated:
+            return gated
 
-        # Static fallback check for known private methods
-        if method in PRIVATE_METHOD_HINTS:
-            elapsed_ms = (time.time() - start_time) * 1000
-            return ExecuteMethodResponse(
-                success=False,
-                error=f"Method '{method}' is @api.private and cannot be called via RPC.",
-                hint=PRIVATE_METHOD_HINTS[method],
-                execution_time_ms=round(elapsed_ms, 2),
-            )
-
-        # Dynamic check: if method starts with _ and live doc confirms it's not public
-        if method.startswith("_"):
-            live_doc = _get_live_doc(model)
-            if live_doc and method not in live_doc.get("methods", {}):
-                elapsed_ms = (time.time() - start_time) * 1000
-                return ExecuteMethodResponse(
-                    success=False,
-                    error=f"Method '{method}' is not a public method on {model}. It may be @api.private or doesn't exist.",
-                    hint=f"Use odoo://methods/{model} to see available public methods.",
-                    execution_time_ms=round(elapsed_ms, 2),
-                )
-
-        # --- Safety Classification ---
-        classification = classify_operation(model, method, args, kwargs, role=current_role())
-
-        if classification.risk_level == RiskLevel.BLOCKED:
-            audit_log(classification, confirmed=confirmed, executed=False)
-            elapsed_ms = (time.time() - start_time) * 1000
-            return ExecuteMethodResponse(
-                success=False,
-                pending_confirmation=True,
-                safety=classification,
-                error=classification.blocked_reason,
-                hint="Use the Odoo web interface instead.",
-                execution_time_ms=round(elapsed_ms, 2),
-            )
-
-        if classification.requires_confirmation:
-            # Phase 2: payload pre-flight against live fields_get.
-            # Only when the profile asks for it AND this is a write-shaped call.
-            if get_profile().validate_payloads and is_side_effect_method(method):
-                from .safety import validate_payload_against_schema as _validate_payload
-
-                _validation = _validate_payload(
-                    odoo,
-                    model,
-                    method,
-                    args=args,
-                    kwargs=kwargs,
-                )
-                if not _validation.ok:
-                    elapsed_ms = (time.time() - start_time) * 1000
-                    return ExecuteMethodResponse(
-                        success=False,
-                        error="Payload validation failed:\n  - " + "\n  - ".join(_validation.errors),
-                        hint=f"Read odoo://model/{model}/quick-schema for the field list.",
-                        execution_time_ms=round(elapsed_ms, 2),
-                    )
-
-            # Bind the token to the exact (model, method, args, kwargs) seen here.
-            # Args/kwargs are post-resolve_json and post-context-merge, so the digest
-            # captures what would actually be sent to Odoo.
-            payload = _payload_digest({"args": args, "kwargs": kwargs})
-            if not confirmed:
-                token = _issue_confirmation_token(model, method, payload)
-                audit_log(classification, confirmed=False, executed=False)
-                message = classification.reason
-                if classification.cascade_warning:
-                    message += f"\n\nWARNING: {classification.cascade_warning}"
-                elapsed_ms = (time.time() - start_time) * 1000
-                return ExecuteMethodResponse(
-                    success=False,
-                    pending_confirmation=True,
-                    safety=classification,
-                    error=message,
-                    hint=f"Re-call execute_method with confirmed=true and confirmation_token='{token}' to proceed.",
-                    execution_time_ms=round(elapsed_ms, 2),
-                )
-            else:
-                # Validate the confirmation token (must match model+method+payload digest)
-                token_err = _validate_confirmation_token(confirmation_token, model, method, payload)
-                if token_err:
-                    elapsed_ms = (time.time() - start_time) * 1000
-                    return ExecuteMethodResponse(
-                        success=False,
-                        error=f"Confirmation rejected: {token_err}",
-                        execution_time_ms=round(elapsed_ms, 2),
-                    )
-
-        if classification.risk_level != RiskLevel.SAFE:
-            audit_log(classification, confirmed=confirmed, executed=True)
-
-        # Apply smart limits for search methods
-        if method in ["search", "search_read"] and "limit" not in kwargs:
-            kwargs["limit"] = DEFAULT_LIMIT
-            logger.debug("Applied default limit=%d", DEFAULT_LIMIT)
-        elif method in ["search", "search_read"] and kwargs.get("limit", 0) > MAX_LIMIT:
-            kwargs["limit"] = MAX_LIMIT
-            logger.debug("Capped limit to %d", MAX_LIMIT)
-
-        # Normalize domain if needed
-        if method in ["search", "search_read", "search_count"] and args:
-            domain = args[0]
-            # Handle double-wrapped domains [[domain]]
-            if isinstance(domain, list) and len(domain) == 1 and isinstance(domain[0], list):
-                if domain[0] and isinstance(domain[0][0], list):
-                    args[0] = domain[0]
-
+        args, kwargs = _apply_search_defaults(method, args, kwargs)
         result = odoo.execute_method(model, method, *args, **kwargs)
-        elapsed_ms = (time.time() - start_time) * 1000
-        return ExecuteMethodResponse(success=True, result=result, execution_time_ms=round(elapsed_ms, 2))
+        return ExecuteMethodResponse(success=True, result=result, execution_time_ms=_elapsed_ms(start_time))
 
     except Exception as e:
         error_msg = str(e)
-
-        # Fallback for search_read failures (500 errors): try search + read
         if method == "search_read" and ("500" in error_msg or "Internal Server Error" in error_msg):
-            try:
-                # Extract parameters from kwargs
-                domain = kwargs.get("domain", [])
-                fields = kwargs.get("fields", [])
-                limit = kwargs.get("limit", 100)
-                offset = kwargs.get("offset", 0)
-                order = kwargs.get("order")
-                context = kwargs.get("context")
-
-                # Step 1: search for IDs
-                search_kwargs = {"domain": domain, "limit": limit, "offset": offset}
-                if order:
-                    search_kwargs["order"] = order
-                if context:
-                    search_kwargs["context"] = context
-                ids = odoo.execute_method(model, "search", **search_kwargs)
-
-                # Step 2: read the records
-                if ids:
-                    read_kwargs = {}
-                    if fields:
-                        read_kwargs["fields"] = fields
-                    if context:
-                        read_kwargs["context"] = context
-                    result = odoo.execute_method(model, "read", ids, **read_kwargs)
-                else:
-                    result = []
-
-                # Track this model/method as problematic (runtime detection)
-                analysis = _track_model_issue(model, method, error_msg, domain=domain, fields=fields)
-
-                elapsed_ms = (time.time() - start_time) * 1000
-                return ExecuteMethodResponse(
-                    success=True,
-                    result=result,
-                    fallback_used=True,
-                    issue_analysis=IssueAnalysis(
-                        category=analysis["category"],
-                        cause=analysis["cause"],
-                        domain_patterns=analysis["domain_patterns"],
-                        problematic_fields=analysis.get("problematic_fields", []),
-                        suggested_solutions=analysis["solutions"][:2],
-                        model_specific_advice=analysis.get("model_specific_advice", []),
-                    ),
-                    note=f"Fallback search+read used. Cause: {analysis['cause']}",
-                    execution_time_ms=round(elapsed_ms, 2),
-                )
-            except Exception as fallback_error:
-                # If fallback also fails, include both errors
-                elapsed_ms = (time.time() - start_time) * 1000
-                return ExecuteMethodResponse(
-                    success=False,
-                    error=f"{error_msg}; Fallback also failed: {fallback_error}",
-                    suggestion="Both search_read and fallback search+read failed. Check odoo://model-limitations for known issues.",
-                    execution_time_ms=round(elapsed_ms, 2),
-                )
-
-        suggestion = get_error_suggestion(error_msg, model, method)
-        elapsed_ms = (time.time() - start_time) * 1000
-
-        # Auto-suggest schema introspection for field-related errors
-        hint = None
-        field_error_patterns = ["invalid field", "unknown field", "field_get", "keyerror", "no field", "does not exist"]
-        error_lower = error_msg.lower()
-        if any(p in error_lower for p in field_error_patterns):
-            hint = f"Field name error detected. Read odoo://model/{model}/fields to get exact field names, or odoo://model/{model}/schema for full details."
-        elif suggestion:
-            hint = f"Check odoo://methods/{model} or odoo://module-knowledge for special methods"
-
-        return ExecuteMethodResponse(
-            success=False,
-            error=error_msg,
-            suggestion=suggestion,
-            hint=hint,
-            execution_time_ms=round(elapsed_ms, 2),
-        )
+            return _search_read_fallback(odoo, model, kwargs, error_msg, start_time)
+        return _failure_response(model, method, error_msg, start_time)
 
 
 @mcp.tool(
@@ -600,12 +698,8 @@ async def batch_execute(
             if is_side_effect_method(method):
                 return BatchExecuteResponse(
                     success=False,
-                    error=(
-                        f"read-only mode is active: batch contains side-effect "
-                        f"operation '{method}' on '{op.get('model', '?')}'. "
-                        f"Set MCP_READ_ONLY=false to enable writes (or change "
-                        f"MCP_SAFETY_MODE away from 'locked' if MCP_READ_ONLY "
-                        f"is not set explicitly)."
+                    error=_read_only_error(
+                        f"batch contains side-effect operation '{method}' on '{op.get('model', '?')}'"
                     ),
                     results=[],
                     total_operations=len(operations),
@@ -649,9 +743,8 @@ async def batch_execute(
     if any_needs_confirmation:
         # Bind the token to the exact list of operations. Substituting any op (or even
         # a single arg within an op) on the re-call produces a different digest.
-        batch_payload = _payload_digest(operations)
-        if not confirmed:
-            token = _issue_confirmation_token("__batch__", "batch", batch_payload)
+        decision = _confirmation_gate("__batch__", "batch", operations, confirmed, confirmation_token)
+        if decision.outcome == "issue":
             for c in classifications:
                 if c.requires_confirmation:
                     audit_log(c, confirmed=False, executed=False)
@@ -662,25 +755,22 @@ async def batch_execute(
                 total_operations=len(operations),
                 successful_operations=0,
                 failed_operations=0,
-                error=f"Batch contains operations that require confirmation. Review safety_preview and re-call with confirmed=true and confirmation_token='{token}'.",
+                error=f"Batch contains operations that require confirmation. Review safety_preview and re-call with confirmed=true and confirmation_token='{decision.token}'.",
                 pending_confirmation=True,
                 safety_preview=classifications,
                 overall_risk=overall_risk.value,
                 execution_time_ms=round(elapsed_ms, 2),
             )
-        else:
-            token_err = _validate_confirmation_token(confirmation_token, "__batch__", "batch", batch_payload)
-            if token_err:
-                elapsed_ms = (time.time() - start_time) * 1000
-                return BatchExecuteResponse(
-                    success=False,
-                    results=[],
-                    total_operations=len(operations),
-                    successful_operations=0,
-                    failed_operations=0,
-                    error=f"Confirmation rejected: {token_err}",
-                    execution_time_ms=round(elapsed_ms, 2),
-                )
+        if decision.outcome == "reject":
+            return BatchExecuteResponse(
+                success=False,
+                results=[],
+                total_operations=len(operations),
+                successful_operations=0,
+                failed_operations=0,
+                error=decision.error,
+                execution_time_ms=_elapsed_ms(start_time),
+            )
 
     # Audit non-safe operations that will proceed
     for c in classifications:
@@ -719,7 +809,7 @@ async def batch_execute(
                 if merged_ctx is not None:
                     kwargs["context"] = merged_ctx
 
-                result = odoo.execute_method(model, method, *args, **kwargs)
+                result = await _run_blocking(odoo.execute_method, model, method, *args, **kwargs)
                 results.append(BatchOperationResult(operation_index=idx, success=True, result=result))
                 successful += 1
 
@@ -950,18 +1040,11 @@ async def execute_workflow(
     start_time = time.time()
 
     # Read-only kill-switch — workflows are by definition multi-step actions.
-    profile = get_profile()
-    if profile.read_only:
+    if get_profile().read_only:
         return ExecuteWorkflowResponse(
             workflow=workflow,
             success=False,
-            error=(
-                f"read-only mode is active: workflow '{workflow}' is a "
-                f"multi-step action and is rejected under MCP_READ_ONLY=true. "
-                f"Set MCP_READ_ONLY=false to enable workflows (or change "
-                f"MCP_SAFETY_MODE away from 'locked' if MCP_READ_ONLY is "
-                f"not set explicitly)."
-            ),
+            error=_read_only_error(f"workflow '{workflow}' is a multi-step action"),
         )
 
     # Get Odoo client directly (works in both sync and background task modes)
@@ -982,9 +1065,8 @@ async def execute_workflow(
         # Bind the token to (workflow_name, params). A different order_id or partner_id
         # on the re-call produces a different digest and is rejected.
         workflow_key = workflow.lower().strip()
-        wf_payload = _payload_digest(params)
-        if not confirmed:
-            token = _issue_confirmation_token("__workflow__", workflow_key, wf_payload)
+        decision = _confirmation_gate("__workflow__", workflow_key, params, confirmed, confirmation_token)
+        if decision.outcome == "issue":
             elapsed_ms = (time.time() - start_time) * 1000
             return ExecuteWorkflowResponse(
                 workflow=workflow,
@@ -1004,19 +1086,19 @@ async def execute_workflow(
                 ],
                 overall_risk=safety_preview.overall_risk.value,
                 error=safety_preview.message,
-                tip=f"Re-call execute_workflow with confirmed=true and confirmation_token='{token}' to proceed.",
+                tip=(
+                    f"Re-call execute_workflow with confirmed=true and "
+                    f"confirmation_token='{decision.token}' to proceed."
+                ),
                 execution_time_ms=round(elapsed_ms, 2),
             )
-        else:
-            token_err = _validate_confirmation_token(confirmation_token, "__workflow__", workflow_key, wf_payload)
-            if token_err:
-                elapsed_ms = (time.time() - start_time) * 1000
-                return ExecuteWorkflowResponse(
-                    workflow=workflow,
-                    success=False,
-                    error=f"Confirmation rejected: {token_err}",
-                    execution_time_ms=round(elapsed_ms, 2),
-                )
+        if decision.outcome == "reject":
+            return ExecuteWorkflowResponse(
+                workflow=workflow,
+                success=False,
+                error=decision.error,
+                execution_time_ms=_elapsed_ms(start_time),
+            )
 
     workflow_lower = workflow.lower().strip()
     steps: List[WorkflowStepResult] = []
@@ -1039,10 +1121,16 @@ async def execute_workflow(
             # Step 1: Convert to opportunity (if still a lead)
             await progress.set_message("Converting lead to opportunity...")
             try:
-                lead = odoo.search_read("crm.lead", [["id", "=", lead_id]], fields=["type"], limit=1)
+                lead = await _run_blocking(
+                    odoo.search_read, "crm.lead", [["id", "=", lead_id]], fields=["type"], limit=1
+                )
                 if lead and lead[0].get("type") == "lead":
-                    odoo.execute_method(
-                        "crm.lead", "convert_opportunity", [lead_id], partner_id=params.get("partner_id", False)
+                    await _run_blocking(
+                        odoo.execute_method,
+                        "crm.lead",
+                        "convert_opportunity",
+                        [lead_id],
+                        partner_id=params.get("partner_id", False),
                     )
                     steps.append(WorkflowStepResult(step="convert_to_opportunity", success=True))
                 else:
@@ -1058,7 +1146,7 @@ async def execute_workflow(
             # Step 2: Mark as won
             await progress.set_message("Marking opportunity as won...")
             try:
-                odoo.execute_method("crm.lead", "action_set_won", [lead_id])
+                await _run_blocking(odoo.execute_method, "crm.lead", "action_set_won", [lead_id])
                 steps.append(WorkflowStepResult(step="mark_won", success=True))
             except Exception as e:
                 steps.append(WorkflowStepResult(step="mark_won", success=False, error=str(e)))
@@ -1118,7 +1206,7 @@ async def execute_workflow(
                     "partner_id": partner_id,
                     "invoice_line_ids": invoice_lines,
                 }
-                invoice_id = odoo.execute_method("account.move", "create", [invoice_vals])
+                invoice_id = await _run_blocking(odoo.execute_method, "account.move", "create", [invoice_vals])
                 steps.append(WorkflowStepResult(step="create_invoice", success=True, result={"invoice_id": invoice_id}))
             except Exception as e:
                 steps.append(WorkflowStepResult(step="create_invoice", success=False, error=str(e)))
@@ -1135,7 +1223,7 @@ async def execute_workflow(
             await progress.set_message("Posting invoice...")
             if params.get("post", True):
                 try:
-                    odoo.execute_method("account.move", "action_post", [invoice_id])
+                    await _run_blocking(odoo.execute_method, "account.move", "action_post", [invoice_id])
                     steps.append(WorkflowStepResult(step="post_invoice", success=True))
                 except Exception as e:
                     steps.append(WorkflowStepResult(step="post_invoice", success=False, error=str(e)))

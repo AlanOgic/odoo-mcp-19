@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **odoo-mcp-19** — Standalone MCP server for Odoo 19+ using the **v2 JSON-2 API** (`POST /json/2/{model}/{method}`, Bearer token auth, named args only). No v1 fallback.
 
-- **Version**: 1.16.0 · **Python**: 3.10+ · **MCP**: 2025-11-25 (FastMCP `>=3.4.6,<4`; `cryptography>=42` is a *direct* dependency of `token_crypto`, not just a transitive Authlib one)
+- **Version**: 1.16.0 · **Python**: 3.10+ · **MCP**: 2025-11-25 (FastMCP `>=3.4.6,<4`; `cryptography>=42` is a *direct* dependency of `token_crypto`, not just a transitive Authlib one; `anyio>=4` is a direct dependency of the event-loop offload in `server.py` / `resources.py`)
 - **The `<4` ceiling is deliberate.** FastMCP 4.x targets MCP spec 2026-07-28 and is not a drop-in — see `docs/mcp-2026-07-28-migration.md` and `tests/test_dependency_pins.py`, which fails the build if the bound is widened or the environment drifts. **`uv.lock` is gitignored** (`.gitignore`: *"project uses pip + pyproject.toml"*) — it pins only your local `.venv`, never the documented `pip install git+…` path, so `pyproject.toml` is the only thing between a fresh install and FastMCP 4.x. Do not relax the ceiling on the strength of the lockfile.
 - **Surface**: 5 tools, 28 `odoo://` resources, 19 prompts (12 generic + 7 `cyanview-*` workflow skill prompts)
 - **Discovery is via resources, action is via tools** — there is no `list_models` tool, agents read `odoo://models` instead.
@@ -47,8 +47,8 @@ python tests/live/test_locked_mode_live.py
 
 # Format + lint + typecheck
 black . && isort .   # both clean; isort has skip_gitignore=true so it skips venvs like black does
-ruff check .         # known baseline: 33 errors (27 E501, 6 E402) — see below
-mypy src/odoo_mcp    # known baseline: 75 errors, mostly [index]/[assignment] in resources.py + server.py
+ruff check .         # known baseline: 29 errors (23 E501, 6 E402) — see below
+mypy src/odoo_mcp    # known baseline: 76 errors, mostly [index]/[assignment] in resources.py + server.py
 
 # If `uv run pytest` reports ModuleNotFoundError: No module named 'odoo_mcp' (17 collection
 # errors), the dev extras are not installed — run `uv sync --extra dev` first. uv also ignores a
@@ -64,7 +64,7 @@ docker compose -f docker-compose.yml -f docker-compose.multiuser.yml up -d
 
 Note: live tests under `tests/live/` are **script-style runners**, not pytest modules — invoke them directly with `python`. They mutate environment state.
 
-- **Unit (no Odoo)**: everything in `tests/` except `tests/live/` — run with `pytest --ignore=tests/live`. Highlights: `test_resources.py` patches `get_odoo_client` with a stub (pins resource-layer validation/error handling); `test_arg_mapping.py` pins the positional → JSON-2 named-arg contract; `test_odoo_client.py` pins bearer auth + no `result`-envelope unwrap; `test_token_gate.py` / `test_safety.py` / `test_safety_role.py` cover the gate and role-based classification; the multi-user tests (`test_auth_verifier.py`, `test_token_crypto.py`, `test_user_clients.py`, `test_skill_visibility.py`, `test_skill_prompts.py`) use the `users_db_seed` fixture in `tests/conftest.py`, which builds a temp registry with the **exact CLORAG DDL and crypto contract** — keep that fixture contract-true. Locked mode (v1.16.0) is pinned by `test_safety_profile.py` (env → profile resolution), `test_read_only_guard.py`, `test_write_allowlist.py`, `test_payload_validation.py`, `test_side_effect_predicate.py`, `test_fields_cache.py`, `test_main_bind_default.py`, and `test_server_status_resource.py`.
+- **Unit (no Odoo)**: everything in `tests/` except `tests/live/` — run with `pytest --ignore=tests/live`. Highlights: `test_resources.py` patches `get_odoo_client` with a stub (pins resource-layer validation/error handling); `test_arg_mapping.py` pins the positional → JSON-2 named-arg contract; `test_odoo_client.py` pins bearer auth + no `result`-envelope unwrap; `test_token_gate.py` / `test_safety.py` / `test_safety_role.py` cover the gate and role-based classification; the multi-user tests (`test_auth_verifier.py`, `test_token_crypto.py`, `test_user_clients.py`, `test_skill_visibility.py`, `test_skill_prompts.py`) use the `users_db_seed` fixture in `tests/conftest.py`, which builds a temp registry with the **exact CLORAG DDL and crypto contract** — keep that fixture contract-true. Locked mode (v1.16.0) is pinned by `test_safety_profile.py` (env → profile resolution), `test_read_only_guard.py`, `test_write_allowlist.py`, `test_payload_validation.py`, `test_side_effect_predicate.py`, `test_fields_cache.py`, `test_main_bind_default.py`, and `test_server_status_resource.py`. `test_event_loop_offload.py` pins that every template resource is registered as a coroutine and that `batch_execute` / `execute_workflow` run their Odoo calls off the loop thread; `test_tool_execution_paths.py` is the characterization suite for `resolve_json`, the `search_read` fallback, search defaults, both workflows and non-atomic batches — extend it before touching those phases.
 - **Live (need `.env`)**: anything under `tests/live/` — run with `python <file>`, not pytest.
 
 **CI**: two workflows in `.github/workflows/`:
@@ -73,7 +73,7 @@ Note: live tests under `tests/live/` are **script-style runners**, not pytest mo
 
 Run `black . && isort .` before pushing — CI enforces formatting.
 
-**Lint and typecheck are not clean gates.** Baseline as of v1.16.0: `pytest --ignore=tests/live` → **374 passed**; `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **33 errors** (27 E501, 6 E402); `mypy src/odoo_mcp` → **75 errors** (38 `resources.py`, 24 `server.py`, 10 `utils.py`, 1 each in `prompts.py` / `constants.py` / `user_clients.py`; counts drift slightly with the mypy version — 2.1.0 here). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
+**Lint and typecheck are not clean gates.** Baseline as of the post-1.16.0 perf/quality pass: `pytest --ignore=tests/live` → **423 passed** (unit coverage 66 %); `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **29 errors** (23 E501, 6 E402); `mypy src/odoo_mcp` → **76 errors** (38 `resources.py`, 24 `server.py`, 10 `utils.py`, 1 each in `prompts.py` / `constants.py` / `user_clients.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.1.0 here). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
 
 ## High-level architecture
 
@@ -83,8 +83,14 @@ The package was split in v1.14.0 (commit `ea10d79`) from a 3762-line `server.py`
 src/odoo_mcp/
 ├── __main__.py        CLI entry: STDIO/HTTP bootstrap, --setup wizard, HTTP auth preflight
 ├── app.py             FastMCP instance + icon + auth provider selection + middleware wiring — imported first
-├── server.py          5 tools + _RESOURCE_ROUTES table + search_read fallback + safety integration
-├── resources.py       28 odoo:// resource handlers
+├── server.py          5 tools + _RESOURCE_ROUTES table + safety integration; execute_method is an
+│                      orchestrator over phase helpers (_parse_json_args, _resolve_many2one_names,
+│                      _reject_private_method, _classify_and_gate, _apply_search_defaults,
+│                      _search_read_fallback, _failure_response); _confirmation_gate and
+│                      _read_only_error are shared by all three write-capable tools; _run_blocking
+│                      offloads client calls from the async tools
+├── resources.py       28 odoo:// resource handlers; parameterized ones registered via
+│                      _threaded_resource so the blocking body runs off the event loop
 ├── prompts.py         12 generic guided prompts
 ├── skill_prompts.py   7 cyanview-* workflow prompts, bodies loaded from skills/*.md (frontmatter stripped)
 ├── safety.py          Risk classification + token gate + role-based blocking + read-only/
@@ -104,8 +110,10 @@ src/odoo_mcp/
 ├── constants.py       Limits, regex validators, MODEL_STATE_MACHINES, default context
 ├── models.py          Pydantic response schemas (structured output)
 ├── utils.py           Compact schema builder, error suggestions, and two TTL+LRU caches:
-│                      `_DOC_CACHE` (/doc-bearer, 300s) and `_FIELDS_CACHE` (live fields_get via
-│                      `get_fields_for_model()`, 60s — shorter, it backs the locked-mode payload pre-flight)
+│                      `_DOC_CACHE` (/doc-bearer, 300s) and `_FIELDS_CACHE` (live fields_get, 60s,
+│                      keyed by (client url, username, model, attributes) — shared by the compact
+│                      schema resources and the locked-mode payload pre-flight via
+│                      `fields_cache_key/get/put` and `get_fields_for_model()`)
 ├── skills/*.md        Packaged Cyanview skill bodies (copied from curated ~/.claude/skills/cyanview-*)
 └── module_knowledge.json   Special methods for 13 modules + the static `model_limitations` block
                             (loaded at startup, shipped as package data)
@@ -125,6 +133,10 @@ src/odoo_mcp/
 9. On any error: match against ~25 patterns in `utils.get_error_suggestion` (with `{model}` templating). Server tracebacks are logged to stderr, **never** forwarded to clients.
 
 **2. Resource bridge** — `read_resource(uri)` exists because some clients (Claude Desktop) don't speak resource templates. The `_RESOURCE_ROUTES` table in `server.py` maps URIs to the same handlers `resources.py` registers, so the same `odoo://...` URI works either way. Two properties nothing tests: **parity** — 28 routes ↔ 28 `@mcp.resource` handlers today, and adding a resource without adding a route silently 404s the bridge while the template client keeps working; and **order** — the list is matched top-down, so `odoo://module-knowledge/{name}` must stay above `odoo://module-knowledge`, and the specific `odoo://model/{m}/…` variants above the catch-all `odoo://model/{m}`. `read_resource` also **truncates at 15 000 chars** (`_READ_RESOURCE_MAX_CHARS`), appending a `_truncated` JSON marker — so `odoo://model/{m}/schema` (~300 KB) returns a fragment unless the caller passes `max_chars=0`.
+
+**Event-loop rule (post-1.16.0).** FastMCP 3.x runs sync tools and *static* resources in the anyio threadpool, but calls a sync *template* resource body inline on the loop and, of course, runs `async def` tools on the loop. `OdooClient` is synchronous `requests`, so: every parameterized `odoo://…/{x}` resource must be registered with `resources._threaded_resource` (not bare `@mcp.resource`), and any Odoo call inside an `async def` tool must go through `server._run_blocking`. `tests/test_event_loop_offload.py` enforces both. Contextvars propagate through `anyio.to_thread`, so per-user client resolution is unaffected.
+
+**Schema fetch rule.** Compact views (quick-schema, /fields, bundle, session-bootstrap, dynamic /workflow) and the payload pre-flight must request `fields_get(attributes=COMPACT_FIELD_ATTRIBUTES)` through `_fetch_model_fields(..., attributes=…)` / `get_fields_for_model(..., attributes=…)` so they share one cache entry per model; only `/schema` and `odoo://model/{model}` fetch the full definition.
 
 **3. Live doc enrichment** — `odoo://methods/{model}` and `@api.private` detection both consult `/doc-bearer/<model>.json` (provided by Odoo's `api_doc` module, requires `api_doc.group_allow_doc` on the API user). Cached in `_DOC_CACHE`: 5-min TTL, 100-entry LRU, `threading.Lock`. Falls back silently to static data if unavailable.
 

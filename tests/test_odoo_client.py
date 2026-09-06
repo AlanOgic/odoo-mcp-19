@@ -109,3 +109,31 @@ class TestErrorBodyNeverLeaksTraceback:
 
         assert "Invalid apikey" in str(exc.value)
         assert "SECRET_INTERNALS" not in str(exc.value)
+
+
+class TestFieldsGetAttributes:
+    """``get_model_fields`` narrows the request when an attribute subset is given.
+
+    A full ``fields_get`` on a big model is ~300 KB; the compact schema views only
+    read a handful of attributes, so forwarding ``attributes`` to JSON-2 is what
+    makes ``odoo://bundle`` and ``session-bootstrap`` cheap.
+    """
+
+    def test_attributes_are_forwarded_to_fields_get(self):
+        client = _make_client()
+        client.session = MagicMock()
+        client.session.post.return_value = _stub_response({"name": {"type": "char"}})
+
+        client.get_model_fields("res.partner", attributes=["type", "required"])
+
+        payload = client.session.post.call_args.kwargs["json"]
+        assert payload == {"attributes": ["type", "required"]}
+
+    def test_no_attributes_requests_the_full_definition(self):
+        client = _make_client()
+        client.session = MagicMock()
+        client.session.post.return_value = _stub_response({"name": {"type": "char"}})
+
+        client.get_model_fields("res.partner")
+
+        assert client.session.post.call_args.kwargs["json"] == {}

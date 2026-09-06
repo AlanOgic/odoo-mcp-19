@@ -16,6 +16,8 @@ import json
 from unittest.mock import MagicMock, patch
 
 import odoo_mcp.resources as resources
+from odoo_mcp.constants import COMPACT_FIELD_ATTRIBUTES
+from odoo_mcp.safety import validate_payload_against_schema
 
 # A minimal but realistic fields_get payload for a valid model.
 _VALID_FIELDS = {
@@ -38,8 +40,12 @@ _CRYPTIC = "object has no attribute"
 def _stub_client(fields_by_model):
     """Return a MagicMock client whose get_model_fields looks up per-model."""
     client = MagicMock()
-    client.get_model_fields.side_effect = lambda model: fields_by_model[model]
+    client.get_model_fields.side_effect = lambda model, attributes=None: fields_by_model[model]
     return client
+
+
+def _attributes_requested(client) -> list:
+    return [call.kwargs.get("attributes") for call in client.get_model_fields.call_args_list]
 
 
 # ----- quick-schema -----
@@ -142,3 +148,59 @@ def test_find_model_multiword_partial_match_still_resolves():
     models = {m["model"] for m in out["all_matches"]}
     assert "res.partner" in models
     assert out["source"] == "alias-token"
+
+
+# ----- fields_get narrowing + shared cache -----
+
+
+def test_quick_schema_requests_only_compact_attributes():
+    client = _stub_client({"res.partner": _VALID_FIELDS})
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        resources.get_model_quick_schema("res.partner")
+    assert _attributes_requested(client) == [list(COMPACT_FIELD_ATTRIBUTES)]
+
+
+def test_fields_light_requests_only_compact_attributes():
+    client = _stub_client({"res.partner": _VALID_FIELDS})
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        resources.get_model_fields_light("res.partner")
+    assert _attributes_requested(client) == [list(COMPACT_FIELD_ATTRIBUTES)]
+
+
+def test_full_schema_requests_the_complete_definition():
+    client = _stub_client({"res.partner": _VALID_FIELDS})
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        resources.get_model_schema("res.partner")
+    assert _attributes_requested(client) == [None]
+
+
+def test_repeated_quick_schema_reads_hit_the_cache():
+    client = _stub_client({"res.partner": _VALID_FIELDS})
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        first = resources.get_model_quick_schema("res.partner")
+        second = resources.get_model_quick_schema("res.partner")
+    assert first == second
+    assert client.get_model_fields.call_count == 1
+
+
+def test_bundle_and_bootstrap_share_the_compact_cache_entry(monkeypatch):
+    monkeypatch.setenv("MCP_BOOTSTRAP_MODELS", "res.partner,sale.order")
+    client = _stub_client({"res.partner": _VALID_FIELDS, "sale.order": _VALID_FIELDS})
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        resources.get_bundle("res.partner,sale.order")
+        resources.get_session_bootstrap()
+        resources.get_model_quick_schema("sale.order")
+    # Two models, one fetch each — bootstrap and quick-schema reuse the bundle's entries.
+    assert client.get_model_fields.call_count == 2
+    assert set(map(tuple, _attributes_requested(client))) == {tuple(COMPACT_FIELD_ATTRIBUTES)}
+
+
+def test_payload_preflight_reuses_the_quick_schema_fetch():
+    """quick-schema then a gated write must cost one fields_get, not two."""
+    client = _stub_client({"res.partner": _VALID_FIELDS})
+    client.execute_method.side_effect = AssertionError("pre-flight must not refetch fields_get")
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        resources.get_model_quick_schema("res.partner")
+        result = validate_payload_against_schema(client, "res.partner", "write", args=[[1], {"name": "X"}])
+    assert result.ok is True
+    assert client.get_model_fields.call_count == 1
