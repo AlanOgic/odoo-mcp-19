@@ -109,7 +109,7 @@ def _categorize_error(error_msg: str) -> str:
     return "unknown"
 
 
-def _detect_domain_pattern(domain: List, model: str = None) -> List[str]:
+def _detect_domain_pattern(domain: List, model: Optional[str] = None) -> List[str]:
     """Detect patterns in domain that might cause issues."""
     patterns = []
     if not domain:
@@ -153,7 +153,7 @@ def _detect_domain_pattern(domain: List, model: str = None) -> List[str]:
     return patterns
 
 
-def _detect_problematic_fields(fields: List, model: str = None) -> List[str]:
+def _detect_problematic_fields(fields: List, model: Optional[str] = None) -> List[str]:
     """Detect fields that might cause issues when included in search_read."""
     problematic = []
     if not fields:
@@ -268,7 +268,7 @@ def _track_model_issue(
     }
 
 
-def get_error_suggestion(error_msg: str, model: str = None, method: str = None) -> Optional[str]:
+def get_error_suggestion(error_msg: str, model: Optional[str] = None, method: Optional[str] = None) -> Optional[str]:
     """Get a helpful suggestion based on error message patterns.
 
     Supports {model} template variable in suggestions (substituted with actual model name).

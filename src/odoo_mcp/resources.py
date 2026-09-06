@@ -423,6 +423,9 @@ def get_session_bootstrap() -> str:
 )
 def get_record(model_name: str, record_id: str) -> str:
     """Get a specific record by ID"""
+    err = _validate_model(model_name)
+    if err:
+        return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
     odoo_client = get_odoo_client()
     try:
         if not record_id or record_id == "None":
@@ -442,6 +445,9 @@ def get_record(model_name: str, record_id: str) -> str:
 )
 def get_methods(model_name: str) -> str:
     """Get available methods for a model: static catalog + module knowledge + live /doc-bearer/ enrichment."""
+    err = _validate_model(model_name)
+    if err:
+        return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
     return json.dumps(build_methods_payload(model_name, _get_live_doc(model_name)), separators=(",", ":"))
 
 
@@ -477,6 +483,9 @@ def _selection_options(odoo_client: Any, model_name: str, fields_meta: list) -> 
 )
 def get_model_docs(model_name: str) -> str:
     """Get comprehensive documentation for a model from Odoo's internal metadata."""
+    err = _validate_model(model_name)
+    if err:
+        return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
     odoo_client = get_odoo_client()
 
     try:
@@ -1177,6 +1186,9 @@ def search_tools_resource(query: str) -> str:
 )
 def discover_actions_resource(model: str) -> str:
     """Discover all actions available for a model."""
+    err = _validate_model(model)
+    if err:
+        return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
     odoo_client = get_odoo_client()
 
     result = {

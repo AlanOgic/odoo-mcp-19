@@ -566,11 +566,11 @@ def execute_method(
     ctx: Context,
     model: str,
     method: str,
-    args_json: str = None,
-    kwargs_json: str = None,
+    args_json: str | None = None,
+    kwargs_json: str | None = None,
     confirmed: bool = False,
-    confirmation_token: str = None,
-    resolve_json: str = None,
+    confirmation_token: str | None = None,
+    resolve_json: str | None = None,
 ) -> ExecuteMethodResponse:
     """
     Execute any method on an Odoo model.
@@ -868,7 +868,6 @@ class OdooConnectionConfig:
 
     url: str
     database: str
-    auth_method: str
     username: str
 
 
@@ -876,7 +875,8 @@ class OdooConnectionConfig:
     description="""Interactive Odoo connection configuration using user elicitation.
 
     This tool guides users through setting up Odoo connection parameters
-    interactively, collecting URL, database, and authentication details.
+    interactively, collecting URL, database and username; authentication is
+    always an API key (the JSON-2 API accepts nothing else).
 
     Note: This requires an MCP client that supports user elicitation.
     The collected configuration is returned but not automatically applied -
@@ -933,20 +933,7 @@ async def configure_odoo(ctx: Context) -> Dict[str, Any]:
                 results["error"] = "Configuration cancelled by user"
                 return results
 
-        # Step 3: Ask for authentication method
-        auth_result = await ctx.elicit(
-            message="Select authentication method:",
-            response_type=["API Key (Recommended)", "Password"],
-        )
-
-        match auth_result:
-            case AcceptedElicitation(data=auth_method):
-                results["config"]["auth_method"] = "api_key" if "API" in auth_method else "password"
-            case DeclinedElicitation() | CancelledElicitation():
-                results["error"] = "Configuration cancelled by user"
-                return results
-
-        # Step 4: Ask for username
+        # Step 3: Ask for username
         user_result = await ctx.elicit(
             message="Enter your Odoo username (email):",
             response_type=str,
@@ -967,12 +954,13 @@ async def configure_odoo(ctx: Context) -> Dict[str, Any]:
             "ODOO_USERNAME": results["config"]["username"],
         }
 
-        if results["config"]["auth_method"] == "api_key":
-            results["env_vars"]["ODOO_API_KEY"] = "<your-api-key>"
-            results["note"] = "Generate an API key in Odoo: Settings > Users > Preferences > API Keys"
-        else:
-            results["env_vars"]["ODOO_PASSWORD"] = "<your-password>"
-            results["note"] = "Using password authentication. API keys are recommended for production."
+        # JSON-2 authenticates with bearer API keys only — a login password is
+        # rejected by Odoo 19 with HTTP 401, so the wizard never offers it.
+        results["env_vars"]["ODOO_API_KEY"] = "<your-api-key>"
+        results["note"] = (
+            "Generate an API key in Odoo: Settings > Users > Preferences > API Keys. "
+            "The Odoo 19 JSON-2 API accepts API keys only (passwords are rejected)."
+        )
 
         results["instructions"] = "Set these environment variables to configure the Odoo MCP server:\n" + "\n".join(
             f"export {k}='{v}'" for k, v in results["env_vars"].items()
