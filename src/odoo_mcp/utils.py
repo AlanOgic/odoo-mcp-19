@@ -230,6 +230,7 @@ def _track_model_issue(
                 cat_info["sample_errors"].pop(0)
 
         total_count = model_issues["total_count"]
+        occurrences = cat_info["count"]
 
     # Log detailed info (outside lock)
     logger.info(
@@ -263,7 +264,7 @@ def _track_model_issue(
         "problematic_fields": problematic_fields,
         "solutions": ERROR_CATEGORIES[category]["solutions"],
         "model_specific_advice": model_specific_advice,
-        "occurrences": cat_info["count"],
+        "occurrences": occurrences,
     }
 
 

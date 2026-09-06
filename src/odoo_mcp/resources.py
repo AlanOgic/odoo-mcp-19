@@ -7,9 +7,11 @@ FastMCP instance: static URIs via ``@mcp.resource``, parameterized URIs via
 to the worker threadpool — see the decorator's docstring).
 """
 
+import copy
 import functools
 import inspect
 import json
+import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -43,6 +45,8 @@ from .utils import (
     fields_cache_key,
     fields_cache_put,
 )
+
+logger = logging.getLogger(__name__)
 
 # ----- Internal helpers -----
 
@@ -722,8 +726,8 @@ def get_workflows() -> str:
                 custom_automations.append(
                     {"name": action.get("name"), "model": model_name, "state": action.get("state")}
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("ir.actions.server lookup skipped for odoo://workflows: %s", exc)
 
         return json.dumps(
             {
@@ -785,6 +789,18 @@ def get_domain_syntax() -> str:
     )
 
 
+def _snapshot_runtime_issues() -> Dict[str, Any]:
+    """Deep copy of the runtime-issue registry, taken under its lock.
+
+    The reader iterates nested dicts (categories, domain_patterns, sample_errors)
+    that ``_track_model_issue`` mutates from the tool threads; a shallow copy
+    still aliased those and could raise "dictionary changed size during
+    iteration" mid-report.
+    """
+    with _RUNTIME_ISSUES_LOCK:
+        return copy.deepcopy(RUNTIME_MODEL_ISSUES)
+
+
 @mcp.resource(
     "odoo://model-limitations",
     description="Known model limitations and workarounds for problematic models (static + runtime-detected)",
@@ -824,8 +840,7 @@ def get_model_limitations() -> str:
     all_domain_patterns = {}
     all_categories = {}
 
-    with _RUNTIME_ISSUES_LOCK:
-        runtime_snapshot = {k: dict(v) for k, v in RUNTIME_MODEL_ISSUES.items()}
+    runtime_snapshot = _snapshot_runtime_issues()
 
     for model, methods in runtime_snapshot.items():
         result["runtime_detected"][model] = {
@@ -1072,8 +1087,8 @@ def find_model_resource(concept: str) -> str:
             result["best_match"] = result["all_matches"][0]["model"]
             result["source"] = "ir.model"
             return json.dumps(result, indent=2)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("ir.model search failed for concept %r, falling back to fuzzy match: %s", concept, exc)
 
     # 3. Fuzzy match
     try:
@@ -1202,8 +1217,8 @@ def discover_actions_resource(model: str) -> str:
                     "type": action.get("state"),
                 }
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("ir.actions.server lookup skipped for odoo://actions/%s: %s", model, exc)
 
     # 4. Add usage examples
     result["usage_examples"] = [

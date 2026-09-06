@@ -36,7 +36,8 @@ _STATIC_TABLE: Dict[str, List[tuple[str, str, Optional[str]]]] = {
         (
             "read",
             "Read specific records by ID",
-            "load='_classic_read' (default) returns Many2one as (id, name); load=None returns raw ID for better performance",
+            "load='_classic_read' (default) returns Many2one as (id, name); "
+            "load=None returns raw ID for better performance",
         ),
         ("search_count", "Count matching records", None),
         (
@@ -47,7 +48,8 @@ _STATIC_TABLE: Dict[str, List[tuple[str, str, Optional[str]]]] = {
         (
             "formatted_read_group",
             "Aggregation with grouping (v19+ replacement for read_group)",
-            "Uses 'aggregates' param with 'field:agg' format (e.g. 'amount_total:sum', '__count'). Replaces deprecated read_group.",
+            "Uses 'aggregates' param with 'field:agg' format (e.g. 'amount_total:sum', '__count'). "
+            "Replaces deprecated read_group.",
         ),
     ],
     "write_methods": [
