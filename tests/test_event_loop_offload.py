@@ -25,11 +25,13 @@ import inspect
 import json
 import re
 import threading
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp import Client
 
+import odoo_mcp.app as app
 import odoo_mcp.resources as resources
 import odoo_mcp.server as server
 from odoo_mcp.app import mcp
@@ -54,6 +56,21 @@ def _recording_client(record: dict, **method_returns):
     for name, value in method_returns.items():
         getattr(client, name).side_effect = _make(name, value)
     return client
+
+
+@contextmanager
+def _stubbed(stub):
+    """Serve ``stub`` to the resource handlers *and* to the FastMCP lifespan.
+
+    ``Client(mcp)`` runs ``app_lifespan``, which builds the env client at
+    startup; patching only ``resources`` would make these tests depend on a
+    real ODOO_* config (CI deliberately has none).
+    """
+    with (
+        patch.object(resources, "get_odoo_client", return_value=stub),
+        patch.object(app, "get_odoo_client", return_value=stub),
+    ):
+        yield
 
 
 def _token_from(text: str) -> str:
@@ -82,7 +99,7 @@ def test_template_resource_read_runs_odoo_call_off_loop_thread():
             contents = await client.read_resource("odoo://model/res.partner/quick-schema")
         return threading.get_ident(), contents
 
-    with patch.object(resources, "get_odoo_client", return_value=stub):
+    with _stubbed(stub):
         loop_thread, contents = asyncio.run(_read())
 
     assert record["get_model_fields"], "fields_get was never called"
@@ -101,7 +118,7 @@ def test_template_wrapper_returns_same_payload_as_sync_body():
             contents = await client.read_resource("odoo://model/res.partner/fields")
         return contents[0].text
 
-    with patch.object(resources, "get_odoo_client", return_value=stub):
+    with _stubbed(stub):
         via_mcp = asyncio.run(_read())
         direct = resources.get_model_fields_light("res.partner")
 
