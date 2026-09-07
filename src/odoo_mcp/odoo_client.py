@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import threading
+import time
 import urllib.parse
 from typing import Any, Sequence, cast
 
@@ -16,6 +17,13 @@ import requests
 from dotenv import load_dotenv
 
 from .arg_mapping import convert_args_to_v2
+from .constants import (
+    RATE_LIMIT_MAX_RETRIES,
+    RATE_LIMIT_RETRY_DEFAULT_DELAY,
+    RATE_LIMIT_RETRY_MAX_DELAY,
+    RATE_LIMIT_STATUS,
+)
+from .safety import is_side_effect_method
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +141,7 @@ class OdooClient:
         payload = convert_args_to_v2(method, tuple(args), kwargs)
 
         try:
-            response = self.session.post(url, json=payload, timeout=self.timeout)
+            response = self._post_with_rate_limit_retry(url, payload, retry_allowed=not is_side_effect_method(method))
 
             # Extract Odoo error details from response body BEFORE raise_for_status
             if response.status_code >= 400:
@@ -165,6 +173,32 @@ class OdooClient:
             raise ConnectionError(f"Failed to connect to Odoo: {e}")
         except requests.exceptions.RequestException as e:
             raise ValueError(f"Request failed: {e}")
+
+    def _post_with_rate_limit_retry(
+        self, url: str, payload: dict[str, Any], *, retry_allowed: bool = True
+    ) -> requests.Response:
+        """POST once, retrying a single time after a 429 Too Many Requests.
+
+        Odoo SaaS throttles bursts (session-bootstrap fans out several
+        ``fields_get`` calls at once). The delay honours ``Retry-After`` when
+        it is a plain number of seconds, capped at ``RATE_LIMIT_RETRY_MAX_DELAY``;
+        any other value falls back to ``RATE_LIMIT_RETRY_DEFAULT_DELAY``. The
+        last response — whatever its status — is returned to the normal error
+        path so a persistent throttle surfaces as a regular ``429`` error.
+
+        ``retry_allowed`` is False for side-effect methods: a throttle in front
+        of Odoo answers before execution, but nothing guarantees that on every
+        stack, and re-sending a ``create``/``unlink`` could double-apply it.
+        """
+        response = self.session.post(url, json=payload, timeout=self.timeout)
+        for _ in range(RATE_LIMIT_MAX_RETRIES if retry_allowed else 0):
+            if response.status_code != RATE_LIMIT_STATUS:
+                break
+            delay = _retry_after_delay(response.headers.get("Retry-After"))
+            logger.warning("Odoo rate limit (429) on %s — retrying in %.1fs", url, delay)
+            time.sleep(delay)
+            response = self.session.post(url, json=payload, timeout=self.timeout)
+        return response
 
     def execute_method(self, model: str, method: str, *args, **kwargs) -> Any:
         """Execute an arbitrary method on a model."""
@@ -237,6 +271,22 @@ class OdooClient:
             logger.debug("get_model_doc failed for %s: %s: %s", model_name, type(e).__name__, e)
             return None
 
+    def get_api_index(self) -> dict[str, Any] | None:
+        """Fetch /doc-bearer/index.json — every installed module and readable model.
+
+        Same access rule as ``get_model_doc`` (api_doc.group_allow_doc); returns
+        None when the endpoint is unavailable so the caller can fall back.
+        """
+        url = f"{self.url}/doc-bearer/index.json"
+        try:
+            response = self.session.post(url, json={}, timeout=self.timeout)
+            response.raise_for_status()
+            data = response.json()
+            return cast("dict[str, Any] | None", data if isinstance(data, dict) else None)
+        except Exception as e:
+            logger.warning("/doc-bearer/index.json unavailable: %s: %s", type(e).__name__, e)
+            return None
+
     def search_read(
         self,
         model_name: str,
@@ -265,6 +315,21 @@ class OdooClient:
         if fields is not None:
             kwargs["fields"] = fields
         return cast("list[dict[str, Any]]", self._execute(model_name, "read", ids, **kwargs))
+
+
+def _retry_after_delay(header_value: str | None) -> float:
+    """Seconds to wait before retrying a 429, from its ``Retry-After`` header.
+
+    Only the delta-seconds form is honoured; the HTTP-date form (and garbage)
+    falls back to the default so a bad header never disables the retry.
+    """
+    try:
+        seconds = float(header_value) if header_value is not None else RATE_LIMIT_RETRY_DEFAULT_DELAY
+    except (TypeError, ValueError):
+        return RATE_LIMIT_RETRY_DEFAULT_DELAY
+    if seconds <= 0:
+        return RATE_LIMIT_RETRY_DEFAULT_DELAY
+    return min(seconds, RATE_LIMIT_RETRY_MAX_DELAY)
 
 
 def load_config() -> dict[str, str]:

@@ -39,7 +39,7 @@ layer blocks every non-safe method.
 | | |
 |---|---|
 | **5 tools** | `execute_method` reaches any method on any model; `batch_execute`, `execute_workflow`, `configure_odoo`, and `read_resource` cover the rest |
-| **28 resources** | Model discovery, compact schemas, state-machine workflows, introspection, and runtime posture (`odoo://server-status`) |
+| **38 resources** | Model discovery, compact schemas, state-machine workflows, introspection, API reference (`odoo://api/*`), and runtime posture (`odoo://server-status`) |
 | **19 prompts** | 12 generic guided workflows plus 7 `cyanview-*` skill prompts, gated per user in multi-user mode |
 | **Safety layer** | Risk classification before execution, 8 blocked models, 6 sensitive models, cascade warnings |
 | **Locked mode** | One flag (`MCP_SAFETY_MODE=locked`) turns writes off, enforces a write allowlist, binds HTTP to localhost, and pre-flights payloads against live `fields_get` — each layer independently overridable |
@@ -270,7 +270,7 @@ token issued for `unlink([1])` and reuse it on `unlink([1, 2, …, 1000])`.
 | `configure_odoo` | Interactive connection setup |
 | `read_resource` | Read any `odoo://` resource by URI |
 
-### Resources (28)
+### Resources (38)
 
 | Resource | Description |
 |----------|-------------|
@@ -302,6 +302,16 @@ token issued for `unlink([1])` and reuse it on `unlink([1, 2, …, 1000])`.
 | `odoo://aggregation` | Aggregation guide (formatted_read_group) |
 | `odoo://model-limitations` | Known model issues + runtime problems |
 | `odoo://server-status` | Runtime safety posture (mode, host, allowlist, warnings). Non-secret. **New in v1.16.0.** |
+| `odoo://api/json2-protocol` | JSON-2 contract: body keys, error shape, status codes, transaction rule. **New in v1.18.0.** |
+| `odoo://api/version-drift` | ORM renames since 15.2 (`name_get`, `args`→`domain`, `read_group`…) and what to call instead. **New in v1.18.0.** |
+| `odoo://api/x2many-commands` | One2many/Many2many command triples with examples. **New in v1.18.0.** |
+| `odoo://api-index` | Live catalogue of installed modules and readable models (`/doc-bearer/index.json`, cached per user). **New in v1.18.0.** |
+| `odoo://api/datetime` | Server date formats, UTC storage, client-side tz, dynamic domain values (`'-3d +1H'`), date parts. **New in v1.18.0.** |
+| `odoo://api/mail-thread` | `message_post` signature, notification kill-switch context keys, followers, activities. **New in v1.18.0.** |
+| `odoo://api/security-model` | How ACLs, record rules and field groups compose; `has_access` / `has_group` checks. **New in v1.18.0.** |
+| `odoo://api/web-read` | `web_read` / `web_search_read` / `web_save` nested specification. **New in v1.18.0.** |
+| `odoo://api/xmlids` | XML id resolution over JSON-2 (`check_object_reference`) and custom model/field constraints. **New in v1.18.0.** |
+| `odoo://session` | Live identity: uid, login, lang, tz, current and allowed companies, installed languages. **New in v1.18.0.** |
 
 ### Prompts (19)
 

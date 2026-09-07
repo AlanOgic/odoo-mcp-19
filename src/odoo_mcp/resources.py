@@ -19,6 +19,12 @@ from typing import Any, Callable, Dict, Sequence, TypeVar
 
 import anyio
 
+from .api_reference import (
+    build_api_index,
+    json2_protocol_reference,
+    version_drift_reference,
+    x2many_commands_reference,
+)
 from .app import mcp
 from .constants import (
     _DEFAULT_BOOTSTRAP_MODELS,
@@ -34,6 +40,13 @@ from .constants import (
 )
 from .method_catalog import build_methods_payload
 from .odoo_client import get_odoo_client
+from .orm_guides import (
+    datetime_reference,
+    mail_thread_reference,
+    security_model_reference,
+    web_read_reference,
+    xmlids_reference,
+)
 from .utils import (
     _build_compact_schema,
     _get_documentation_urls,
@@ -44,6 +57,7 @@ from .utils import (
     fields_cache_get,
     fields_cache_key,
     fields_cache_put,
+    get_live_api_index,
 )
 
 logger = logging.getLogger(__name__)
@@ -422,21 +436,37 @@ def get_session_bootstrap() -> str:
     description="Get a specific record by ID",
 )
 def get_record(model_name: str, record_id: str) -> str:
-    """Get a specific record by ID"""
+    """Get a specific record by ID — every non-binary field.
+
+    Binary fields (``image_*``, ``avatar_*``, attachments…) are excluded from
+    the ``read``: on ``res.partner`` they weighed ~550 KB of base64 for one
+    record, and the 15 000-char ``read_resource`` cap then cut the JSON in the
+    middle of a blob. Their names are listed under ``_omitted_binary_fields``
+    so the caller knows what to fetch separately.
+    """
     err = _validate_model(model_name)
     if err:
         return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
-    odoo_client = get_odoo_client()
-    try:
-        if not record_id or record_id == "None":
-            return json.dumps({"error": "Record ID is required"}, indent=2)
+    if not record_id or not record_id.isdigit():
+        return json.dumps({"error": f"Record ID must be a positive integer, got {record_id!r}"}, indent=2)
+    fields, error = _fetch_model_fields(model_name, attributes=COMPACT_FIELD_ATTRIBUTES)
+    if fields is None:
+        return json.dumps(error, separators=(",", ":"))
 
-        record = odoo_client.read_records(model_name, [int(record_id)])
-        if not record:
-            return json.dumps({"error": f"Record not found: {model_name} ID {record_id}"}, indent=2)
-        return json.dumps(record[0], indent=2)
+    readable = sorted(name for name, meta in fields.items() if meta.get("type") != "binary")
+    omitted = sorted(name for name, meta in fields.items() if meta.get("type") == "binary")
+    if not readable:
+        # Odoo's read() treats an empty field list as "every field" — which
+        # would bring the blobs straight back. Refuse instead of failing open.
+        return json.dumps({"error": f"{model_name} exposes no non-binary field to read"}, indent=2)
+    try:
+        record = get_odoo_client().read_records(model_name, [int(record_id)], fields=readable)
     except Exception as e:
         return json.dumps({"error": str(e)}, indent=2)
+    if not record:
+        return json.dumps({"error": f"Record not found: {model_name} ID {record_id}"}, indent=2)
+    payload = {**record[0], "_omitted_binary_fields": omitted} if omitted else record[0]
+    return json.dumps(payload, indent=2)
 
 
 @_threaded_resource(
@@ -544,6 +574,138 @@ def get_model_docs(model_name: str) -> str:
 
 
 @mcp.resource(
+    "odoo://api/json2-protocol",
+    description="JSON-2 contract: URL, body keys (ids/context/named params), error shape, status codes, transactions",
+)
+def get_json2_protocol() -> str:
+    """Static reference transcribed from odoo/addons/rpc/controllers/json2.py and odoo/http.py."""
+    return json.dumps(json2_protocol_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api/version-drift",
+    description="ORM renames since Odoo 15.2 (name_get, args→domain, read_group, check_access…) "
+    "and their JSON-2 impact",
+)
+def get_version_drift() -> str:
+    """Static reference transcribed from the ORM changelog."""
+    return json.dumps(version_drift_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api/x2many-commands",
+    description="One2many/Many2many command triples [code, id, value] accepted over RPC, with examples",
+)
+def get_x2many_commands() -> str:
+    """Static reference transcribed from odoo/orm/commands.py."""
+    return json.dumps(x2many_commands_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api-index",
+    description="Live catalogue from /doc-bearer/index.json: installed modules + every readable model "
+    "with field/method counts",
+)
+def get_api_index() -> str:
+    """Compact, per-identity-cached view of the api_doc index (falls back to an actionable error)."""
+    raw = get_live_api_index()
+    if raw is None:
+        return json.dumps(
+            {
+                "error": "/doc-bearer/index.json is unavailable",
+                "hint": "The API user needs the api_doc.group_allow_doc group (implied by Settings admin). "
+                "Until then use odoo://models for the model list.",
+            },
+            indent=2,
+        )
+    return json.dumps(build_api_index(raw), separators=(",", ":"))
+
+
+@mcp.resource(
+    "odoo://api/datetime",
+    description="Date/datetime over JSON-2: server formats, UTC storage, client-side tz, dynamic domain values, "
+    "date parts",
+)
+def get_datetime_guide() -> str:
+    return json.dumps(datetime_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api/mail-thread",
+    description="Chatter over JSON-2: message_post signature, notification kill-switch context keys, followers, "
+    "activities",
+)
+def get_mail_thread_guide() -> str:
+    return json.dumps(mail_thread_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api/security-model",
+    description="How ACLs, record rules and field groups compose, and how to test access with has_access/has_group",
+)
+def get_security_model_guide() -> str:
+    return json.dumps(security_model_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api/web-read",
+    description="web_read / web_search_read / web_save: the nested specification that reads relations in one call",
+)
+def get_web_read_guide() -> str:
+    return json.dumps(web_read_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api/xmlids",
+    description="External ids over JSON-2 (check_object_reference) and the constraints on custom models/fields",
+)
+def get_xmlids_guide() -> str:
+    return json.dumps(xmlids_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://session",
+    description="Who the API key is: uid, login, lang, tz, current company, allowed companies, installed languages",
+)
+def get_session() -> str:
+    """Live identity of the connected Odoo user — the context an agent must interpret dates and languages in."""
+    client = get_odoo_client()
+    try:
+        ctx = client.execute_method("res.users", "context_get")
+        uid = int(ctx["uid"])
+        user = (client.read_records("res.users", [uid], fields=["name", "login", "company_id", "company_ids"]) or [{}])[
+            0
+        ]
+        company_ids = list(user.get("company_ids") or [])
+        companies = (
+            client.search_read("res.company", domain=[["id", "in", company_ids]], fields=["id", "name"], order="id")
+            if company_ids
+            else []
+        )
+        langs = client.execute_method("res.lang", "get_installed")
+    except Exception as e:
+        return json.dumps(
+            {"error": str(e), "hint": "context_get needs a valid bearer key; see odoo://api/json2-protocol"}, indent=2
+        )
+    company = user.get("company_id") or [None, None]
+    return json.dumps(
+        {
+            "uid": uid,
+            "name": user.get("name"),
+            "login": user.get("login"),
+            "lang": ctx.get("lang"),
+            "tz": ctx.get("tz"),
+            "company": {"id": company[0], "name": company[1]},
+            "allowed_companies": [{"id": c["id"], "name": c["name"]} for c in companies],
+            "installed_languages": [{"code": code, "name": name} for code, name in langs],
+            "context_hint": "Datetimes are UTC (convert with tz); pass {'allowed_company_ids': [...]} in context to "
+            "switch company scope and {'lang': ...} to read translations. See odoo://api/datetime.",
+        },
+        indent=2,
+    )
+
+
+@mcp.resource(
     "odoo://concepts",
     description="Mapping of business concepts to Odoo model names (contact->res.partner, invoice->account.move)",
 )
@@ -628,6 +790,46 @@ def get_resource_templates() -> str:
             "odoo://docs/{target}": {
                 "description": "Documentation URLs and GitHub links for any model or module",
                 "example": "odoo://docs/sale",
+            },
+            "odoo://api/json2-protocol": {
+                "description": "JSON-2 contract: body keys, error shape, status codes, transaction rule",
+                "example": "odoo://api/json2-protocol",
+            },
+            "odoo://api/version-drift": {
+                "description": "ORM renames since 15.2 and what to call instead over JSON-2",
+                "example": "odoo://api/version-drift",
+            },
+            "odoo://api/x2many-commands": {
+                "description": "One2many/Many2many command triples with examples",
+                "example": "odoo://api/x2many-commands",
+            },
+            "odoo://api-index": {
+                "description": "Live catalogue of installed modules and readable models (api_doc index)",
+                "example": "odoo://api-index",
+            },
+            "odoo://api/datetime": {
+                "description": "Server date formats, UTC storage, dynamic domain values, date parts",
+                "example": "odoo://api/datetime",
+            },
+            "odoo://api/mail-thread": {
+                "description": "message_post signature, notification kill-switches, followers, activities",
+                "example": "odoo://api/mail-thread",
+            },
+            "odoo://api/security-model": {
+                "description": "ACL / record rule / field group composition and how to test access",
+                "example": "odoo://api/security-model",
+            },
+            "odoo://api/web-read": {
+                "description": "web_read / web_search_read nested specification",
+                "example": "odoo://api/web-read",
+            },
+            "odoo://api/xmlids": {
+                "description": "XML id resolution over JSON-2 and custom model/field constraints",
+                "example": "odoo://api/xmlids",
+            },
+            "odoo://session": {
+                "description": "Live identity: uid, login, lang, tz, companies, installed languages",
+                "example": "odoo://session",
             },
             "odoo://module-knowledge/{module_name}": {
                 "description": "Get knowledge for a specific module (special methods, patterns)",

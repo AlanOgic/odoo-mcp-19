@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Four API reference resources** (`api_reference.py`). Three are static,
+  transcribed from the Odoo 19 source and docs so an agent stops guessing:
+  `odoo://api/json2-protocol` (the `/json/2` contract — `ids`/`context`/named
+  params only, five-key error body, status-code table, one-transaction-per-call
+  rule, no rate limiting in Odoo core), `odoo://api/version-drift` (every ORM
+  rename since 15.2 with its replacement, JSON-2 impact and PR link — `name_get`
+  → `display_name`, `args` → `domain`, `read_group` → `formatted_read_group`,
+  `check_access_rights` → `has_access`, `group_operator` → `aggregator`…) and
+  `odoo://api/x2many-commands` (the seven literal `[code, id, value]` triples
+  with worked examples). The fourth, `odoo://api-index`, is live: it compacts
+  `/doc-bearer/index.json` (2.4 MB on a full instance) into the module list
+  plus one line per readable model, cached 5 min per `(url, username)` (at
+  most 20 identities, oldest evicted) so registry users never share a
+  group-filtered index. All four are routed
+  through the `read_resource` bridge and listed in `odoo://templates`.
+- **Five ORM guides and a live session resource** (`orm_guides.py`).
+  `odoo://api/datetime` (server formats `YYYY-MM-DD` / `YYYY-MM-DD HH:MM:SS`,
+  UTC storage with client-side tz, the 19.0 dynamic domain values and 17.3
+  date parts), `odoo://api/mail-thread` (keyword-only `message_post`
+  signature with `body_is_html`, the `mail_notrack` / `tracking_disable` /
+  `mail_create_nosubscribe` context kill-switches, followers, activities),
+  `odoo://api/security-model` (ACLs are additive, record rules default-allow,
+  global rules AND vs group rules OR, field groups vanish from `fields_get`,
+  `has_access` / `has_group` as the callable checks), `odoo://api/web-read`
+  (the nested `specification` of `web_read` / `web_search_read` / `web_save`)
+  and `odoo://api/xmlids` (`ir.model.data.check_object_reference` as the only
+  public resolver, custom model/field constraints). `odoo://session` is live:
+  `res.users/context_get` + the user's companies + `res.lang.get_installed`,
+  so an agent knows which tz, lang and company scope it is reading in.
+- **`odoo://domain-syntax` gains `dynamic_dates`, `date_parts` and the `any!`
+  / `not any!` operators** (data in `module_knowledge.json`).
+- **Handler ↔ bridge-route parity is now tested.** `tests/test_api_reference.py`
+  enumerates every registered resource and template and asserts exactly one
+  `_RESOURCE_ROUTES` entry matches — adding a resource without a route no
+  longer silently 404s the bridge.
+
+### Fixed
+- **`odoo://record/{model}/{id}` no longer ships binary blobs.** The handler
+  read every field: on `res.partner` that was ~550 KB of base64 images for a
+  single record, and the 15 000-char `read_resource` cap then cut the JSON in
+  the middle of a blob, leaving the caller with an unparseable fragment. The
+  read now excludes `binary` fields (types come from the shared compact
+  `fields_get` cache, so it costs no extra round-trip after a quick-schema) and
+  lists their names under `_omitted_binary_fields`. Partner 1 drops from 568 KB
+  to ~12 KB of valid JSON.
+- **`OdooClient` retries once after `429 Too Many Requests`.** Odoo SaaS
+  throttles bursts, and `odoo://session-bootstrap` fans out its `fields_get`
+  calls in parallel, so one model regularly landed in `errors` instead of
+  `schemas`. The client now honours `Retry-After` (delta-seconds form, capped
+  at 5 s, 1 s default) for a single retry; a second 429 is raised as before, so
+  a persistent throttle can never become an unbounded wait. Only read methods
+  (`safety.SAFE_METHODS`) are retried — a throttled `create`/`unlink` is raised
+  immediately rather than risk a double application.
+
 ## [1.17.0] - 2026-09-07
 
 ### Changed

@@ -232,3 +232,81 @@ def test_non_schema_handlers_reject_malformed_model_names_before_any_call(call):
     assert "Invalid model name" in payload["error"]
     assert client.method_calls == []
     assert live_doc.call_count == 0
+
+
+# ----- odoo://record/{model}/{id} must not ship binary blobs -----
+
+_FIELDS_WITH_IMAGES = {
+    **_VALID_FIELDS,
+    "image_1920": {"type": "binary", "string": "Image"},
+    "avatar_128": {"type": "binary", "string": "Avatar"},
+}
+
+
+def _record_client(fields, record):
+    client = _stub_client({"res.partner": fields})
+    client.read_records.return_value = [record]
+    return client
+
+
+def test_record_excludes_binary_fields_from_the_read():
+    """A partner with images weighed 568 KB of base64 — truncated to 15 000 chars it was unreadable JSON."""
+    client = _record_client(_FIELDS_WITH_IMAGES, {"id": 1, "name": "Azure", "partner_id": False, "state": "draft"})
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        out = json.loads(resources.get_record("res.partner", "1"))
+    requested = client.read_records.call_args.kwargs["fields"]
+    assert set(requested) == {"id", "name", "partner_id", "state"}
+    assert out["name"] == "Azure"
+    assert out["_omitted_binary_fields"] == ["avatar_128", "image_1920"]
+
+
+def test_record_without_binary_fields_has_no_omission_marker():
+    client = _record_client(_VALID_FIELDS, {"id": 1, "name": "Azure"})
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        out = json.loads(resources.get_record("res.partner", "1"))
+    assert "_omitted_binary_fields" not in out
+    assert out == {"id": 1, "name": "Azure"}
+
+
+def test_record_field_lookup_shares_the_compact_schema_cache_entry():
+    client = _record_client(_FIELDS_WITH_IMAGES, {"id": 1})
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        resources.get_model_quick_schema("res.partner")
+        resources.get_record("res.partner", "1")
+    assert client.get_model_fields.call_count == 1
+    assert _attributes_requested(client) == [list(COMPACT_FIELD_ATTRIBUTES)]
+
+
+def test_record_unknown_model_reports_not_found_without_reading():
+    client = _stub_client({"this.does.not.exist": _ERROR_SENTINEL})
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        out = json.loads(resources.get_record("this.does.not.exist", "1"))
+    assert "not found" in out["error"]
+    assert client.read_records.call_count == 0
+
+
+def test_record_missing_id_still_reports_not_found():
+    client = _record_client(_VALID_FIELDS, {"id": 1})
+    client.read_records.return_value = []
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        out = json.loads(resources.get_record("res.partner", "999999999"))
+    assert out["error"] == "Record not found: res.partner ID 999999999"
+
+
+def test_record_with_only_binary_fields_never_sends_an_empty_field_list():
+    """Odoo's read() treats fields=[] as 'all fields' — which would bring the blobs back."""
+    only_binary = {"image_1920": {"type": "binary", "string": "Image"}}
+    client = _record_client(only_binary, {"id": 1})
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        out = json.loads(resources.get_record("res.partner", "1"))
+    assert "error" in out
+    assert client.read_records.call_count == 0
+
+
+@pytest.mark.parametrize("record_id", ["", "None", "abc", "1.5"])
+def test_record_rejects_a_bad_record_id_before_any_odoo_call(record_id):
+    client = _record_client(_VALID_FIELDS, {"id": 1})
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        out = json.loads(resources.get_record("res.partner", record_id))
+    assert "error" in out
+    assert client.method_calls == []

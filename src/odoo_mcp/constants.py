@@ -364,6 +364,12 @@ _DOC_CACHE_TTL = 300  # 5 minutes
 _DOC_CACHE_MAX_ENTRIES = 100
 _DOC_CACHE_LOCK = threading.Lock()
 
+# /doc-bearer/index.json is filtered by the caller's groups, so it is cached per
+# (url, username) — never shared across registry users. Same TTL as the docs.
+_API_INDEX_CACHE: Dict[tuple, tuple] = {}
+_API_INDEX_CACHE_MAX_ENTRIES = 20  # ~2 MB per entry on a full instance
+_API_INDEX_CACHE_LOCK = threading.Lock()
+
 
 # ----- Concept to Model Mappings -----
 
@@ -553,3 +559,12 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
 # ----- read_resource max chars -----
 
 _READ_RESOURCE_MAX_CHARS = 15000  # Safe default for Claude Desktop context window
+
+# ----- HTTP rate-limit retry (Odoo SaaS answers request bursts with 429) -----
+# One retry only: a second 429 is raised so a throttled server can never turn
+# into an unbounded wait. Retry-After is honoured but capped — a hostile or
+# misconfigured header must not stall the event-loop worker for minutes.
+RATE_LIMIT_STATUS = 429
+RATE_LIMIT_MAX_RETRIES = 1
+RATE_LIMIT_RETRY_DEFAULT_DELAY = 1.0  # seconds, when Retry-After is absent or unparseable
+RATE_LIMIT_RETRY_MAX_DELAY = 5.0  # seconds, ceiling applied to Retry-After

@@ -15,6 +15,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, cast
 
 from .constants import (
+    _API_INDEX_CACHE,
+    _API_INDEX_CACHE_LOCK,
+    _API_INDEX_CACHE_MAX_ENTRIES,
     _DOC_CACHE,
     _DOC_CACHE_LOCK,
     _DOC_CACHE_MAX_ENTRIES,
@@ -95,6 +98,38 @@ def _get_live_doc(model_name: str) -> Optional[Dict[str, Any]]:
         logger.warning("/doc-bearer/ unavailable for %s: %s", model_name, e)
 
     return None
+
+
+def get_live_api_index() -> Optional[Dict[str, Any]]:
+    """Cached ``/doc-bearer/index.json`` for the current client identity.
+
+    Keyed by (url, username) because the index is filtered by the caller's
+    groups — in multi-user mode two registry users must not share it. TTL is
+    ``_DOC_CACHE_TTL``, at most ``_API_INDEX_CACHE_MAX_ENTRIES`` identities
+    (oldest evicted). Returns None when the endpoint is unavailable.
+    """
+    client = get_odoo_client()
+    key = (getattr(client, "url", None), getattr(client, "username", None))
+    now = time.time()
+    with _API_INDEX_CACHE_LOCK:
+        cached = _API_INDEX_CACHE.get(key)
+        if cached and now - cached[0] < _DOC_CACHE_TTL:
+            return cast(Dict[str, Any], cached[1])
+    index = client.get_api_index()
+    if not index or not isinstance(index, dict) or "models" not in index:
+        return None
+    with _API_INDEX_CACHE_LOCK:
+        _API_INDEX_CACHE[key] = (now, index)
+        while len(_API_INDEX_CACHE) > _API_INDEX_CACHE_MAX_ENTRIES:
+            oldest = min(_API_INDEX_CACHE, key=lambda k: _API_INDEX_CACHE[k][0])
+            del _API_INDEX_CACHE[oldest]
+    return index
+
+
+def clear_api_index_cache() -> None:
+    """Drop every cached index (tests, credential rotation)."""
+    with _API_INDEX_CACHE_LOCK:
+        _API_INDEX_CACHE.clear()
 
 
 def _categorize_error(error_msg: str) -> str:
