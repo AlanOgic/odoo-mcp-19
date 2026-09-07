@@ -121,18 +121,40 @@ class TestHighMethods:
 
 
 class TestMediumMethodsStrict:
-    """MEDIUM_METHODS in strict mode."""
+    """MEDIUM_METHODS in strict mode: every side-effect call is gated, whatever the record count."""
 
     @pytest.fixture(autouse=True)
     def set_strict_mode(self):
         with patch.dict(os.environ, {"MCP_SAFETY_MODE": "strict"}):
             yield
 
-    def test_single_record_write_no_confirm(self):
-        """Single-record write in strict does NOT require confirmation."""
-        result = classify_operation("res.partner", "write", [[1], {"name": "x"}])
+    @pytest.mark.parametrize("model", ["res.partner", "crm.lead", "sale.order", "product.product"])
+    def test_single_record_write_requires_confirm(self, model):
+        """A write on one real quotation / opportunity / customer must never execute from a single call."""
+        result = classify_operation(model, "write", [[1], {"name": "x"}])
         assert result.risk_level == RiskLevel.MEDIUM
-        assert result.requires_confirmation is False
+        assert result.requires_confirmation is True
+        assert result.record_count == 1
+
+    def test_single_create_requires_confirm(self):
+        result = classify_operation("res.partner", "create", [{"name": "x"}])
+        assert result.risk_level == RiskLevel.MEDIUM
+        assert result.requires_confirmation is True
+        assert result.record_count == 1
+
+    @pytest.mark.parametrize("method", ["copy", "name_create", "load"])
+    def test_other_medium_methods_require_confirm(self, method):
+        assert classify_operation("res.partner", method, [[1]]).requires_confirmation is True
+
+    def test_batch_of_single_record_writes_is_gated(self):
+        """batch_execute gates on the same classification — two ungated ops would slip a batch through."""
+        ops = [
+            {"model": "res.partner", "method": "write", "args_json": '[[1], {"name": "a"}]'},
+            {"model": "crm.lead", "method": "write", "args_json": '[[7], {"probability": 0}]'},
+        ]
+        _, overall, any_needs_confirmation = classify_batch(ops)
+        assert overall == RiskLevel.MEDIUM
+        assert any_needs_confirmation is True
 
     def test_multi_record_write_requires_confirm(self):
         """Multi-record write in strict DOES require confirmation."""
@@ -140,12 +162,6 @@ class TestMediumMethodsStrict:
         assert result.risk_level == RiskLevel.MEDIUM
         assert result.requires_confirmation is True
         assert result.record_count == 3
-
-    def test_single_create_no_confirm(self):
-        result = classify_operation("res.partner", "create", [{"name": "x"}])
-        assert result.risk_level == RiskLevel.MEDIUM
-        assert result.requires_confirmation is False
-        assert result.record_count == 1
 
     def test_batch_create_requires_confirm(self):
         result = classify_operation("res.partner", "create", [[{"name": "a"}, {"name": "b"}]])

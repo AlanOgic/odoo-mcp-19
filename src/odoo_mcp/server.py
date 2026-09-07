@@ -334,23 +334,29 @@ def _classify_and_gate(
     confirmed: bool,
     confirmation_token: str | None,
     start_time: float,
-) -> ExecuteMethodResponse | None:
+) -> tuple[ExecuteMethodResponse | None, SafetyClassification]:
     """Run the safety classifier, the payload pre-flight and the confirmation gate.
 
-    Returns the response to send when the call must stop here (blocked, token
-    issued, token rejected, payload invalid), or ``None`` when execution may proceed.
+    Returns ``(response, classification)``: the response to send when the call must
+    stop here (blocked, token issued, token rejected, payload invalid), or ``None``
+    when execution may proceed. The classification is always returned so the
+    success response can report it — a caller must be able to see *why* a write
+    was or was not gated.
     """
     classification = classify_operation(model, method, args, kwargs, role=current_role())
 
     if classification.risk_level == RiskLevel.BLOCKED:
         audit_log(classification, confirmed=confirmed, executed=False)
-        return ExecuteMethodResponse(
-            success=False,
-            pending_confirmation=True,
-            safety=classification,
-            error=classification.blocked_reason,
-            hint="Use the Odoo web interface instead.",
-            execution_time_ms=_elapsed_ms(start_time),
+        return (
+            ExecuteMethodResponse(
+                success=False,
+                pending_confirmation=True,
+                safety=classification,
+                error=classification.blocked_reason,
+                hint="Use the Odoo web interface instead.",
+                execution_time_ms=_elapsed_ms(start_time),
+            ),
+            classification,
         )
 
     if classification.requires_confirmation:
@@ -362,11 +368,15 @@ def _classify_and_gate(
 
             validation = _validate_payload(odoo, model, method, args=args, kwargs=kwargs)
             if not validation.ok:
-                return ExecuteMethodResponse(
-                    success=False,
-                    error="Payload validation failed:\n  - " + "\n  - ".join(validation.errors),
-                    hint=f"Read odoo://model/{model}/quick-schema for the field list.",
-                    execution_time_ms=_elapsed_ms(start_time),
+                return (
+                    ExecuteMethodResponse(
+                        success=False,
+                        safety=classification,
+                        error="Payload validation failed:\n  - " + "\n  - ".join(validation.errors),
+                        hint=f"Read odoo://model/{model}/quick-schema for the field list.",
+                        execution_time_ms=_elapsed_ms(start_time),
+                    ),
+                    classification,
                 )
 
         # Args/kwargs are post-resolve_json and post-context-merge, so the digest
@@ -377,23 +387,34 @@ def _classify_and_gate(
             message = classification.reason
             if classification.cascade_warning:
                 message += f"\n\nWARNING: {classification.cascade_warning}"
-            return ExecuteMethodResponse(
-                success=False,
-                pending_confirmation=True,
-                safety=classification,
-                error=message,
-                hint=(
-                    f"Re-call execute_method with confirmed=true and "
-                    f"confirmation_token='{decision.token}' to proceed."
+            return (
+                ExecuteMethodResponse(
+                    success=False,
+                    pending_confirmation=True,
+                    safety=classification,
+                    error=message,
+                    hint=(
+                        f"Re-call execute_method with confirmed=true and "
+                        f"confirmation_token='{decision.token}' to proceed."
+                    ),
+                    execution_time_ms=_elapsed_ms(start_time),
                 ),
-                execution_time_ms=_elapsed_ms(start_time),
+                classification,
             )
         if decision.outcome == "reject":
-            return ExecuteMethodResponse(success=False, error=decision.error, execution_time_ms=_elapsed_ms(start_time))
+            return (
+                ExecuteMethodResponse(
+                    success=False,
+                    safety=classification,
+                    error=decision.error,
+                    execution_time_ms=_elapsed_ms(start_time),
+                ),
+                classification,
+            )
 
     if classification.risk_level != RiskLevel.SAFE:
         audit_log(classification, confirmed=confirmed, executed=True)
-    return None
+    return None, classification
 
 
 def _apply_search_defaults(method: str, args: list, kwargs: dict) -> tuple[list, dict]:
@@ -638,13 +659,17 @@ def execute_method(
         if rejected:
             return rejected
 
-        gated = _classify_and_gate(odoo, model, method, args, kwargs, confirmed, confirmation_token, start_time)
+        gated, classification = _classify_and_gate(
+            odoo, model, method, args, kwargs, confirmed, confirmation_token, start_time
+        )
         if gated:
             return gated
 
         args, kwargs = _apply_search_defaults(method, args, kwargs)
         result = odoo.execute_method(model, method, *args, **kwargs)
-        return ExecuteMethodResponse(success=True, result=result, execution_time_ms=_elapsed_ms(start_time))
+        return ExecuteMethodResponse(
+            success=True, result=result, safety=classification, execution_time_ms=_elapsed_ms(start_time)
+        )
 
     except Exception as e:
         error_msg = str(e)
