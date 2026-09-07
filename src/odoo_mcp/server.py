@@ -1277,6 +1277,10 @@ _RESOURCE_ROUTES: list[tuple[re.Pattern[str], Any, list[str]]] = [
         (r"^odoo://hierarchical$", _resources.get_hierarchical_guide, []),
         (r"^odoo://aggregation$", _resources.get_aggregation_guide, []),
         (r"^odoo://tool-registry$", _resources.get_tool_registry, []),
+        (r"^odoo://api/json2-protocol$", _resources.get_json2_protocol, []),
+        (r"^odoo://api/version-drift$", _resources.get_version_drift, []),
+        (r"^odoo://api/x2many-commands$", _resources.get_x2many_commands, []),
+        (r"^odoo://api-index$", _resources.get_api_index, []),
     ]
 ]
 

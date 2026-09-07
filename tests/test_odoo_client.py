@@ -12,10 +12,11 @@ These pin two corrections derived from Odoo 19's External JSON-2 API
      legitimately returns a dict containing ``result`` gets corrupted.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from odoo_mcp.constants import RATE_LIMIT_RETRY_DEFAULT_DELAY, RATE_LIMIT_RETRY_MAX_DELAY
 from odoo_mcp.odoo_client import OdooClient
 
 
@@ -137,3 +138,90 @@ class TestFieldsGetAttributes:
         client.get_model_fields("res.partner")
 
         assert client.session.post.call_args.kwargs["json"] == {}
+
+
+class TestRateLimitRetry:
+    """Odoo SaaS answers a burst of requests with 429 Too Many Requests.
+
+    A single retry after the ``Retry-After`` delay turns a transient throttle
+    into a successful call instead of an ``errors`` entry in session-bootstrap.
+    """
+
+    @staticmethod
+    def _rate_limited(retry_after=None):
+        resp = _stub_response({"message": "Too Many Requests"}, status_code=429)
+        resp.reason = "Too Many Requests"
+        resp.url = "https://mycompany.example.com/json/2/res.partner/fields_get"
+        resp.headers = {"Retry-After": str(retry_after)} if retry_after is not None else {}
+        return resp
+
+    def test_retries_once_after_429_and_returns_the_result(self):
+        client = _make_client()
+        client.session.post = MagicMock(side_effect=[self._rate_limited(retry_after=2), _stub_response({"id": 1})])
+        with patch("odoo_mcp.odoo_client.time.sleep") as sleep:
+            result = client.execute_method("res.partner", "read", [1])
+        assert result == {"id": 1}
+        assert client.session.post.call_count == 2
+        sleep.assert_called_once_with(2.0)
+
+    def test_429_without_retry_after_header_waits_the_default_delay(self):
+        client = _make_client()
+        client.session.post = MagicMock(side_effect=[self._rate_limited(), _stub_response([])])
+        with patch("odoo_mcp.odoo_client.time.sleep") as sleep:
+            client.execute_method("res.partner", "read", [1])
+        sleep.assert_called_once_with(RATE_LIMIT_RETRY_DEFAULT_DELAY)
+
+    def test_retry_after_is_capped_so_a_hostile_header_cannot_stall_the_server(self):
+        client = _make_client()
+        client.session.post = MagicMock(side_effect=[self._rate_limited(retry_after=3600), _stub_response([])])
+        with patch("odoo_mcp.odoo_client.time.sleep") as sleep:
+            client.execute_method("res.partner", "read", [1])
+        sleep.assert_called_once_with(RATE_LIMIT_RETRY_MAX_DELAY)
+
+    def test_unparseable_retry_after_falls_back_to_the_default_delay(self):
+        client = _make_client()
+        client.session.post = MagicMock(
+            side_effect=[self._rate_limited(retry_after="Wed, 21 Oct 2026 07:28:00 GMT"), _stub_response([])]
+        )
+        with patch("odoo_mcp.odoo_client.time.sleep") as sleep:
+            client.execute_method("res.partner", "read", [1])
+        sleep.assert_called_once_with(RATE_LIMIT_RETRY_DEFAULT_DELAY)
+
+    def test_second_429_is_raised_not_retried_forever(self):
+        client = _make_client()
+        client.session.post = MagicMock(
+            side_effect=[self._rate_limited(retry_after=1), self._rate_limited(retry_after=1)]
+        )
+        with patch("odoo_mcp.odoo_client.time.sleep"), pytest.raises(ValueError, match="429"):
+            client.execute_method("res.partner", "read", [1])
+        assert client.session.post.call_count == 2
+
+    def test_other_http_errors_are_not_retried(self):
+        client = _make_client()
+        failed = _stub_response({"message": "boom"}, status_code=500)
+        failed.reason = "Internal Server Error"
+        failed.url = "https://mycompany.example.com/json/2/res.partner/read"
+        client.session.post = MagicMock(return_value=failed)
+        with patch("odoo_mcp.odoo_client.time.sleep") as sleep, pytest.raises(ValueError, match="500"):
+            client.execute_method("res.partner", "read", [1])
+        assert client.session.post.call_count == 1
+        sleep.assert_not_called()
+
+    def test_side_effect_methods_are_never_retried_after_429(self):
+        """A 429 may be raised after partial processing on some stacks — never re-send a write."""
+        client = _make_client()
+        client.session.post = MagicMock(side_effect=[self._rate_limited(retry_after=1), _stub_response([])])
+        with patch("odoo_mcp.odoo_client.time.sleep") as sleep, pytest.raises(ValueError, match="429"):
+            client.execute_method("res.partner", "unlink", [1])
+        assert client.session.post.call_count == 1
+        sleep.assert_not_called()
+
+    def test_connection_error_on_the_retry_surfaces_as_connection_error(self):
+        import requests
+
+        client = _make_client()
+        client.session.post = MagicMock(
+            side_effect=[self._rate_limited(retry_after=1), requests.exceptions.ConnectionError("down")]
+        )
+        with patch("odoo_mcp.odoo_client.time.sleep"), pytest.raises(ConnectionError):
+            client.execute_method("res.partner", "read", [1])

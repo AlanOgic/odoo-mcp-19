@@ -19,6 +19,12 @@ from typing import Any, Callable, Dict, Sequence, TypeVar
 
 import anyio
 
+from .api_reference import (
+    build_api_index,
+    json2_protocol_reference,
+    version_drift_reference,
+    x2many_commands_reference,
+)
 from .app import mcp
 from .constants import (
     _DEFAULT_BOOTSTRAP_MODELS,
@@ -44,6 +50,7 @@ from .utils import (
     fields_cache_get,
     fields_cache_key,
     fields_cache_put,
+    get_live_api_index,
 )
 
 logger = logging.getLogger(__name__)
@@ -422,21 +429,37 @@ def get_session_bootstrap() -> str:
     description="Get a specific record by ID",
 )
 def get_record(model_name: str, record_id: str) -> str:
-    """Get a specific record by ID"""
+    """Get a specific record by ID — every non-binary field.
+
+    Binary fields (``image_*``, ``avatar_*``, attachments…) are excluded from
+    the ``read``: on ``res.partner`` they weighed ~550 KB of base64 for one
+    record, and the 15 000-char ``read_resource`` cap then cut the JSON in the
+    middle of a blob. Their names are listed under ``_omitted_binary_fields``
+    so the caller knows what to fetch separately.
+    """
     err = _validate_model(model_name)
     if err:
         return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
-    odoo_client = get_odoo_client()
-    try:
-        if not record_id or record_id == "None":
-            return json.dumps({"error": "Record ID is required"}, indent=2)
+    if not record_id or not record_id.isdigit():
+        return json.dumps({"error": f"Record ID must be a positive integer, got {record_id!r}"}, indent=2)
+    fields, error = _fetch_model_fields(model_name, attributes=COMPACT_FIELD_ATTRIBUTES)
+    if fields is None:
+        return json.dumps(error, separators=(",", ":"))
 
-        record = odoo_client.read_records(model_name, [int(record_id)])
-        if not record:
-            return json.dumps({"error": f"Record not found: {model_name} ID {record_id}"}, indent=2)
-        return json.dumps(record[0], indent=2)
+    readable = sorted(name for name, meta in fields.items() if meta.get("type") != "binary")
+    omitted = sorted(name for name, meta in fields.items() if meta.get("type") == "binary")
+    if not readable:
+        # Odoo's read() treats an empty field list as "every field" — which
+        # would bring the blobs straight back. Refuse instead of failing open.
+        return json.dumps({"error": f"{model_name} exposes no non-binary field to read"}, indent=2)
+    try:
+        record = get_odoo_client().read_records(model_name, [int(record_id)], fields=readable)
     except Exception as e:
         return json.dumps({"error": str(e)}, indent=2)
+    if not record:
+        return json.dumps({"error": f"Record not found: {model_name} ID {record_id}"}, indent=2)
+    payload = {**record[0], "_omitted_binary_fields": omitted} if omitted else record[0]
+    return json.dumps(payload, indent=2)
 
 
 @_threaded_resource(
@@ -544,6 +567,54 @@ def get_model_docs(model_name: str) -> str:
 
 
 @mcp.resource(
+    "odoo://api/json2-protocol",
+    description="JSON-2 contract: URL, body keys (ids/context/named params), error shape, status codes, transactions",
+)
+def get_json2_protocol() -> str:
+    """Static reference transcribed from odoo/addons/rpc/controllers/json2.py and odoo/http.py."""
+    return json.dumps(json2_protocol_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api/version-drift",
+    description="ORM renames since Odoo 15.2 (name_get, args→domain, read_group, check_access…) "
+    "and their JSON-2 impact",
+)
+def get_version_drift() -> str:
+    """Static reference transcribed from the ORM changelog."""
+    return json.dumps(version_drift_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api/x2many-commands",
+    description="One2many/Many2many command triples [code, id, value] accepted over RPC, with examples",
+)
+def get_x2many_commands() -> str:
+    """Static reference transcribed from odoo/orm/commands.py."""
+    return json.dumps(x2many_commands_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api-index",
+    description="Live catalogue from /doc-bearer/index.json: installed modules + every readable model "
+    "with field/method counts",
+)
+def get_api_index() -> str:
+    """Compact, per-identity-cached view of the api_doc index (falls back to an actionable error)."""
+    raw = get_live_api_index()
+    if raw is None:
+        return json.dumps(
+            {
+                "error": "/doc-bearer/index.json is unavailable",
+                "hint": "The API user needs the api_doc.group_allow_doc group (implied by Settings admin). "
+                "Until then use odoo://models for the model list.",
+            },
+            indent=2,
+        )
+    return json.dumps(build_api_index(raw), separators=(",", ":"))
+
+
+@mcp.resource(
     "odoo://concepts",
     description="Mapping of business concepts to Odoo model names (contact->res.partner, invoice->account.move)",
 )
@@ -628,6 +699,22 @@ def get_resource_templates() -> str:
             "odoo://docs/{target}": {
                 "description": "Documentation URLs and GitHub links for any model or module",
                 "example": "odoo://docs/sale",
+            },
+            "odoo://api/json2-protocol": {
+                "description": "JSON-2 contract: body keys, error shape, status codes, transaction rule",
+                "example": "odoo://api/json2-protocol",
+            },
+            "odoo://api/version-drift": {
+                "description": "ORM renames since 15.2 and what to call instead over JSON-2",
+                "example": "odoo://api/version-drift",
+            },
+            "odoo://api/x2many-commands": {
+                "description": "One2many/Many2many command triples with examples",
+                "example": "odoo://api/x2many-commands",
+            },
+            "odoo://api-index": {
+                "description": "Live catalogue of installed modules and readable models (api_doc index)",
+                "example": "odoo://api-index",
             },
             "odoo://module-knowledge/{module_name}": {
                 "description": "Get knowledge for a specific module (special methods, patterns)",
