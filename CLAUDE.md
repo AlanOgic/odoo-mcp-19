@@ -47,8 +47,8 @@ python tests/live/test_locked_mode_live.py
 
 # Format + lint + typecheck
 black . && isort .   # both clean; isort has skip_gitignore=true so it skips venvs like black does
-ruff check .         # known baseline: 29 errors (23 E501, 6 E402) — see below
-mypy src/odoo_mcp    # known baseline: 76 errors, mostly [index]/[assignment] in resources.py + server.py
+ruff check .         # known baseline: 26 errors (20 E501, 6 E402) — see below
+mypy src/odoo_mcp    # known baseline: 51 errors, mostly [index]/[assignment] in resources.py + server.py
 
 # If `uv run pytest` reports ModuleNotFoundError: No module named 'odoo_mcp' (17 collection
 # errors), the dev extras are not installed — run `uv sync --extra dev` first. uv also ignores a
@@ -64,7 +64,7 @@ docker compose -f docker-compose.yml -f docker-compose.multiuser.yml up -d
 
 Note: live tests under `tests/live/` are **script-style runners**, not pytest modules — invoke them directly with `python`. They mutate environment state.
 
-- **Unit (no Odoo)**: everything in `tests/` except `tests/live/` — run with `pytest --ignore=tests/live`. Highlights: `test_resources.py` patches `get_odoo_client` with a stub (pins resource-layer validation/error handling); `test_arg_mapping.py` pins the positional → JSON-2 named-arg contract; `test_odoo_client.py` pins bearer auth + no `result`-envelope unwrap; `test_token_gate.py` / `test_safety.py` / `test_safety_role.py` cover the gate and role-based classification; the multi-user tests (`test_auth_verifier.py`, `test_token_crypto.py`, `test_user_clients.py`, `test_skill_visibility.py`, `test_skill_prompts.py`) use the `users_db_seed` fixture in `tests/conftest.py`, which builds a temp registry with the **exact CLORAG DDL and crypto contract** — keep that fixture contract-true. Locked mode (v1.16.0) is pinned by `test_safety_profile.py` (env → profile resolution), `test_read_only_guard.py`, `test_write_allowlist.py`, `test_payload_validation.py`, `test_side_effect_predicate.py`, `test_fields_cache.py`, `test_main_bind_default.py`, and `test_server_status_resource.py`. `test_event_loop_offload.py` pins that every template resource is registered as a coroutine and that `batch_execute` / `execute_workflow` run their Odoo calls off the loop thread; `test_tool_execution_paths.py` is the characterization suite for `resolve_json`, the `search_read` fallback, search defaults, both workflows and non-atomic batches — extend it before touching those phases.
+- **Unit (no Odoo)**: everything in `tests/` except `tests/live/` — run with `pytest --ignore=tests/live`. Highlights: `test_resources.py` patches `get_odoo_client` with a stub (pins resource-layer validation/error handling); `test_arg_mapping.py` pins the positional → JSON-2 named-arg contract; `test_odoo_client.py` pins bearer auth + no `result`-envelope unwrap; `test_token_gate.py` / `test_safety.py` / `test_safety_role.py` cover the gate and role-based classification; the multi-user tests (`test_auth_verifier.py`, `test_token_crypto.py`, `test_user_clients.py`, `test_skill_visibility.py`, `test_skill_prompts.py`) use the `users_db_seed` fixture in `tests/conftest.py`, which builds a temp registry with the **exact CLORAG DDL and crypto contract** — keep that fixture contract-true. Locked mode (v1.16.0) is pinned by `test_safety_profile.py` (env → profile resolution), `test_read_only_guard.py`, `test_write_allowlist.py`, `test_payload_validation.py`, `test_side_effect_predicate.py`, `test_fields_cache.py`, `test_main_bind_default.py`, and `test_server_status_resource.py`. `test_event_loop_offload.py` pins that every template resource is registered as a coroutine and that `batch_execute` / `execute_workflow` run their Odoo calls off the loop thread; `test_tool_execution_paths.py` is the characterization suite for `resolve_json`, the `search_read` fallback, search defaults, both workflows and non-atomic batches — extend it before touching those phases. Post-1.16.0 quality pass 2: `test_method_catalog.py` pins `odoo://methods` ↔ `V2_ARG_MAPPING` parity and the live enrichment; `test_resource_payloads.py` pins the single selection query behind `/docs`, compact JSON on the large emitters and the cached `odoo://model/{m}`; `test_error_visibility.py` pins the deep-copied runtime-issue snapshot and that no lookup failure is swallowed silently; `test_configure_odoo.py` drives the elicitation wizard through the in-memory client.
 - **Live (need `.env`)**: anything under `tests/live/` — run with `python <file>`, not pytest.
 
 **CI**: two workflows in `.github/workflows/`:
@@ -73,7 +73,7 @@ Note: live tests under `tests/live/` are **script-style runners**, not pytest mo
 
 Run `black . && isort .` before pushing — CI enforces formatting.
 
-**Lint and typecheck are not clean gates.** Baseline as of the post-1.16.0 perf/quality pass: `pytest --ignore=tests/live` → **423 passed** (unit coverage 66 %); `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **29 errors** (23 E501, 6 E402); `mypy src/odoo_mcp` → **76 errors** (38 `resources.py`, 24 `server.py`, 10 `utils.py`, 1 each in `prompts.py` / `constants.py` / `user_clients.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.1.0 here). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
+**Lint and typecheck are not clean gates.** Baseline as of the post-1.16.0 quality pass 2 (`quality-pass-2`): `pytest --ignore=tests/live` → **456 passed** (unit coverage 75 %); `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **26 errors** (20 E501, 6 E402); `mypy src/odoo_mcp` → **51 errors** (27 `resources.py`, 14 `server.py`, 6 `utils.py`, 1 each in `prompts.py` / `constants.py` / `user_clients.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.1.0 here). No function is rated worse than radon C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
 
 ## High-level architecture
 
@@ -88,9 +88,17 @@ src/odoo_mcp/
 │                      _reject_private_method, _classify_and_gate, _apply_search_defaults,
 │                      _search_read_fallback, _failure_response); _confirmation_gate and
 │                      _read_only_error are shared by all three write-capable tools; _run_blocking
-│                      offloads client calls from the async tools
+│                      offloads client calls from the async tools. batch_execute is
+│                      _batch_read_only_rejection → _batch_safety_gate → _run_batch_operation
+│                      (per op: _parse_batch_operation reuses _parse_json_args); execute_workflow
+│                      dispatches through _WORKFLOW_RUNNERS (_run_lead_to_won,
+│                      _run_create_and_post_invoice), each step via _attempt_step
 ├── resources.py       28 odoo:// resource handlers; parameterized ones registered via
-│                      _threaded_resource so the blocking body runs off the event loop
+│                      _threaded_resource so the blocking body runs off the event loop.
+│                      Every handler taking a model name goes through _validate_model first
+├── method_catalog.py  Pure builder behind odoo://methods/{model}: static ORM table whose params
+│                      are derived from arg_mapping.V2_ARG_MAPPING (never restated), module
+│                      knowledge special methods, and /doc-bearer/ enrichment via _enrich_from_live
 ├── prompts.py         12 generic guided prompts
 ├── skill_prompts.py   7 cyanview-* workflow prompts, bodies loaded from skills/*.md (frontmatter stripped)
 ├── safety.py          Risk classification + token gate + role-based blocking + read-only/
