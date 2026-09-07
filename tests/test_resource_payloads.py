@@ -156,3 +156,14 @@ def test_model_info_rejects_a_malformed_model_name_without_calling_odoo():
     assert "error" in payload and "Invalid model name" in payload["error"]
     assert client.get_model_fields.call_count == 0
     assert client.get_model_info.call_count == 0
+
+
+def test_model_docs_selection_query_is_not_capped():
+    """The per-field loop capped each field at 50 options; a single capped query would instead drop
+    whole fields once the model's combined option count passed the cap. The query is bounded by the
+    model (a few hundred rows at most), so it must not carry a limit."""
+    client = _docs_client()
+    with patch.object(resources, "get_odoo_client", return_value=client):
+        resources.get_model_docs("x.y")
+    (call,) = _selection_calls(client)
+    assert "limit" not in call.kwargs

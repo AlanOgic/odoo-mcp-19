@@ -465,7 +465,6 @@ def _selection_options(odoo_client: Any, model_name: str, fields_meta: list) -> 
         "ir.model.fields.selection",
         [["field_id.model", "=", model_name]],
         fields=["field_id", "value", "name", "sequence"],
-        limit=1000,
     )
     grouped: Dict[str, list] = {}
     for row in sorted(rows, key=lambda r: (r.get("sequence") or 0, r.get("id") or 0)):
