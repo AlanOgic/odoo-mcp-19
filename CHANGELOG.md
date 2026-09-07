@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`odoo://methods/{model}` is derived from the JSON-2 argument mapping.** The
+  static method table was a hand-copied list that had drifted from
+  `arg_mapping.V2_ARG_MAPPING`: it advertised `default_get(fields_list)` and
+  `copy(id, default)`, so an agent whose Odoo lacks `/doc-bearer/` read the wrong
+  names, sent them and got a 422. The catalog now lives in `method_catalog.py`,
+  takes every parameter list from the mapping, and applies the live enrichment
+  to static and discovered methods through one helper (`_enrich_from_live`)
+  instead of two copy-pasted loops. `tests/test_method_catalog.py` fails if the
+  catalog and the mapping ever disagree again. `get_methods` drops from
+  cyclomatic complexity 37 to a one-liner.
+- **`batch_execute` and `execute_workflow` are split into phase helpers**
+  (`server.py`), completing the `execute_method` refactor of the previous pass.
+  `batch_execute` reuses `_parse_json_args` (it had re-implemented the JSON
+  decoding and mutated the parsed kwargs in place when merging
+  `MCP_DEFAULT_CONTEXT`); the read-only rejection, the BLOCKED/confirmation gate
+  and the per-operation run are separate helpers. The two workflows are
+  `_run_lead_to_won` / `_run_create_and_post_invoice`, dispatched through
+  `_WORKFLOW_RUNNERS`, each step going through `_attempt_step`. Both tools drop
+  from complexity 30 / 26 to under 10. Characterization tests were added to
+  `test_tool_execution_paths.py` before the split.
+- **Fewer, cheaper resource round-trips.** `odoo://model/{model}/docs` issued
+  one `ir.model.fields.selection` query per selection field (up to 20
+  sequential round-trips); it now fetches the model's options in one query and
+  groups them in Python. `odoo://model/{model}` goes through the shared,
+  validated `_fetch_model_fields` cache like every other schema view instead of
+  re-fetching the full definition on each read. The large dynamic emitters
+  (`/schema`, `odoo://model/{model}`, `odoo://models`, `/methods`, `/docs`) are
+  emitted as compact JSON — ~25 % fewer characters for the agent and a later
+  hit on `read_resource`'s 15 000-char cap; the human-readable guides keep
+  their indentation. `tests/test_resource_payloads.py` pins all three.
+- **`configure_odoo` no longer offers password authentication.** The JSON-2
+  API accepts bearer API keys only (a password is rejected with HTTP 401, as
+  `OdooClient` already warned), yet the elicitation wizard still proposed
+  "Password" and emitted an `ODOO_PASSWORD` line. It now asks for URL,
+  database and username and always emits `ODOO_API_KEY`
+  (`tests/test_configure_odoo.py`, through the in-memory FastMCP client).
 - **Odoo round-trips no longer block the event loop.** FastMCP 3.x calls a sync
   *template* resource body (`odoo://model/{model}/…`, `odoo://bundle/…`, …) inline
   on the loop thread, and `batch_execute` / `execute_workflow` are `async def`
@@ -47,6 +83,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (unit coverage 50 % → 66 %; `server.py` 25 % → 74 %).
 
 ### Fixed
+- **`odoo://model-limitations` could crash under concurrent use.** It iterated
+  the runtime-issue registry outside its lock over a *shallow* snapshot — the
+  nested per-method dicts were still the live objects `_track_model_issue`
+  mutates from the tool threads, so a `search_read` fallback landing mid-report
+  could raise `RuntimeError: dictionary changed size during iteration`. The
+  snapshot is now a `deepcopy` taken under the lock (`_snapshot_runtime_issues`).
+- **Model-name validation now covers every resource handler.** `get_record`,
+  `get_methods`, `get_model_docs` and `discover_actions_resource` built URLs and
+  domains from the raw name; the regex guard added to the tool path and the
+  schema views in v1.13 never reached them. They return the same
+  `{error, hint}` shape as the schema views before touching the client.
+- **Silently swallowed lookups are logged.** The three `except Exception: pass`
+  in `resources.py` (the `ir.model` search behind `odoo://find-model`, the
+  `ir.actions.server` lookups behind `odoo://actions` and `odoo://workflows`)
+  and the malformed-JSON branch of `classify_batch` now log instead of vanishing
+  (`tests/test_error_visibility.py`).
 - **Positional arguments past the first were silently dropped** (`arg_mapping.py`).
   `convert_args_to_v2` iterated the `V2_ARG_MAPPING` table rather than the supplied
   args, so any positional at a position the table did not list was discarded without

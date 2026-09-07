@@ -15,6 +15,8 @@ No live Odoo is needed: ``get_odoo_client`` is patched with a stub.
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import odoo_mcp.resources as resources
 from odoo_mcp.constants import COMPACT_FIELD_ATTRIBUTES
 from odoo_mcp.safety import validate_payload_against_schema
@@ -204,3 +206,29 @@ def test_payload_preflight_reuses_the_quick_schema_fetch():
         result = validate_payload_against_schema(client, "res.partner", "write", args=[[1], {"name": "X"}])
     assert result.ok is True
     assert client.get_model_fields.call_count == 1
+
+
+# ----- model-name validation on the non-schema handlers -----
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: resources.get_record("Not A Model", "1"),
+        lambda: resources.get_methods("Not A Model"),
+        lambda: resources.get_model_docs("Not A Model"),
+        lambda: resources.discover_actions_resource("Not A Model"),
+    ],
+    ids=["record", "methods", "docs", "actions"],
+)
+def test_non_schema_handlers_reject_malformed_model_names_before_any_call(call):
+    """The regex guard existed only on the schema views; the others built URLs / domains from the raw name."""
+    client = MagicMock()
+    with (
+        patch.object(resources, "get_odoo_client", return_value=client),
+        patch.object(resources, "_get_live_doc") as live_doc,
+    ):
+        payload = json.loads(call())
+    assert "Invalid model name" in payload["error"]
+    assert client.method_calls == []
+    assert live_doc.call_count == 0

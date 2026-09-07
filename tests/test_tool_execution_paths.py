@@ -406,3 +406,24 @@ def test_unknown_workflow_lists_available_ones():
 def test_invalid_params_json_is_rejected():
     response = _workflow(_client(), workflow="lead_to_won", params_json="{oops")
     assert response.success is False and "Invalid params_json" in response.error
+
+
+# ----- batch_execute: per-operation parsing (shared with execute_method) -----
+
+
+def test_batch_merges_default_context_into_each_operation(monkeypatch):
+    monkeypatch.setenv("MCP_DEFAULT_CONTEXT", '{"lang": "fr_FR"}')
+    client = _client(execute_method=lambda *a, **k: [])
+    ops = [{"model": "res.partner", "method": "search_read", "kwargs_json": '{"context": {"tz": "UTC"}}'}]
+    response = _batch(client, operations=ops)
+    assert response.success is True
+    assert _sent(client)[0][3]["context"] == {"lang": "fr_FR", "tz": "UTC"}
+
+
+def test_batch_non_list_args_json_reports_the_operation_index():
+    client = _client(execute_method=lambda *a, **k: 1)
+    response = _batch(client, operations=[{"model": "res.partner", "method": "read", "args_json": '{"a": 1}'}])
+    assert response.results[0].success is False
+    assert response.results[0].error.startswith("Operation 0:")
+    assert "JSON array" in response.results[0].error
+    assert client.execute_method.call_count == 0

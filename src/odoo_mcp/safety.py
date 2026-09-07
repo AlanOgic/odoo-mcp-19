@@ -477,8 +477,15 @@ def classify_batch(
                 args = json.loads(op["args_json"])
             if op.get("kwargs_json"):
                 kwargs = json.loads(op["kwargs_json"])
-        except (json.JSONDecodeError, TypeError):
-            pass
+        except (json.JSONDecodeError, TypeError) as exc:
+            # Classification proceeds on empty args (the record-count gate then
+            # cannot under-count); execution will reject the same payload later.
+            logger.warning(
+                "Batch op %s.%s has malformed args_json/kwargs_json, classifying without payload: %s",
+                model,
+                method,
+                exc,
+            )
 
         classification = classify_operation(model, method, args, kwargs, role=role)
         classifications.append(classification)

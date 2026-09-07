@@ -7,9 +7,11 @@ FastMCP instance: static URIs via ``@mcp.resource``, parameterized URIs via
 to the worker threadpool — see the decorator's docstring).
 """
 
+import copy
 import functools
 import inspect
 import json
+import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -30,6 +32,7 @@ from .constants import (
     TOOL_REGISTRY,
     _validate_model,
 )
+from .method_catalog import build_methods_payload
 from .odoo_client import get_odoo_client
 from .utils import (
     _build_compact_schema,
@@ -42,6 +45,8 @@ from .utils import (
     fields_cache_key,
     fields_cache_put,
 )
+
+logger = logging.getLogger(__name__)
 
 # ----- Internal helpers -----
 
@@ -136,7 +141,7 @@ def get_models() -> str:
     """Lists all available models"""
     odoo_client = get_odoo_client()
     models = odoo_client.get_models()
-    return json.dumps(models, indent=2)
+    return json.dumps(models, separators=(",", ":"))
 
 
 @_threaded_resource(
@@ -144,15 +149,15 @@ def get_models() -> str:
     description="Get information about a specific model including fields",
 )
 def get_model_info(model_name: str) -> str:
-    """Get information about a specific model"""
-    odoo_client = get_odoo_client()
+    """Model metadata plus its full field definition (the latter via the shared fields cache)."""
+    fields, error = _fetch_model_fields(model_name)
+    if fields is None:
+        return json.dumps(error, separators=(",", ":"))
     try:
-        model_info = odoo_client.get_model_info(model_name)
-        fields = odoo_client.get_model_fields(model_name)
-        model_info["fields"] = fields
-        return json.dumps(model_info, indent=2)
+        model_info = get_odoo_client().get_model_info(model_name)
+        return json.dumps({**model_info, "fields": fields}, separators=(",", ":"))
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return json.dumps({"error": str(e)}, separators=(",", ":"))
 
 
 @_threaded_resource(
@@ -192,9 +197,9 @@ def get_model_schema(model_name: str) -> str:
                     "values": field_def.get("selection"),
                 }
 
-        return json.dumps(schema, indent=2)
+        return json.dumps(schema, separators=(",", ":"))
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return json.dumps({"error": str(e)}, separators=(",", ":"))
 
 
 @_threaded_resource(
@@ -418,6 +423,9 @@ def get_session_bootstrap() -> str:
 )
 def get_record(model_name: str, record_id: str) -> str:
     """Get a specific record by ID"""
+    err = _validate_model(model_name)
+    if err:
+        return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
     odoo_client = get_odoo_client()
     try:
         if not record_id or record_id == "None":
@@ -436,180 +444,36 @@ def get_record(model_name: str, record_id: str) -> str:
     description="Available methods for a model including module-specific special methods",
 )
 def get_methods(model_name: str) -> str:
-    """Get available methods for a model, including special methods from knowledge base"""
-    common_methods = {
-        "read_methods": [
-            {
-                "name": "search",
-                "description": "Search for record IDs",
-                "params": ["domain", "offset", "limit", "order"],
-            },
-            {
-                "name": "search_read",
-                "description": "Search and read in one call",
-                "params": ["domain", "fields", "offset", "limit", "order", "load"],
-            },
-            {
-                "name": "read",
-                "description": "Read specific records by ID",
-                "params": ["ids", "fields", "load"],
-                "note": "load='_classic_read' (default) returns Many2one as (id, name); load=None returns raw ID for better performance",
-            },
-            {"name": "search_count", "description": "Count matching records", "params": ["domain"]},
-            {
-                "name": "read_group",
-                "description": "Aggregation with grouping (deprecated in v19, use formatted_read_group)",
-                "params": ["domain", "fields", "groupby", "offset", "limit", "orderby", "lazy"],
-                "note": "Deprecated in v19. Use formatted_read_group instead. Still works for backward compatibility.",
-            },
-            {
-                "name": "formatted_read_group",
-                "description": "Aggregation with grouping (v19+ replacement for read_group)",
-                "params": ["domain", "groupby", "aggregates", "having", "offset", "limit", "order"],
-                "note": "Uses 'aggregates' param with 'field:agg' format (e.g. 'amount_total:sum', '__count'). Replaces deprecated read_group.",
-            },
-        ],
-        "write_methods": [
-            {
-                "name": "create",
-                "description": "Create new record(s)",
-                "params": ["vals_list"],
-                "note": "Pass list of dicts for batch creation",
-            },
-            {"name": "write", "description": "Update existing record(s)", "params": ["ids", "vals"]},
-            {"name": "unlink", "description": "Delete record(s)", "params": ["ids"]},
-            {"name": "copy", "description": "Duplicate a record", "params": ["id", "default"]},
-        ],
-        "introspection_methods": [
-            {
-                "name": "fields_get",
-                "description": "Get field definitions and metadata",
-                "params": ["allfields", "attributes"],
-            },
-            {"name": "default_get", "description": "Get default values for fields", "params": ["fields_list"]},
-            {
-                "name": "name_search",
-                "description": "Search by name (autocomplete)",
-                "params": ["name", "domain", "operator", "limit"],
-            },
-            {
-                "name": "check_access_rights",
-                "description": "Check user permissions (legacy, still works)",
-                "params": ["operation", "raise_exception"],
-                "note": "Still works but has_access is preferred in v19+.",
-            },
-            {
-                "name": "has_access",
-                "description": "Check if user has access (returns boolean)",
-                "params": ["operation"],
-                "note": "Preferred over check_access_rights in v19+. Returns True/False without raising exceptions.",
-            },
-        ],
-        "special_methods": [],
-        "warnings": [],
-        "note": f"Use execute_method tool to call these on {model_name}",
-    }
+    """Get available methods for a model: static catalog + module knowledge + live /doc-bearer/ enrichment."""
+    err = _validate_model(model_name)
+    if err:
+        return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
+    return json.dumps(build_methods_payload(model_name, _get_live_doc(model_name)), separators=(",", ":"))
 
-    # Check module knowledge for special methods
-    for module_name, module_info in MODULE_KNOWLEDGE.get("modules", {}).items():
-        if module_info.get("model") == model_name:
-            special_methods = module_info.get("special_methods", {})
-            for method_name, method_info in special_methods.items():
-                common_methods["special_methods"].append(
-                    {
-                        "name": method_name,
-                        "description": method_info.get("description", ""),
-                        "params": method_info.get("params", {}),
-                        "instead_of": method_info.get("instead_of"),
-                        "requires_ids": method_info.get("requires_ids", False),
-                    }
-                )
 
-            # Add warnings if any
-            if module_info.get("notes"):
-                common_methods["warnings"].append(module_info["notes"])
+def _selection_options(odoo_client: Any, model_name: str, fields_meta: list) -> Dict[str, list]:
+    """Selection values for every selection field of the model, grouped by field name.
 
-            # Add field mappings if any
-            if module_info.get("field_mappings"):
-                common_methods["field_mappings"] = module_info["field_mappings"]
-
-    # --- Live enrichment from /doc-bearer/ ---
-    live_doc = _get_live_doc(model_name)
-    if live_doc:
-        live_methods = live_doc.get("methods", {})
-
-        # Build set of all static method names for quick lookup
-        static_names = set()
-        for category in ["read_methods", "write_methods", "introspection_methods", "special_methods"]:
-            for m in common_methods.get(category, []):
-                static_names.add(m["name"])
-
-        # 1) Enrich existing static methods with live signatures, types, decorators
-        for category in ["read_methods", "write_methods", "introspection_methods", "special_methods"]:
-            for method_entry in common_methods.get(category, []):
-                name = method_entry["name"]
-                if name in live_methods:
-                    live = live_methods[name]
-                    if live.get("signature"):
-                        method_entry["signature"] = live["signature"]
-                    if live.get("return"):
-                        ret = live["return"]
-                        if ret.get("annotation"):
-                            method_entry["return_type"] = ret["annotation"]
-                    if live.get("api"):
-                        method_entry["api"] = live["api"]
-                    if live.get("module"):
-                        method_entry["module"] = live["module"]
-                    if live.get("raise"):
-                        method_entry["exceptions"] = {k: _strip_html(v) for k, v in live["raise"].items()}
-                    # Enrich params with types and defaults from live data
-                    if live.get("parameters"):
-                        param_details = {}
-                        for pname, pinfo in live["parameters"].items():
-                            detail = {}
-                            if pinfo.get("annotation"):
-                                detail["type"] = pinfo["annotation"]
-                            if "default" in pinfo:
-                                detail["default"] = pinfo["default"]
-                            if pinfo.get("doc"):
-                                detail["description"] = _strip_html(pinfo["doc"])
-                            if detail:
-                                param_details[pname] = detail
-                        if param_details:
-                            method_entry["param_details"] = param_details
-
-        # 2) Discover additional model-specific methods not in our static list
-        additional = []
-        for name, live in live_methods.items():
-            if name not in static_names:
-                entry = {
-                    "name": name,
-                    "description": _strip_html(live.get("doc", "")) if live.get("doc") else "",
-                }
-                if live.get("signature"):
-                    entry["signature"] = live["signature"]
-                if live.get("return", {}).get("annotation"):
-                    entry["return_type"] = live["return"]["annotation"]
-                if live.get("api"):
-                    entry["api"] = live["api"]
-                if live.get("module"):
-                    entry["module"] = live["module"]
-                if live.get("raise"):
-                    entry["exceptions"] = {k: _strip_html(v) for k, v in live["raise"].items()}
-                if live.get("parameters"):
-                    entry["params"] = list(live["parameters"].keys())
-                additional.append(entry)
-
-        if additional:
-            # Sort by module then name for consistent ordering
-            additional.sort(key=lambda m: (m.get("module", "zzz"), m["name"]))
-            common_methods["additional_methods"] = additional
-
-        common_methods["_source"] = "live (enriched from /doc-bearer/)"
-    else:
-        common_methods["_source"] = "static (live docs unavailable)"
-
-    return json.dumps(common_methods, indent=2)
+    One ``ir.model.fields.selection`` query for the whole model — the previous
+    per-field loop cost one round-trip per selection field (up to 20). Options
+    are ordered by ``sequence`` within each field.
+    """
+    field_names_by_id = {f["id"]: f["name"] for f in fields_meta if f.get("ttype") == "selection" and "id" in f}
+    if not field_names_by_id:
+        return {}
+    rows = odoo_client.search_read(
+        "ir.model.fields.selection",
+        [["field_id.model", "=", model_name]],
+        fields=["field_id", "value", "name", "sequence"],
+    )
+    grouped: Dict[str, list] = {}
+    for row in sorted(rows, key=lambda r: (r.get("sequence") or 0, r.get("id") or 0)):
+        field_id = row["field_id"][0] if isinstance(row.get("field_id"), (list, tuple)) else row.get("field_id")
+        field_name = field_names_by_id.get(field_id)
+        if field_name is None:
+            continue
+        grouped[field_name] = [*grouped.get(field_name, []), {"value": row["value"], "label": row["name"]}]
+    return grouped
 
 
 @_threaded_resource(
@@ -618,6 +482,9 @@ def get_methods(model_name: str) -> str:
 )
 def get_model_docs(model_name: str) -> str:
     """Get comprehensive documentation for a model from Odoo's internal metadata."""
+    err = _validate_model(model_name)
+    if err:
+        return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
     odoo_client = get_odoo_client()
 
     try:
@@ -656,21 +523,8 @@ def get_model_docs(model_name: str) -> str:
                 "required": f.get("required"),
             }
 
-        # 3. Get selection field options with labels
-        selection_fields = [f["name"] for f in fields_meta if f.get("ttype") == "selection"]
-        if selection_fields:
-            for field_name in selection_fields[:20]:  # Limit to avoid too many queries
-                selections = odoo_client.search_read(
-                    "ir.model.fields.selection",
-                    [["field_id.model", "=", model_name], ["field_id.name", "=", field_name]],
-                    fields=["value", "name", "sequence"],
-                    limit=50,
-                )
-                if selections:
-                    result["selection_options"][field_name] = [
-                        {"value": s["value"], "label": s["name"]}
-                        for s in sorted(selections, key=lambda x: x.get("sequence", 0))
-                    ]
+        # 3. Selection options with labels — one query for the whole model
+        result["selection_options"] = _selection_options(odoo_client, model_name, fields_meta)
 
         # 4. Get action help text (contextual documentation)
         actions = odoo_client.search_read(
@@ -683,10 +537,10 @@ def get_model_docs(model_name: str) -> str:
                 help_text = " ".join(help_text.split())  # Normalize whitespace
                 result["actions_help"].append({"action_name": action.get("name"), "help": help_text})
 
-        return json.dumps(result, indent=2)
+        return json.dumps(result, separators=(",", ":"))
 
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return json.dumps({"error": str(e)}, separators=(",", ":"))
 
 
 @mcp.resource(
@@ -893,8 +747,8 @@ def get_workflows() -> str:
                 custom_automations.append(
                     {"name": action.get("name"), "model": model_name, "state": action.get("state")}
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("ir.actions.server lookup skipped for odoo://workflows: %s", exc)
 
         return json.dumps(
             {
@@ -956,6 +810,18 @@ def get_domain_syntax() -> str:
     )
 
 
+def _snapshot_runtime_issues() -> Dict[str, Any]:
+    """Deep copy of the runtime-issue registry, taken under its lock.
+
+    The reader iterates nested dicts (categories, domain_patterns, sample_errors)
+    that ``_track_model_issue`` mutates from the tool threads; a shallow copy
+    still aliased those and could raise "dictionary changed size during
+    iteration" mid-report.
+    """
+    with _RUNTIME_ISSUES_LOCK:
+        return copy.deepcopy(RUNTIME_MODEL_ISSUES)
+
+
 @mcp.resource(
     "odoo://model-limitations",
     description="Known model limitations and workarounds for problematic models (static + runtime-detected)",
@@ -995,8 +861,7 @@ def get_model_limitations() -> str:
     all_domain_patterns = {}
     all_categories = {}
 
-    with _RUNTIME_ISSUES_LOCK:
-        runtime_snapshot = {k: dict(v) for k, v in RUNTIME_MODEL_ISSUES.items()}
+    runtime_snapshot = _snapshot_runtime_issues()
 
     for model, methods in runtime_snapshot.items():
         result["runtime_detected"][model] = {
@@ -1243,8 +1108,8 @@ def find_model_resource(concept: str) -> str:
             result["best_match"] = result["all_matches"][0]["model"]
             result["source"] = "ir.model"
             return json.dumps(result, indent=2)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("ir.model search failed for concept %r, falling back to fuzzy match: %s", concept, exc)
 
     # 3. Fuzzy match
     try:
@@ -1320,6 +1185,9 @@ def search_tools_resource(query: str) -> str:
 )
 def discover_actions_resource(model: str) -> str:
     """Discover all actions available for a model."""
+    err = _validate_model(model)
+    if err:
+        return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
     odoo_client = get_odoo_client()
 
     result = {
@@ -1373,8 +1241,8 @@ def discover_actions_resource(model: str) -> str:
                     "type": action.get("state"),
                 }
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("ir.actions.server lookup skipped for odoo://actions/%s: %s", model, exc)
 
     # 4. Add usage examples
     result["usage_examples"] = [
