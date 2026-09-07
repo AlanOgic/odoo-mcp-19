@@ -132,8 +132,16 @@ def _param_details(parameters: Dict[str, Any]) -> Dict[str, Any]:
     return details
 
 
-def _enrich_from_live(entry: Dict[str, Any], live: Dict[str, Any]) -> Dict[str, Any]:
-    """Return ``entry`` extended with the live /doc-bearer/ facts for that method."""
+def _enrich_from_live(
+    entry: Dict[str, Any], live: Dict[str, Any], *, with_param_details: bool = True
+) -> Dict[str, Any]:
+    """Return ``entry`` extended with the live /doc-bearer/ facts for that method.
+
+    ``with_param_details=False`` keeps only the parameter *names* — used for the
+    discovered methods (100+ on a model like sale.order), where per-parameter
+    types and docs would grow the payload well past what an agent needs to pick
+    a method; the static catalog entries keep the full details.
+    """
     enriched = dict(entry)
     for live_key, out_key in _LIVE_SCALAR_KEYS:
         if live.get(live_key):
@@ -142,7 +150,7 @@ def _enrich_from_live(entry: Dict[str, Any], live: Dict[str, Any]) -> Dict[str, 
         enriched["return_type"] = live["return"]["annotation"]
     if live.get("raise"):
         enriched["exceptions"] = {k: _strip_html(v) for k, v in live["raise"].items()}
-    details = _param_details(live.get("parameters") or {})
+    details = _param_details(live.get("parameters") or {}) if with_param_details else {}
     if details:
         enriched["param_details"] = details
     return enriched
@@ -161,7 +169,7 @@ def _discovered_methods(live_methods: Dict[str, Any], known: Iterable[str]) -> L
         }
         if live.get("parameters"):
             entry["params"] = list(live["parameters"].keys())
-        additional.append(_enrich_from_live(entry, live))
+        additional.append(_enrich_from_live(entry, live, with_param_details=False))
     additional.sort(key=lambda m: (m.get("module", "zzz"), m["name"]))
     return additional
 

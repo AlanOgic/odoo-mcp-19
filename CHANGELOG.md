@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validated `_fetch_model_fields` cache like every other schema view instead of
   re-fetching the full definition on each read. The large dynamic emitters
   (`/schema`, `odoo://model/{model}`, `odoo://models`, `/methods`, `/docs`) are
-  emitted as compact JSON — ~30 % fewer characters for the agent and a later
+  emitted as compact JSON — ~25 % fewer characters for the agent and a later
   hit on `read_resource`'s 15 000-char cap; the human-readable guides keep
   their indentation. `tests/test_resource_payloads.py` pins all three.
 - **`configure_odoo` no longer offers password authentication.** The JSON-2

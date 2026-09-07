@@ -40,7 +40,7 @@ _LIVE_DOC = {
             "return": {"annotation": "dict"},
             "api": ["public"],
             "module": "sale",
-            "parameters": {"ids": {}},
+            "parameters": {"ids": {"annotation": "list[int]", "doc": "Records to send"}},
         },
         "action_confirm": {
             "signature": "() -> bool",
@@ -138,3 +138,12 @@ def test_module_knowledge_special_methods_and_notes_are_included():
 @pytest.mark.parametrize("model", ["res.partner", "sale.order"])
 def test_payload_is_json_serializable(model):
     json.dumps(_payload(model, live_doc=_LIVE_DOC))
+
+
+def test_discovered_methods_list_param_names_but_not_param_details():
+    """Discovered methods are numerous (100+ on sale.order); the pre-refactor resource published
+    only their parameter *names*. Keeping per-parameter details off them holds the payload size."""
+    payload = _payload(live_doc=_LIVE_DOC)
+    send = next(m for m in payload["additional_methods"] if m["name"] == "action_quotation_send")
+    assert send["params"] == ["ids"]
+    assert "param_details" not in send

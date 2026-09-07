@@ -4,7 +4,7 @@
   selection field (up to 20 sequential round-trips); one query grouped in
   Python is enough.
 * The big dynamic emitters (``/schema``, ``odoo://model/{m}``, ``odoo://models``,
-  ``/methods``, ``/docs``) were pretty-printed with ``indent=2`` — ~30 % more
+  ``/methods``, ``/docs``) were pretty-printed with ``indent=2`` — ~25 % more
   characters for the agent to pay for, and an earlier hit on the 15 000-char
   ``read_resource`` truncation. They are emitted compact, like the quick
   views already were.
@@ -134,7 +134,7 @@ def test_large_dynamic_resources_emit_compact_json(call):
     ):
         output = call()
     json.loads(output)  # still valid JSON
-    assert "\n" not in output, "pretty-printed output inflates token cost by ~30 %"
+    assert "\n" not in output, "pretty-printed output inflates token cost by ~25 %"
 
 
 # ----- P3: odoo://model/{m} goes through the shared, validated fetch -----
