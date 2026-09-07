@@ -353,7 +353,7 @@ Pre-execution safety classification gates dangerous operations behind confirmati
 | Level | Behavior | Confirm? |
 |-------|----------|----------|
 | `SAFE` | Execute immediately | Never |
-| `MEDIUM` | Gate based on mode/volume | Conditional |
+| `MEDIUM` | Confirm in `strict` / `locked` for any record count; proceed in `permissive` | Conditional |
 | `HIGH` | Always require confirmation | Always |
 | `BLOCKED` | Always refuse | N/A |
 

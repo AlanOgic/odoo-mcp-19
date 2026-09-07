@@ -73,7 +73,7 @@ Note: live tests under `tests/live/` are **script-style runners**, not pytest mo
 
 Run `black . && isort .` before pushing — CI enforces formatting.
 
-**Lint and typecheck are not clean gates.** Baseline as of v1.18.0: `pytest --ignore=tests/live` → **519 passed** (unit coverage 75 %); `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **26 errors** (20 E501, 6 E402); `mypy src/odoo_mcp` → **51 errors** (27 `resources.py`, 14 `server.py`, 6 `utils.py`, 1 each in `prompts.py` / `constants.py` / `user_clients.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.1.0 here). No function is rated worse than radon C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
+**Lint and typecheck are not clean gates.** Baseline as of v1.18.0: `pytest --ignore=tests/live` → **532 passed** (unit coverage 75 %); `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **26 errors** (20 E501, 6 E402); `mypy src/odoo_mcp` → **51 errors** (27 `resources.py`, 14 `server.py`, 6 `utils.py`, 1 each in `prompts.py` / `constants.py` / `user_clients.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.1.0 here). No function is rated worse than radon C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
 
 ## High-level architecture
 
@@ -138,7 +138,7 @@ src/odoo_mcp/
 1. Validate model (`_validate_model`) and method (`_validate_method`) — regex + length, else 400.
 2. Block `@api.private` methods statically (PRIVATE_METHOD_HINTS) and dynamically (live `/doc-bearer/`).
 3. Classify via `safety.classify_operation` → SAFE / MEDIUM / HIGH / BLOCKED.
-4. If gate triggers → return `pending_confirmation=true` with a single-use, 120s, op-bound `confirmation_token` in `hint`. Caller must re-call with both `confirmed=true` AND that token. **`confirmed=true` alone does not bypass the gate** — this is the v1.14.0 hardening.
+4. Gated, blocked and directly executed responses carry `safety` (the `SafetyClassification`) so a caller can see why a call was or was not gated; only the `search_read` fallback and generic error paths omit it. If gate triggers → return `pending_confirmation=true` with a single-use, 120s, op-bound `confirmation_token` in `hint`. Caller must re-call with both `confirmed=true` AND that token. **`confirmed=true` alone does not bypass the gate** — this is the v1.14.0 hardening.
 5. Merge `MCP_DEFAULT_CONTEXT` into kwargs (explicit context wins).
 6. Resolve Many2one names via `resolve_json` (uses `name_search`, validates target model against BLOCKED_MODELS).
 7. Convert positional → named args via `arg_mapping`.
@@ -175,13 +175,13 @@ Activated by `USERS_DB_PATH` (HTTP transport). Key invariants:
 | Level | Behavior |
 |-------|----------|
 | `SAFE` | Execute immediately |
-| `MEDIUM` | Confirm in `strict` mode (default); only HIGH/BLOCKED in `permissive` |
+| `MEDIUM` | Confirm in `strict` (default) and `locked`, for any record count; proceed in `permissive` |
 | `HIGH` | Always confirm |
 | `BLOCKED` | Always refuse |
 
 Classification also takes a `role` (multi-user mode): `readonly` users get BLOCKED for any non-safe method, before model rules are even consulted. `tests/test_safety_role.py` pins this.
 
-- **Batch rule (strict mode)**: a MEDIUM method affecting more than one record is escalated to confirmation. The count comes from `_estimate_record_count`, which reads the payload from **either** `args_json` or `kwargs_json` (`_COUNTED_ARG` in `safety.py`: `write`/`unlink`/`copy` → `ids`, `create` → `vals_list`, `load` → `data`; `action_*`/`button_*` → `ids`). v2 is named-args-only, so both spellings must be counted — counting only the positional form lets a bulk `unlink` slip past the gate by moving `ids` into `kwargs_json`.
+- **Every side-effect call is gated in `strict` and `locked`** (fixed after v1.18.0): a MEDIUM method (`create`, `write`, `copy`, `name_create`, `load`) requires a confirmation token whatever the record count. Until v1.18.0 a single-record write on a non-sensitive model ran unconfirmed from one tool call, and `batch_execute` inherited that because `classify_batch` only aggregates the per-op flags; `tests/test_strict_single_write_gate.py` pins the closure. `permissive` still lets MEDIUM calls through. The record count still matters for the audit reason and for permissive-mode reporting — it comes from `_estimate_record_count`, which reads the payload from **either** `args_json` or `kwargs_json` (`_COUNTED_ARG` in `safety.py`: `write`/`unlink`/`copy` → `ids`, `create` → `vals_list`, `load` → `data`; `action_*`/`button_*` → `ids`). v2 is named-args-only, so both spellings must be counted — counting only the positional form lets a bulk `unlink` slip past the gate by moving `ids` into `kwargs_json`.
 - **Unknown methods** classify as MEDIUM: confirm in `strict`, allow in `permissive`.
 
 - **BLOCKED_MODELS** (writes always refused): `ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `res.users`, `res.groups`, `res.users.apikeys`. The `resolve_json` parameter also rejects these as targets — agents cannot use it to read security-critical data. `res.users.apikeys` is blocked because Odoo 19.1+ exposes programmatic API-key management (`res.users.apikeys.generate` / `.revoke` over JSON-2 — Odoo restricts it to *Settings* admins by default, opt-in for others via `base.enable_programmatic_api_keys`, but the connected API user is often privileged); it's a distinct model name from `res.users`, so without an explicit entry an agent could mint a persistent API key (up to 3 months) that outlives the MCP session.

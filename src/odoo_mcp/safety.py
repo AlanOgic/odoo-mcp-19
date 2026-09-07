@@ -404,32 +404,31 @@ def classify_operation(
             )
 
         # Modes treated as confirmation-required ("strict" semantics).
-        # Note: "locked" inherits "strict" classifier behaviour for unknown
-        # and batch operations (in addition to its own read_only / allowlist
-        # gates resolved at the profile layer).
-        # Strict and locked modes: confirm if batch (record_count > 1)
-        if mode in _STRICT_EQUIV and record_count is not None and record_count > 1:
+        # Note: "locked" inherits "strict" classifier behaviour (in addition to
+        # its own read_only / allowlist gates resolved at the profile layer).
+        # Every side-effect call is gated, whatever the record count: before
+        # v1.18.1 a single-record write/create on a non-sensitive model ran
+        # unconfirmed from one tool call, and batch_execute inherited that.
+        if mode in _STRICT_EQUIV:
+            scope = f"{record_count} record(s)" if record_count is not None else "an unknown number of records"
             return SafetyClassification(
                 risk_level=RiskLevel.MEDIUM,
                 model=model,
                 method=method,
                 record_count=record_count,
                 requires_confirmation=True,
-                reason=(
-                    f"'{method}' affects {record_count} records "
-                    f"(strict mode requires confirmation for batch operations)."
-                ),
+                reason=f"'{method}' on '{model}' affects {scope} (strict mode confirms every write).",
                 cascade_warning=cascade_warning,
             )
 
-        # Otherwise: safe to proceed
+        # Permissive mode: medium-risk writes proceed without a gate.
         return SafetyClassification(
             risk_level=RiskLevel.MEDIUM,
             model=model,
             method=method,
             record_count=record_count,
             requires_confirmation=False,
-            reason=f"'{method}' classified as medium risk, no confirmation needed.",
+            reason=f"'{method}' classified as medium risk, no confirmation needed in permissive mode.",
             cascade_warning=cascade_warning,
         )
 

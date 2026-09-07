@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Strict mode now gates every write.** Since v1.10.0 a MEDIUM method
+  (`create`, `write`, `copy`, `name_create`, `load`) on a non-sensitive model
+  only required confirmation when it touched more than one record: a `write` on
+  one real quotation, opportunity or customer executed unconfirmed from a single
+  tool call with `pending_confirmation=false`, and `batch_execute` inherited the
+  hole because `classify_batch` only aggregates the per-operation flags. In
+  `strict` (the default) and `locked` every side-effect call now issues a
+  confirmation token whatever the record count; `permissive` is unchanged.
+  `tests/test_strict_single_write_gate.py` pins the closure end-to-end through
+  `execute_method`.
+- **`safety` is reported on successful `execute_method` responses** (it was
+  `null` unless the call was blocked or gated), so a caller can see the risk
+  level and the reason a call was or was not gated. The `search_read` fallback
+  and generic error paths still omit it.
+
 ## [1.18.0] - 2026-09-07
 
 ### Added
