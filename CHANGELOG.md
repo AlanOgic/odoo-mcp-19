@@ -23,6 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   most 20 identities, oldest evicted) so registry users never share a
   group-filtered index. All four are routed
   through the `read_resource` bridge and listed in `odoo://templates`.
+- **Five ORM guides and a live session resource** (`orm_guides.py`).
+  `odoo://api/datetime` (server formats `YYYY-MM-DD` / `YYYY-MM-DD HH:MM:SS`,
+  UTC storage with client-side tz, the 19.0 dynamic domain values and 17.3
+  date parts), `odoo://api/mail-thread` (keyword-only `message_post`
+  signature with `body_is_html`, the `mail_notrack` / `tracking_disable` /
+  `mail_create_nosubscribe` context kill-switches, followers, activities),
+  `odoo://api/security-model` (ACLs are additive, record rules default-allow,
+  global rules AND vs group rules OR, field groups vanish from `fields_get`,
+  `has_access` / `has_group` as the callable checks), `odoo://api/web-read`
+  (the nested `specification` of `web_read` / `web_search_read` / `web_save`)
+  and `odoo://api/xmlids` (`ir.model.data.check_object_reference` as the only
+  public resolver, custom model/field constraints). `odoo://session` is live:
+  `res.users/context_get` + the user's companies + `res.lang.get_installed`,
+  so an agent knows which tz, lang and company scope it is reading in.
+- **`odoo://domain-syntax` gains `dynamic_dates`, `date_parts` and the `any!`
+  / `not any!` operators** (data in `module_knowledge.json`).
 - **Handler ↔ bridge-route parity is now tested.** `tests/test_api_reference.py`
   enumerates every registered resource and template and asserts exactly one
   `_RESOURCE_ROUTES` entry matches — adding a resource without a route no

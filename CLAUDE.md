@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Version**: 1.17.0 · **Python**: 3.10+ · **MCP**: 2025-11-25 (FastMCP `>=3.4.6,<4`; `cryptography>=42` is a *direct* dependency of `token_crypto`, not just a transitive Authlib one; `anyio>=4` is a direct dependency of the event-loop offload in `server.py` / `resources.py`)
 - **The `<4` ceiling is deliberate.** FastMCP 4.x targets MCP spec 2026-07-28 and is not a drop-in — see `docs/mcp-2026-07-28-migration.md` and `tests/test_dependency_pins.py`, which fails the build if the bound is widened or the environment drifts. **`uv.lock` is gitignored** (`.gitignore`: *"project uses pip + pyproject.toml"*) — it pins only your local `.venv`, never the documented `pip install git+…` path, so `pyproject.toml` is the only thing between a fresh install and FastMCP 4.x. Do not relax the ceiling on the strength of the lockfile.
-- **Surface**: 5 tools, 32 `odoo://` resources, 19 prompts (12 generic + 7 `cyanview-*` workflow skill prompts)
+- **Surface**: 5 tools, 38 `odoo://` resources, 19 prompts (12 generic + 7 `cyanview-*` workflow skill prompts)
 - **Discovery is via resources, action is via tools** — there is no `list_models` tool, agents read `odoo://models` instead.
 - **Two deployment shapes**: single-user (STDIO or HTTP with one static `MCP_API_KEY`) and **multi-user HTTP** (per-user `cv_odoo_…` keys from the CLORAG-managed registry, personal Odoo clients, per-user skill visibility — see "Multi-user mode" below).
 
@@ -73,7 +73,7 @@ Note: live tests under `tests/live/` are **script-style runners**, not pytest mo
 
 Run `black . && isort .` before pushing — CI enforces formatting.
 
-**Lint and typecheck are not clean gates.** Baseline as of v1.17.0: `pytest --ignore=tests/live` → **498 passed** (unit coverage 75 %); `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **26 errors** (20 E501, 6 E402); `mypy src/odoo_mcp` → **51 errors** (27 `resources.py`, 14 `server.py`, 6 `utils.py`, 1 each in `prompts.py` / `constants.py` / `user_clients.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.1.0 here). No function is rated worse than radon C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
+**Lint and typecheck are not clean gates.** Baseline as of v1.17.0: `pytest --ignore=tests/live` → **519 passed** (unit coverage 75 %); `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **26 errors** (20 E501, 6 E402); `mypy src/odoo_mcp` → **51 errors** (27 `resources.py`, 14 `server.py`, 6 `utils.py`, 1 each in `prompts.py` / `constants.py` / `user_clients.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.1.0 here). No function is rated worse than radon C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
 
 ## High-level architecture
 
@@ -93,12 +93,14 @@ src/odoo_mcp/
 │                      (per op: _parse_batch_operation reuses _parse_json_args); execute_workflow
 │                      dispatches through _WORKFLOW_RUNNERS (_run_lead_to_won,
 │                      _run_create_and_post_invoice), each step via _attempt_step
-├── resources.py       32 odoo:// resource handlers; parameterized ones registered via
+├── resources.py       38 odoo:// resource handlers; parameterized ones registered via
 │                      _threaded_resource so the blocking body runs off the event loop.
 │                      Every handler taking a model name goes through _validate_model first
 ├── api_reference.py   Static odoo://api/* references (JSON-2 protocol, ORM version drift, x2many
 │                      commands) transcribed from the Odoo 19 source, plus build_api_index() which
 │                      compacts /doc-bearer/index.json for odoo://api-index (cached per (url, user))
+├── orm_guides.py      Static odoo://api/{datetime,mail-thread,security-model,web-read,xmlids} guides,
+│                      same transcription discipline as api_reference.py (every payload names its source)
 ├── method_catalog.py  Pure builder behind odoo://methods/{model}: static ORM table whose params
 │                      are derived from arg_mapping.V2_ARG_MAPPING (never restated), module
 │                      knowledge special methods, and /doc-bearer/ enrichment via _enrich_from_live
@@ -143,7 +145,7 @@ src/odoo_mcp/
 8. Send to Odoo. On 500 from `search_read` → automatically fall back to `search` + `read`, categorize the error (timeout / relational_filter / computed_field / …), record runtime issue, return enriched `issue_analysis`.
 9. On any error: match against ~25 patterns in `utils.get_error_suggestion` (with `{model}` templating). Server tracebacks are logged to stderr, **never** forwarded to clients.
 
-**2. Resource bridge** — `read_resource(uri)` exists because some clients (Claude Desktop) don't speak resource templates. The `_RESOURCE_ROUTES` table in `server.py` maps URIs to the same handlers `resources.py` registers, so the same `odoo://...` URI works either way. Two properties: **parity** — 32 routes ↔ 32 `@mcp.resource` handlers, pinned by `tests/test_api_reference.py::test_every_registered_resource_has_exactly_one_bridge_route` (adding a resource without adding a route silently 404s the bridge while the template client keeps working); and **order** — the list is matched top-down, so `odoo://module-knowledge/{name}` must stay above `odoo://module-knowledge`, and the specific `odoo://model/{m}/…` variants above the catch-all `odoo://model/{m}`. `read_resource` also **truncates at 15 000 chars** (`_READ_RESOURCE_MAX_CHARS`), appending a `_truncated` JSON marker — so `odoo://model/{m}/schema` (~300 KB) returns a fragment unless the caller passes `max_chars=0`.
+**2. Resource bridge** — `read_resource(uri)` exists because some clients (Claude Desktop) don't speak resource templates. The `_RESOURCE_ROUTES` table in `server.py` maps URIs to the same handlers `resources.py` registers, so the same `odoo://...` URI works either way. Two properties: **parity** — 38 routes ↔ 38 `@mcp.resource` handlers, pinned by `tests/test_api_reference.py::test_every_registered_resource_has_exactly_one_bridge_route` (adding a resource without adding a route silently 404s the bridge while the template client keeps working); and **order** — the list is matched top-down, so `odoo://module-knowledge/{name}` must stay above `odoo://module-knowledge`, and the specific `odoo://model/{m}/…` variants above the catch-all `odoo://model/{m}`. `read_resource` also **truncates at 15 000 chars** (`_READ_RESOURCE_MAX_CHARS`), appending a `_truncated` JSON marker — so `odoo://model/{m}/schema` (~300 KB) returns a fragment unless the caller passes `max_chars=0`.
 
 **Event-loop rule (post-1.16.0).** FastMCP 3.x runs sync tools and *static* resources in the anyio threadpool, but calls a sync *template* resource body inline on the loop and, of course, runs `async def` tools on the loop. `OdooClient` is synchronous `requests`, so: every parameterized `odoo://…/{x}` resource must be registered with `resources._threaded_resource` (not bare `@mcp.resource`), and any Odoo call inside an `async def` tool must go through `server._run_blocking`. `tests/test_event_loop_offload.py` enforces both. Contextvars propagate through `anyio.to_thread`, so per-user client resolution is unaffected.
 
@@ -267,6 +269,8 @@ Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py
 | `odoo://domain-syntax` / `odoo://aggregation` / `odoo://pagination` / `odoo://hierarchical` | Reference docs |
 | `odoo://server-status` | Resolved safety profile, transport, host, allowlist, warnings. Non-secret. New in v1.16.0. |
 | `odoo://api/json2-protocol` / `odoo://api/version-drift` / `odoo://api/x2many-commands` | Static API references: the `/json/2` contract (body keys, error shape, status codes, transactions), ORM renames since 15.2, and the x2many command triples. Read them when a call 404s/422s. New in v1.18.0. |
+| `odoo://api/datetime` / `mail-thread` / `security-model` / `web-read` / `xmlids` | Static ORM guides: date formats and dynamic domain values, chatter and its context kill-switches, ACL/rule/field-group composition, the `web_read` specification, XML id resolution. New in v1.18.0. |
+| `odoo://session` | Live: `context_get` + user + companies + `res.lang.get_installed` — the lang/tz/company scope an agent must interpret data in. New in v1.18.0. |
 | `odoo://api-index` | Live `/doc-bearer/index.json` compacted to module list + per-model field/method counts (~70 KB, cached 5 min per identity). Needs `api_doc.group_allow_doc`; falls back to an actionable error. New in v1.18.0. |
 
 When read through the `read_resource` tool (rather than a native resource client), every one of these is capped at 15 000 chars by default — `odoo://model/{model}/schema` needs `max_chars=0` to come back whole.
@@ -283,7 +287,7 @@ When read through the `read_resource` tool (rather than a native resource client
 
 **`read_group` is deprecated in v19.** Use `formatted_read_group` (param is `aggregates`, not `fields`).
 
-**Domain logic is Polish-prefix.** `["&", t1, t2]` AND, `["|", t1, t2]` OR, `["!", t]` NOT. Dot notation works (`["partner_id.country_id.code", "=", "US"]`) but can break on computed fields — check `odoo://model-limitations`.
+**Domain logic is Polish-prefix.** `["&", t1, t2]` AND, `["|", t1, t2]` OR, `["!", t]` NOT. Dot notation works (`["partner_id.country_id.code", "=", "US"]`) but can break on computed fields — check `odoo://model-limitations`. Since 19.0 date values may be dynamic (`"-3d +1H"`, `"=monday -1w"`) and date parts are traversable (`"date.month_number"`); `odoo://domain-syntax` and `odoo://api/datetime` document both.
 
 **One2many / Many2many command tuples**: `(0,0,vals)` create, `(1,id,vals)` update, `(2,id,0)` delete, `(4,id,0)` link, `(6,0,[ids])` replace all.
 

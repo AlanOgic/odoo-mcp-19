@@ -40,6 +40,13 @@ from .constants import (
 )
 from .method_catalog import build_methods_payload
 from .odoo_client import get_odoo_client
+from .orm_guides import (
+    datetime_reference,
+    mail_thread_reference,
+    security_model_reference,
+    web_read_reference,
+    xmlids_reference,
+)
 from .utils import (
     _build_compact_schema,
     _get_documentation_urls,
@@ -615,6 +622,90 @@ def get_api_index() -> str:
 
 
 @mcp.resource(
+    "odoo://api/datetime",
+    description="Date/datetime over JSON-2: server formats, UTC storage, client-side tz, dynamic domain values, "
+    "date parts",
+)
+def get_datetime_guide() -> str:
+    return json.dumps(datetime_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api/mail-thread",
+    description="Chatter over JSON-2: message_post signature, notification kill-switch context keys, followers, "
+    "activities",
+)
+def get_mail_thread_guide() -> str:
+    return json.dumps(mail_thread_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api/security-model",
+    description="How ACLs, record rules and field groups compose, and how to test access with has_access/has_group",
+)
+def get_security_model_guide() -> str:
+    return json.dumps(security_model_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api/web-read",
+    description="web_read / web_search_read / web_save: the nested specification that reads relations in one call",
+)
+def get_web_read_guide() -> str:
+    return json.dumps(web_read_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://api/xmlids",
+    description="External ids over JSON-2 (check_object_reference) and the constraints on custom models/fields",
+)
+def get_xmlids_guide() -> str:
+    return json.dumps(xmlids_reference(), indent=2)
+
+
+@mcp.resource(
+    "odoo://session",
+    description="Who the API key is: uid, login, lang, tz, current company, allowed companies, installed languages",
+)
+def get_session() -> str:
+    """Live identity of the connected Odoo user — the context an agent must interpret dates and languages in."""
+    client = get_odoo_client()
+    try:
+        ctx = client.execute_method("res.users", "context_get")
+        uid = int(ctx["uid"])
+        user = (client.read_records("res.users", [uid], fields=["name", "login", "company_id", "company_ids"]) or [{}])[
+            0
+        ]
+        company_ids = list(user.get("company_ids") or [])
+        companies = (
+            client.search_read("res.company", domain=[["id", "in", company_ids]], fields=["id", "name"], order="id")
+            if company_ids
+            else []
+        )
+        langs = client.execute_method("res.lang", "get_installed")
+    except Exception as e:
+        return json.dumps(
+            {"error": str(e), "hint": "context_get needs a valid bearer key; see odoo://api/json2-protocol"}, indent=2
+        )
+    company = user.get("company_id") or [None, None]
+    return json.dumps(
+        {
+            "uid": uid,
+            "name": user.get("name"),
+            "login": user.get("login"),
+            "lang": ctx.get("lang"),
+            "tz": ctx.get("tz"),
+            "company": {"id": company[0], "name": company[1]},
+            "allowed_companies": [{"id": c["id"], "name": c["name"]} for c in companies],
+            "installed_languages": [{"code": code, "name": name} for code, name in langs],
+            "context_hint": "Datetimes are UTC (convert with tz); pass {'allowed_company_ids': [...]} in context to "
+            "switch company scope and {'lang': ...} to read translations. See odoo://api/datetime.",
+        },
+        indent=2,
+    )
+
+
+@mcp.resource(
     "odoo://concepts",
     description="Mapping of business concepts to Odoo model names (contact->res.partner, invoice->account.move)",
 )
@@ -715,6 +806,30 @@ def get_resource_templates() -> str:
             "odoo://api-index": {
                 "description": "Live catalogue of installed modules and readable models (api_doc index)",
                 "example": "odoo://api-index",
+            },
+            "odoo://api/datetime": {
+                "description": "Server date formats, UTC storage, dynamic domain values, date parts",
+                "example": "odoo://api/datetime",
+            },
+            "odoo://api/mail-thread": {
+                "description": "message_post signature, notification kill-switches, followers, activities",
+                "example": "odoo://api/mail-thread",
+            },
+            "odoo://api/security-model": {
+                "description": "ACL / record rule / field group composition and how to test access",
+                "example": "odoo://api/security-model",
+            },
+            "odoo://api/web-read": {
+                "description": "web_read / web_search_read nested specification",
+                "example": "odoo://api/web-read",
+            },
+            "odoo://api/xmlids": {
+                "description": "XML id resolution over JSON-2 and custom model/field constraints",
+                "example": "odoo://api/xmlids",
+            },
+            "odoo://session": {
+                "description": "Live identity: uid, login, lang, tz, companies, installed languages",
+                "example": "odoo://session",
             },
             "odoo://module-knowledge/{module_name}": {
                 "description": "Get knowledge for a specific module (special methods, patterns)",
