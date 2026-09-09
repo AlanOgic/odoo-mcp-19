@@ -7,7 +7,7 @@ A Model Context Protocol server for interacting with Odoo 19+ via JSON-2 API.
 import logging as _logging
 import sys as _sys
 
-__version__ = "1.18.0"
+__version__ = "1.18.1"
 
 # Configure the odoo_mcp logger namespace once: stderr, INFO+, bare format.
 # Stderr is mandatory under STDIO MCP transport (stdout is reserved for protocol).

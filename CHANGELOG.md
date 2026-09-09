@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.18.1] - 2026-09-09
+
 ### Fixed
 - **Strict mode now gates every write.** Since v1.10.0 a MEDIUM method
   (`create`, `write`, `copy`, `name_create`, `load`) on a non-sensitive model
@@ -862,7 +864,8 @@ This reduces cognitive load and keeps the tool interface minimal:
 
 <!-- Only versions with a published git tag are linked. Intermediate releases were
      cut without tags; their entries above remain the record for those versions. -->
-[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v1.18.0...HEAD
+[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v1.18.1...HEAD
+[1.18.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.18.1
 [1.18.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.18.0
 [1.17.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.17.0
 [1.16.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.16.0

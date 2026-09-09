@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **odoo-mcp-19** — Standalone MCP server for Odoo 19+ using the **v2 JSON-2 API** (`POST /json/2/{model}/{method}`, Bearer token auth, named args only). No v1 fallback.
 
-- **Version**: 1.18.0 · **Python**: 3.10+ · **MCP**: 2025-11-25 (FastMCP `>=3.4.6,<4`; `cryptography>=42` is a *direct* dependency of `token_crypto`, not just a transitive Authlib one; `anyio>=4` is a direct dependency of the event-loop offload in `server.py` / `resources.py`)
+- **Version**: 1.18.1 · **Python**: 3.10+ · **MCP**: 2025-11-25 (FastMCP `>=3.4.6,<4`; `cryptography>=42` is a *direct* dependency of `token_crypto`, not just a transitive Authlib one; `anyio>=4` is a direct dependency of the event-loop offload in `server.py` / `resources.py`)
 - **The `<4` ceiling is deliberate.** FastMCP 4.x targets MCP spec 2026-07-28 and is not a drop-in — see `docs/mcp-2026-07-28-migration.md` and `tests/test_dependency_pins.py`, which fails the build if the bound is widened or the environment drifts. **`uv.lock` is gitignored** (`.gitignore`: *"project uses pip + pyproject.toml"*) — it pins only your local `.venv`, never the documented `pip install git+…` path, so `pyproject.toml` is the only thing between a fresh install and FastMCP 4.x. Do not relax the ceiling on the strength of the lockfile.
 - **Surface**: 5 tools, 38 `odoo://` resources, 19 prompts (12 generic + 7 `cyanview-*` workflow skill prompts)
 - **Discovery is via resources, action is via tools** — there is no `list_models` tool, agents read `odoo://models` instead.
