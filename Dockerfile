@@ -17,12 +17,13 @@ COPY pyproject.toml README.md ./
 # transitive FastMCP dependency, happens to pull cryptography in.
 # Installing a stub package resolves the real dependency set into its own cached
 # layer, so editing src/ does not re-resolve them; the stub is then replaced by
-# the real package below.
+# the real package below. build/ must go with it: setuptools would otherwise keep
+# the stub's empty __init__.py (newer than the COPY'd source) and ship that.
 RUN mkdir -p src/odoo_mcp \
     && touch src/odoo_mcp/__init__.py \
     && pip install --no-cache-dir . \
     && pip uninstall --yes odoo-mcp-19 \
-    && rm -rf src
+    && rm -rf src build
 
 # Copy source and install the local package; dependencies are already resolved
 # above, so --no-deps keeps this layer cheap without weakening any constraint.
