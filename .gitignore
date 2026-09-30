@@ -65,3 +65,7 @@ cyanview-*.html
 
 # Flat copy of the package at the repo root (the real one lives in src/odoo_mcp/)
 /odoo_mcp/
+
+# Coverage data (pytest-cov)
+.coverage
+htmlcov/
