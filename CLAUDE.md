@@ -289,7 +289,9 @@ When read through the `read_resource` tool (rather than a native resource client
 
 **Match the method to the question.** Counting → `search_count` (returns just an int — no payload, no pagination limit silently capping the result). Grouped counts / sums / averages → `formatted_read_group`. Only use `search_read` when you actually need the records. See `odoo://aggregation`.
 
-**`read_group` is deprecated in v19.** Use `formatted_read_group` (param is `aggregates`, not `fields`).
+**`read_group` only exists on Odoo 19.0.** It is removed in Odoo Online 19.1–19.4 (404) and comes back in 20.0 with a different signature returning tuples. Use `formatted_read_group` (param is `aggregates`, not `fields`) — it works on every version. The same goes for `check_access_rights` / `check_access_rule` (→ `has_access`) and `toggle_active` (→ `action_archive` / `action_unarchive`): deprecated in 19.0, gone since 19.1.
+
+**Static knowledge is version-scoped, and Odoo Online moves.** Production went 19.2 → 19.3 within September 2026 without notice. When a static fact is about method existence, say which versions it holds for, and check it against the live `/doc-bearer/<model>.json` of a current instance rather than the 19.0 source tree. `tests/test_version_drift_knowledge.py` pins the names found dead on 19.3.
 
 **Domain logic is Polish-prefix.** `["&", t1, t2]` AND, `["|", t1, t2]` OR, `["!", t]` NOT. Dot notation works (`["partner_id.country_id.code", "=", "US"]`) but can break on computed fields — check `odoo://model-limitations`. Since 19.0 date values may be dynamic (`"-3d +1H"`, `"=monday -1w"`) and date parts are traversable (`"date.month_number"`); `odoo://domain-syntax` and `odoo://api/datetime` document both.
 
@@ -350,4 +352,4 @@ Release commit convention: `chore(release): X.Y.Z — <summary>`.
 - `odoo_client.py` always sends `Authorization: Bearer` and returns the JSON-2 response body as-is — **no `{"result": ...}` envelope unwrap** (that was the legacy `/jsonrpc` convention; unwrapping would corrupt methods that legitimately return a dict with a `result` key). `tests/test_odoo_client.py` pins this.
 - The canonical MCP server name in client configs (README, setup wizard, Claude Desktop config) is **`odoo19-mcp`** — keep it consistent when touching docs or the wizard.
 - `live` tests are not pytest-collected; they are direct scripts that mutate env state. Don't reorganize them into pytest fixtures without checking the in-file note.
-- AI module (Enterprise): models `ai.agent`, `ai.topic`, `ai.agent.source`, `ai.embedding`. Special methods: `get_direct_response`, `create_from_urls`, `create_from_attachments`. Documented in `module_knowledge.json`.
+- AI module (Enterprise): models `ai.agent`, `ai.topic`, `ai.agent.source`, `ai.embedding`. Special methods (checked on Odoo Online 19.3): `ai.agent.open_agent_chat`, `ai.agent.source.create_from_urls`, `ai.agent.source.create_from_binary_files`. Documented in `module_knowledge.json`.

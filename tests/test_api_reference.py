@@ -69,12 +69,34 @@ def test_version_drift_maps_each_legacy_name_to_its_replacement(old, new):
     assert entries[old]["pr"].startswith("https://github.com/odoo/odoo/pull/")
 
 
-def test_version_drift_never_claims_a_deprecated_method_is_gone():
-    """check_access_rights / check_access_rule are @api.deprecated in 19.0, not removed nor private."""
+def test_version_drift_scopes_legacy_access_checks_to_19_0():
+    """check_access_rights / check_access_rule are @api.deprecated in 19.0 and removed from
+    Odoo Online 19.1 on (404, checked live on 19.3): the entry must say both, never 403."""
     entries = {e["old"]: e for e in api_reference.version_drift_reference()["changes"]}
     for old in ("check_access_rights", "check_access_rule"):
-        assert "deprecated" in entries[old]["json2_impact"].lower()
-        assert "404" not in entries[old]["json2_impact"]
+        impact = entries[old]["json2_impact"]
+        assert "deprecated" in impact.lower()
+        assert "19.0 only" in impact
+        assert "19.1" in impact and "404" in impact
+
+
+@pytest.mark.parametrize(
+    ("old", "expected"),
+    [
+        ("read_group", "19.0"),
+        ("toggle_active", "action_archive"),
+        ("ir.attachment.datas (base64)", "raw"),
+        ("ir.model.access (ACL) and ir.rule (record rules)", "ir.access"),
+        ("API keys without a scope", "rpc"),
+        ("ir.config_parameter get_param / set_param", "get_str"),
+    ],
+)
+def test_version_drift_covers_changes_after_19_0(old, expected):
+    entries = {e["old"]: e for e in api_reference.version_drift_reference()["changes"]}
+    entry = entries[old]
+    assert expected in entry["use"] + entry["json2_impact"]
+    # Every entry names where the fact comes from: an Odoo PR, or the source file it was read in.
+    assert entry.get("pr", "").startswith("https://github.com/odoo/odoo/pull/") or entry.get("source")
 
 
 def test_version_drift_reports_private_methods_as_403():
@@ -86,7 +108,9 @@ def test_version_drift_reports_private_methods_as_403():
 
 def test_version_drift_entries_carry_the_json2_impact():
     changes = api_reference.version_drift_reference()["changes"]
-    assert all({"since", "old", "use", "json2_impact", "pr"} <= set(e) for e in changes)
+    assert all({"since", "old", "use", "json2_impact"} <= set(e) for e in changes)
+    # Provenance is an Odoo PR, or the source file when no single PR was identified.
+    assert all("pr" in e or "source" in e for e in changes)
     assert any("@api.private" in e["old"] or "@api.private" in e["use"] for e in changes)
 
 

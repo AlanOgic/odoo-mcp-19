@@ -1228,7 +1228,7 @@ def get_aggregation_guide() -> str:
                     },
                 },
                 "read_group_examples_legacy": {
-                    "_note": "read_group is deprecated in v19 but still works. Use formatted_read_group above for new code.",
+                    "_note": "Odoo 19.0 only. read_group is removed in Odoo Online 19.1-19.4 (404) and has a different signature in 20.0. Use formatted_read_group above.",
                     "sales_by_customer": {
                         "description": "Total sales amount by customer (legacy)",
                         "call": "execute_method('sale.order', 'read_group', args_json='[[]]', kwargs_json='{\"fields\": [\"amount_total:sum\"], \"groupby\": [\"partner_id\"]}')",
