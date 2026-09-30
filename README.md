@@ -359,11 +359,19 @@ Pre-execution safety classification gates dangerous operations behind confirmati
 
 ### Blocked models (write always refused)
 
-`ir.rule`, `ir.model.access`, `ir.module.module`, `ir.config_parameter`, `ir.model`, `res.users`, `res.groups`, `res.users.apikeys`
+`ir.rule`, `ir.model.access`, `ir.access`, `ir.module.module`, `ir.config_parameter`, `res.users`, `res.groups`, `res.users.apikeys`, plus the models that act on one of those without naming it: password wizards (`change.password.*`), `res.config.settings`, `res.groups.privilege`, `ir.model.data`, `base_import.import`, the `base.module.*` wizards, mail servers, auth providers, portal wizards, and the credential / 2FA / session satellites of `res.users`.
+
+Only writes are blocked — reads stay open on every model, the connected Odoo account's rights decide what is readable. A blocked model is also protected against indirect writes: x2many commands, `default_<field>` context keys and `load` column paths that would create, change or delete its records through an allowed model (`res.partner.user_ids` → `res.users`) are refused.
+
+### Privileged models (admin only, always confirm)
+
+`ir.actions.server`, `base.automation`, `ir.cron`, `ir.model`, `ir.model.fields`, `ir.default`, `ir.ui.view`
+
+These run code or reshape the database. STDIO, the static `MCP_API_KEY` and the `admin` role may write to them — automations, scheduled actions, custom models and fields — and every side-effect call confirms, in every safety mode. Any other multi-user role is refused.
 
 ### Sensitive models (write always confirms)
 
-`account.move`, `account.payment`, `account.bank.statement`, `hr.payslip`, `ir.cron`, `ir.model.fields`
+`account.move`, `account.payment`, `account.bank.statement`, `hr.payslip`
 
 ### Cascade warnings
 

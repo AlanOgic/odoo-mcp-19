@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-09-30
+
 ### Security
 - **`execute_workflow` refuses BLOCKED steps.** The workflow gate only issued and
   validated a confirmation token, so a `readonly` registry user — or any call
@@ -947,7 +949,8 @@ This reduces cognitive load and keeps the tool interface minimal:
 
 <!-- Only versions with a published git tag are linked. Intermediate releases were
      cut without tags; their entries above remain the record for those versions. -->
-[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v1.18.1...HEAD
+[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v1.19.0...HEAD
+[1.19.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.0
 [1.18.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.18.1
 [1.18.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.18.0
 [1.17.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.17.0
