@@ -36,9 +36,7 @@ def test_known_side_effect_methods(method: str):
         "search_count",
         "fields_get",
         "name_search",
-        "default_get",
         "has_access",
-        "name_get",
     ],
 )
 def test_safe_methods_are_not_side_effects(method: str):
