@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The Docker image shipped an empty `odoo_mcp/__init__.py`.** The
+  dependency-resolving stub step left its `build/` tree behind; setuptools then
+  skipped the real `__init__.py` because the stub copy was newer than the COPY'd
+  source. Inside the image `odoo_mcp.__version__` was missing and the `odoo_mcp`
+  logger had no handler, so `MCP_SAFETY_AUDIT` lines and INFO-level warnings never
+  reached stderr. The stub step now removes `build/` too;
+  `tests/test_dependency_pins.py` pins it. pip and STDIO installs were unaffected.
+
 ## [1.19.0] - 2026-09-30
 
 ### Security

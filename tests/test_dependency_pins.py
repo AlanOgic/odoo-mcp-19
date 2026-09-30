@@ -176,3 +176,21 @@ class TestDockerfileUsesDeclaredDependencies:
             " Every install is --no-deps, so the image would ship without"
             " fastmcp, requests, python-dotenv or cryptography."
         )
+
+    def test_dockerfile_discards_the_stub_build_tree(self):
+        """The dependency-resolving stub must not leave a `build/` directory behind.
+
+        The stub installs an empty `src/odoo_mcp/__init__.py`. setuptools keeps it
+        in `build/lib/`, and the real install then skips `__init__.py` because the
+        stub copy is newer than the COPY'd source (which keeps its host mtime). The
+        image shipped an empty `__init__.py`: no `__version__`, and no handler on
+        the `odoo_mcp` logger, so safety audit lines never reached stderr.
+        """
+        run_steps = re.split(r"(?m)^RUN ", _dockerfile_instructions())[1:]
+        stub_steps = [step for step in run_steps if "touch src/odoo_mcp/__init__.py" in step]
+        assert len(stub_steps) == 1, "expected exactly one stub-package step in the Dockerfile"
+        cleanup = re.search(r"rm -rf ([^&\n]+)", stub_steps[0])
+        assert cleanup, "the stub step must remove what it created"
+        removed = cleanup.group(1).split()
+        assert "build" in removed, "stub step leaves build/ behind: the real package would ship the stub __init__.py"
+        assert "src" in removed
