@@ -38,7 +38,7 @@ layer blocks every non-safe method.
 
 | | |
 |---|---|
-| **5 tools** | `execute_method` reaches any method on any model; `batch_execute`, `execute_workflow`, `configure_odoo`, and `read_resource` cover the rest |
+| **4 tools** | `execute_method` reaches any method on any model; `batch_execute`, `execute_workflow` and `read_resource` cover the rest |
 | **38 resources** | Model discovery, compact schemas, state-machine workflows, introspection, API reference (`odoo://api/*`), and runtime posture (`odoo://server-status`) |
 | **19 prompts** | 12 generic guided workflows plus 7 `cyanview-*` skill prompts, gated per user in multi-user mode |
 | **Safety layer** | Risk classification before execution, 8 blocked models, 6 sensitive models, cascade warnings |
@@ -46,9 +46,11 @@ layer blocks every non-safe method.
 | **Multi-user mode** | Per-user bearer keys and personal Odoo clients, so every write is attributed to a real person |
 | **Reference data** | 30 documented ORM methods, 13 modules with special-method knowledge, including the Enterprise AI module |
 
-Built on **MCP 2025-11-25** (background tasks, progress tracking, icons, structured outputs)
-and **FastMCP `>=3.4.6,<4`**. The ceiling is deliberate — FastMCP 4.x targets MCP spec
-2026-07-28 and is [not yet adopted](docs/mcp-2026-07-28-migration.md).
+Built on **FastMCP 4** (`>=4.0.10,<5`): one deployment speaks both **MCP 2026-07-28**
+(sessionless — any replica behind a plain load balancer can answer) and **MCP 2025-11-25**
+(session-based), negotiated per connection, so older clients keep working. Background tasks,
+progress tracking, icons and structured outputs are available in both. See the
+[migration notes](docs/mcp-2026-07-28-migration.md).
 
 Hardened by default: regex-validated model and method names, a non-root Docker container,
 mandatory authentication on HTTP, thread-safe caches, and no traceback ever forwarded to a
@@ -260,14 +262,13 @@ token issued for `unlink([1])` and reuse it on `unlink([1, 2, …, 1000])`.
 
 ## Architecture
 
-### Tools (5)
+### Tools (4)
 
 | Tool | Purpose |
 |------|---------|
 | `execute_method` | Call any method on any Odoo model |
 | `batch_execute` | Multiple operations with progress tracking |
 | `execute_workflow` | Pre-built multi-step workflows |
-| `configure_odoo` | Interactive connection setup |
 | `read_resource` | Read any `odoo://` resource by URI |
 
 ### Resources (38)
@@ -601,7 +602,7 @@ Full documentation lives in the **[Wiki](https://github.com/AlanOgic/odoo-mcp-19
 **Start here**
 
 - [Getting started](https://github.com/AlanOgic/odoo-mcp-19/wiki/Getting-Started) — install and connect in five minutes
-- [Tools](https://github.com/AlanOgic/odoo-mcp-19/wiki/Tools) — the 5 tools, their parameters, and when to reach for each
+- [Tools](https://github.com/AlanOgic/odoo-mcp-19/wiki/Tools) — the 4 tools, their parameters, and when to reach for each
 - [Resources](https://github.com/AlanOgic/odoo-mcp-19/wiki/Resources) — the 27 `odoo://` discovery URIs
 
 **Reference**
@@ -632,7 +633,7 @@ Full documentation lives in the **[Wiki](https://github.com/AlanOgic/odoo-mcp-19
 
 - Python 3.10+
 - Odoo 19+
-- FastMCP >=3.4.6,<4 (with tasks extra)
+- FastMCP >=4.0.10,<5 (with tasks extra)
 - requests 2.32.4+
 
 ## License

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import AsyncIterator, Optional
 
 from fastmcp import FastMCP
+from fastmcp_tasks import TasksExtension
 from mcp.types import Icon
 
 from .odoo_client import OdooClient, get_odoo_client
@@ -32,7 +33,7 @@ def _load_icon() -> Optional[Icon]:
             icon_data = base64.standard_b64encode(icon_path.read_bytes()).decode()
             return Icon(
                 src=f"data:image/svg+xml;base64,{icon_data}",
-                mimeType="image/svg+xml",
+                mime_type="image/svg+xml",
             )
     except Exception as e:
         logger.warning("Could not load icon: %s", e)
@@ -120,6 +121,11 @@ mcp = FastMCP(
     website_url="https://github.com/AlanOgic/odoo-mcp-19",
     icons=_icons,
 )
+
+# batch_execute and execute_workflow are task=True tools. Since FastMCP 4 background
+# tasks are an extension (io.modelcontextprotocol/tasks): without it the server refuses
+# to start. Registered here, before server.py declares the tools.
+mcp.add_extension(TasksExtension())
 
 
 # ----- Per-user skill visibility (multi-user mode only) -----

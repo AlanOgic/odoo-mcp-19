@@ -1,7 +1,19 @@
 # Migrating to MCP 2026-07-28 / FastMCP 4.x
 
-**Status**: not started. The server is pinned to `fastmcp[tasks]>=3.4.6,<4` and speaks MCP `2025-11-25`.
+**Status**: done on 2026-09-30 — the server runs on `fastmcp[tasks]>=4.0.10,<5` and answers both
+MCP `2026-07-28` and `2025-11-25`, negotiated per connection.
 **Written**: 2026-08-07, against FastMCP `4.0.0b2` and MCP spec `2026-07-28` (final).
+
+> **What the migration actually took** (kept here because it differs from the forecast below):
+> `configure_odoo` removed (tools 5 → 4); `mcp.add_extension(TasksExtension())` in `app.py`;
+> `Icon(mime_type=…)`; the private `_current_transport` check in `skill_visibility.py` replaced by
+> the server's own `MCP_TRANSPORT` setting; pin and pin tests raised. **No** `ResourceSecurity`
+> exemption was needed: dotted model names and the comma-separated bundle parameter pass the 4.x
+> path-traversal screen as they are. No `McpError` construction and no camelCase field read existed
+> in the code. Verified in both eras: in-process (`tests/test_protocol_eras.py`), over HTTP against
+> an Odoo Online 19.3 clone with a static key, and over HTTP in multi-user mode with a seeded
+> registry (admin / support / readonly roles, including the task-enabled tools). **Not done**: the
+> `ttlMs` / `cacheScope` opportunity in §4, and a run against the real CLORAG registry.
 
 This is a decision document, not a task list. It records what breaks, what it costs, and what
 was already decided — so the migration can be executed later without re-doing the analysis.
