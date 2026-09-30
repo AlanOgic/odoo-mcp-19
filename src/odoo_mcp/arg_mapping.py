@@ -238,6 +238,13 @@ def convert_args_to_v2(method: str, args: tuple[Any, ...], kwargs: dict[str, Any
     exempt: set[str] = _KWARGS_MAPPING_EXEMPT.get(method, set())
     for k, v in kwargs.items():
         v2_name = k if k in exempt else V2_KWARGS_MAPPING.get(k, k)
+        # The safety gate reads the positional form; letting the named one win
+        # here would send Odoo a payload the gate never classified.
+        if v2_name in result:
+            raise ValueError(
+                f"'{method}' received '{v2_name}' both positionally (args_json) and by name "
+                f"(kwargs_json). Pass it once."
+            )
         result[v2_name] = v
 
     # Ensure domain exists for search methods

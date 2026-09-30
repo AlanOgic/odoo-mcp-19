@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **`execute_workflow` refuses BLOCKED steps.** The workflow gate only issued and
+  validated a confirmation token, so a `readonly` registry user — or any call
+  outside `MCP_WRITE_ALLOWLIST` — could self-confirm and run `lead_to_won` or
+  `create_and_post_invoice`. A BLOCKED step is now a refusal, checked on every
+  call before a token is issued or consumed, as `execute_method` and
+  `batch_execute` already did. `tests/test_workflow_blocked_gate.py`.
+- **`BLOCKED_MODELS` holds against indirect writes.** The classifier only looked
+  at the top-level model name, so `res.users` was writable through x2many
+  commands on an allowed model (`res.partner.user_ids`, `res.company.user_ids`).
+  `classify_operation` now takes a `fields_loader` and refuses any command that
+  creates, updates or deletes records of a forbidden comodel, following nested
+  vals through allowed comodels. Fail-closed: a payload carrying commands is
+  refused when the schema needed to resolve them cannot be loaded. Attaching or
+  detaching existing records on a many2many stays allowed; on a one2many every
+  list is refused. The same check covers `default_<field>` context keys, `load`
+  column paths (`user_ids/login`), bare id lists, and command codes Odoo treats
+  as equal (`true`, `1.0`). The schema is fetched (cached compact `fields_get`)
+  only when a vals dict carries a list.
+- **Proxy models added to `BLOCKED_MODELS`** — models that act on a blocked one
+  without naming it: password wizards (`change.password.*`),
+  `res.config.settings`, `res.groups.privilege`, `ir.model.data`,
+  `base_import.import`, the `base.module.*` wizards, `ir.mail_server`,
+  `fetchmail.server`, `auth.oauth.provider`, `res.company.ldap`, the portal
+  wizards, and the credential / 2FA / session satellites of `res.users`. Also
+  `ir.access`, which replaces `ir.rule` and `ir.model.access` from Odoo 19.4.
+- **`default_get` is no longer a safe method.** It runs on a read-write cursor and
+  addons override it with writes; it passed the token gate, `MCP_READ_ONLY`, the
+  `readonly` role and the allowlist. It now classifies as an unknown method.
+  `name_get`, gone from Odoo 19, is dropped from `SAFE_METHODS` too.
+- **A parameter given both positionally and by name is rejected**, before the
+  gate. The gate read the positional form while JSON-2 received the named one.
+- **An unrecognised `MCP_SAFETY_MODE` falls back to `strict` in the classifier**
+  as it already did in `odoo://server-status`; a typo used to report strict while
+  classifying as permissive.
+
+### Added
+- **`PRIVILEGED_MODELS`** — `ir.actions.server`, `base.automation`, `ir.cron`,
+  `ir.model`, `ir.model.fields`, `ir.default`, `ir.ui.view`: models that run code
+  or reshape the database. The operator's own session (stdio, static key, `admin`
+  role) may write to them, and every side-effect method confirms in every mode,
+  including unknown ones such as `run` or `method_direct_trigger`. Any other
+  registry role is refused, directly and through x2many commands.
+
+### Changed
+- `ir.model` moves from BLOCKED to privileged: an admin can now create a custom
+  model. `ir.cron` and `ir.model.fields` move from sensitive to privileged: they
+  now confirm in `permissive` for every method, and are refused for non-admin
+  registry roles. `ir.model.access` / `ir.rule` / `ir.access` stay BLOCKED, so a
+  new model's access rights are still granted in the Odoo interface.
+- Reads are unchanged and stay open on every model, blocked ones included: what
+  the connected Odoo account can read is decided by Odoo, not by this server.
+
 ## [1.18.1] - 2026-09-09
 
 ### Fixed

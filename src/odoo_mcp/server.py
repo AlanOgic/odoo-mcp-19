@@ -30,8 +30,10 @@ from . import prompts as _prompts  # noqa: F401 -- import triggers prompt regist
 from . import resources as _resources  # noqa: F401 -- import triggers resource registration
 from . import skill_prompts as _skill_prompts  # noqa: F401 -- import triggers skill prompt registration
 from .app import ODOO_ICON, mcp  # noqa: F401 -- mcp import triggers FastMCP setup
+from .arg_mapping import convert_args_to_v2
 from .constants import (
     _READ_RESOURCE_MAX_CHARS,
+    COMPACT_FIELD_ATTRIBUTES,
     DEFAULT_LIMIT,
     MAX_LIMIT,
     PRIVATE_METHOD_HINTS,
@@ -64,6 +66,7 @@ from .utils import (
     _get_live_doc,
     _track_model_issue,
     get_error_suggestion,
+    get_fields_for_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -325,6 +328,11 @@ def _reject_private_method(model: str, method: str, start_time: float) -> Execut
     return None
 
 
+def _fields_loader(odoo: Any) -> Callable[[str], dict]:
+    """Schema loader for the classifier's relational check (cached compact fields_get)."""
+    return lambda model: get_fields_for_model(odoo, model, attributes=COMPACT_FIELD_ATTRIBUTES)
+
+
 def _classify_and_gate(
     odoo: Any,
     model: str,
@@ -343,7 +351,9 @@ def _classify_and_gate(
     success response can report it — a caller must be able to see *why* a write
     was or was not gated.
     """
-    classification = classify_operation(model, method, args, kwargs, role=current_role())
+    classification = classify_operation(
+        model, method, args, kwargs, role=current_role(), fields_loader=_fields_loader(odoo)
+    )
 
     if classification.risk_level == RiskLevel.BLOCKED:
         audit_log(classification, confirmed=confirmed, executed=False)
@@ -659,6 +669,11 @@ def execute_method(
         if rejected:
             return rejected
 
+        # Reject a payload JSON-2 cannot express (unmappable positional, parameter
+        # given twice) before the gate: no token is spent on a call that cannot be sent,
+        # and the gate never classifies a payload that differs from the one sent.
+        convert_args_to_v2(method, tuple(args), kwargs)
+
         gated, classification = _classify_and_gate(
             odoo, model, method, args, kwargs, confirmed, confirmation_token, start_time
         )
@@ -852,7 +867,10 @@ async def batch_execute(
     odoo = get_odoo_client()
     await progress.set_total(len(operations))
 
-    classifications, overall_risk, any_needs_confirmation = classify_batch(operations, role=current_role())
+    # Off the loop thread: the relational check may call fields_get.
+    classifications, overall_risk, any_needs_confirmation = await _run_blocking(
+        classify_batch, operations, role=current_role(), fields_loader=_fields_loader(odoo)
+    )
     gated = _batch_safety_gate(
         operations, classifications, overall_risk, any_needs_confirmation, confirmed, confirmation_token, start_time
     )
@@ -1032,6 +1050,34 @@ def _workflow_safety_gate(
     safety_preview = classify_workflow(workflow, params, role=current_role())
     if safety_preview is None:
         return None
+    step_preview = [
+        SafetyClassification(
+            risk_level=step.risk_level,
+            model=step.model,
+            method=step.method,
+            record_count=None,
+            requires_confirmation=step.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED),
+            reason=f"Step '{step.step}': {step.risk_level.value} risk",
+            cascade_warning=step.cascade_warning,
+        )
+        for step in safety_preview.steps
+    ]
+    # A BLOCKED step (readonly role, write allowlist, blocked model) is a refusal, not
+    # something to confirm: checked on every call, before a token is issued or consumed.
+    blocked = [c for c in step_preview if c.risk_level == RiskLevel.BLOCKED]
+    if blocked:
+        for c in blocked:
+            audit_log(c, confirmed=confirmed, executed=False)
+        blocked_steps = ", ".join(f"{c.model}.{c.method}" for c in blocked)
+        return _workflow_response(
+            workflow,
+            [],
+            start_time,
+            success=False,
+            safety_preview=step_preview,
+            overall_risk=safety_preview.overall_risk.value,
+            error=f"Workflow '{workflow}' contains blocked steps: {blocked_steps}. It cannot be run.",
+        )
     # Bind the token to (workflow_name, params). A different order_id or partner_id
     # on the re-call produces a different digest and is rejected.
     decision = _confirmation_gate("__workflow__", workflow.lower().strip(), params, confirmed, confirmation_token)
@@ -1042,18 +1088,7 @@ def _workflow_safety_gate(
             start_time,
             success=False,
             pending_confirmation=True,
-            safety_preview=[
-                SafetyClassification(
-                    risk_level=step.risk_level,
-                    model=step.model,
-                    method=step.method,
-                    record_count=None,
-                    requires_confirmation=step.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED),
-                    reason=f"Step '{step.step}': {step.risk_level.value} risk",
-                    cascade_warning=step.cascade_warning,
-                )
-                for step in safety_preview.steps
-            ],
+            safety_preview=step_preview,
             overall_risk=safety_preview.overall_risk.value,
             error=safety_preview.message,
             tip=(
