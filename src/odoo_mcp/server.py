@@ -531,7 +531,7 @@ def _failure_response(model: str, method: str, error_msg: str, start_time: float
     )
 
 
-# ----- MCP Tools (execute_method, batch_execute, execute_workflow, configure_odoo, read_resource) -----
+# ----- MCP Tools (execute_method, batch_execute, execute_workflow, read_resource) -----
 
 # Icon list for tools (reusable)
 _tool_icons = [ODOO_ICON] if ODOO_ICON else None
@@ -909,126 +909,6 @@ async def batch_execute(
         )
     except Exception as e:
         return _batch_response(operations, results, start_time, success=False, error=str(e))
-
-
-# ----- User Elicitation Tool -----
-
-
-@dataclass
-class OdooConnectionConfig:
-    """Configuration collected from user elicitation."""
-
-    url: str
-    database: str
-    username: str
-
-
-@mcp.tool(
-    description="""Interactive Odoo connection configuration using user elicitation.
-
-    This tool guides users through setting up Odoo connection parameters
-    interactively, collecting URL, database and username; authentication is
-    always an API key (the JSON-2 API accepts nothing else).
-
-    Note: This requires an MCP client that supports user elicitation.
-    The collected configuration is returned but not automatically applied -
-    users should set the corresponding environment variables.
-    """,
-    annotations={
-        "title": "Configure Odoo Connection",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    },
-    icons=_tool_icons,
-)
-async def configure_odoo(ctx: Context) -> Dict[str, Any]:
-    """
-    Interactive Odoo connection configuration using MCP elicitation.
-
-    Returns:
-        Configuration summary with environment variable instructions
-    """
-    from fastmcp.server.elicitation import AcceptedElicitation, CancelledElicitation, DeclinedElicitation
-
-    results = {
-        "success": False,
-        "config": {},
-        "env_vars": {},
-    }
-
-    try:
-        # Step 1: Ask for Odoo URL
-        url_result = await ctx.elicit(
-            message="Enter your Odoo server URL (e.g., https://mycompany.odoo.com):",
-            response_type=str,
-        )
-
-        match url_result:
-            case AcceptedElicitation(data=url):
-                results["config"]["url"] = url
-            case DeclinedElicitation() | CancelledElicitation():
-                results["error"] = "Configuration cancelled by user"
-                return results
-
-        # Step 2: Ask for database name
-        db_result = await ctx.elicit(
-            message="Enter the database name:",
-            response_type=str,
-        )
-
-        match db_result:
-            case AcceptedElicitation(data=database):
-                results["config"]["database"] = database
-            case DeclinedElicitation() | CancelledElicitation():
-                results["error"] = "Configuration cancelled by user"
-                return results
-
-        # Step 3: Ask for username
-        user_result = await ctx.elicit(
-            message="Enter your Odoo username (email):",
-            response_type=str,
-        )
-
-        match user_result:
-            case AcceptedElicitation(data=username):
-                results["config"]["username"] = username
-            case DeclinedElicitation() | CancelledElicitation():
-                results["error"] = "Configuration cancelled by user"
-                return results
-
-        # Build environment variables
-        results["success"] = True
-        results["env_vars"] = {
-            "ODOO_URL": results["config"]["url"],
-            "ODOO_DB": results["config"]["database"],
-            "ODOO_USERNAME": results["config"]["username"],
-        }
-
-        # JSON-2 authenticates with bearer API keys only — a login password is
-        # rejected by Odoo 19 with HTTP 401, so the wizard never offers it.
-        results["env_vars"]["ODOO_API_KEY"] = "<your-api-key>"
-        results["note"] = (
-            "Generate an API key in Odoo: Settings > Users > Preferences > API Keys. "
-            "The Odoo 19 JSON-2 API accepts API keys only (passwords are rejected)."
-        )
-
-        results["instructions"] = "Set these environment variables to configure the Odoo MCP server:\n" + "\n".join(
-            f"export {k}='{v}'" for k, v in results["env_vars"].items()
-        )
-
-        return results
-
-    except Exception as e:
-        if "elicitation is not supported" in str(e).lower():
-            return {
-                "success": False,
-                "error": "User elicitation not supported by this MCP client",
-                "alternative": "Set environment variables manually: ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_API_KEY",
-            }
-        results["error"] = str(e)
-        return results
 
 
 # ----- execute_workflow runners -----

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **FastMCP 4 / MCP 2026-07-28.** The server now runs on `fastmcp[tasks]>=4.0.10,<5`
+  (MCP SDK v2). One deployment answers both the sessionless `2026-07-28` protocol and
+  the session-based `2025-11-25` handshake, negotiated per connection, so existing
+  clients keep working. Verified in both eras in-process, over HTTP against an Odoo
+  Online 19.3 instance, and in multi-user mode with a seeded registry.
+  `tests/test_protocol_eras.py` pins it.
+- Background tasks (`batch_execute`, `execute_workflow`) run through the
+  `io.modelcontextprotocol/tasks` extension, registered in `app.py`.
+- The per-user skill filter decides "stdio" from `MCP_TRANSPORT` instead of a private
+  FastMCP context variable.
+
+### Removed
+- **`configure_odoo` tool** (tools 5 → 4). It relied on elicitation, a
+  server-initiated request that does not exist on a `2026-07-28` connection. Use
+  `python -m odoo_mcp --setup`, which also writes `.env`, the Docker command and the
+  Claude Desktop config. In multi-user mode credentials come from the registry.
+
 ## [1.19.2] - 2026-09-30
 
 ### Fixed
