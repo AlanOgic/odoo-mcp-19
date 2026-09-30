@@ -27,7 +27,8 @@ def json2_protocol_reference() -> Dict[str, Any]:
     return {
         "endpoint": "POST {ODOO_URL}/json/2/{model}/{method}",
         "headers": {
-            "Authorization": "Bearer <api key> (global-scope key; the 'rpc' scope maps to it)",
+            "Authorization": "Bearer <api key> (19.0-19.3: a key with no scope or the 'rpc' scope; 19.4+: the key must "
+            "carry the 'rpc' scope, unscoped keys are rejected)",
             "Content-Type": "application/json (anything else is 415)",
             "X-Odoo-Database": "optional — needed only when the host serves several databases",
         },
@@ -41,7 +42,8 @@ def json2_protocol_reference() -> Dict[str, Any]:
         "positional_args_note": "The controller binds kwargs with inspect.signature(func).bind(records, **kwargs); "
         "there is no way to pass a positional argument. This server maps them via arg_mapping.",
         "private_methods": "Methods starting with '_' or decorated @api.private raise AccessError: 403 "
-        "(not 404 — the method exists but is not exposed).",
+        "(not 404 — the method exists but is not exposed). Same 403 for classmethods/staticmethods and for "
+        "names in safe_eval's unsafe-attribute list. A method that does not exist at all is a 404.",
         "return_value": "The bare JSON of the Python return value — no {'result': …} envelope. "
         "A returned recordset is serialised as its list of ids.",
         "error_body_keys": ["name", "message", "arguments", "context", "debug"],
@@ -93,10 +95,60 @@ def version_drift_reference() -> Dict[str, Any]:
     """ORM renames and removals since Odoo 15.2 that break calls written from older knowledge."""
     changes: List[Dict[str, str]] = [
         {
+            "since": "20.0",
+            "old": "binary fields read as a base64 string",
+            "use": "read returns {'filename', 'content': <base64>, 'size'}; write accepts a base64 string or "
+            "{'filename', 'content'}",
+            "json2_impact": "Code expecting a string from a binary field gets a dict. bin_size context is gone.",
+            "pr": f"{_PR}266082",
+        },
+        {
+            "since": "19.4",
+            "old": "ir.model.access (ACL) and ir.rule (record rules)",
+            "use": "ir.access — one model for both: model_id, group_id, operation (subset of 'crud'), domain",
+            "json2_impact": "ir.rule and ir.model.access no longer exist (404). Writes on ir.access are BLOCKED by "
+            "this server, like the two models it replaces.",
+            "pr": f"{_PR}166359",
+        },
+        {
+            "since": "19.4",
+            "old": "API keys without a scope",
+            "use": "keys with the 'rpc' scope",
+            "json2_impact": "/json/2 and /doc-bearer routes require bearer_scope='rpc'; an unscoped key is rejected "
+            "(401). Keys generated in the UI before 19.4 had no scope.",
+            "source": "addons/rpc/controllers/json2.py and res.users.apikeys._check_credentials @ saas-19.4",
+        },
+        {
+            "since": "19.3",
+            "old": "ir.attachment.datas (base64)",
+            "use": "ir.attachment.raw — over RPC still a base64 string",
+            "json2_impact": "The datas field is gone: a create/write carrying 'datas' drops it with a warning and "
+            "stores an empty attachment. Send the content in 'raw'.",
+            "source": "ir.attachment fields_get on Odoo Online 19.3 (no 'datas'); ir_attachment._check_contents",
+        },
+        {
             "since": "19.1",
-            "old": "ir.config_parameter get_param/set_param usage patterns",
-            "use": "new ir.config_parameter API (writes on this model stay BLOCKED by this server)",
-            "json2_impact": "Read parameters with search_read on ir.config_parameter; do not script set_param.",
+            "old": "toggle_active",
+            "use": "action_archive / action_unarchive",
+            "json2_impact": "toggle_active was deprecated in 19.0 and is removed (404).",
+            "source": "odoo/orm/models.py @ saas-19.1; 404 observed on Odoo Online 19.3",
+        },
+        {
+            "since": "19.1",
+            "old": "domain operators '<>', '==' and upper-case spellings (ILIKE, IN)",
+            "use": "'!=', '=' and lower-case operators",
+            "json2_impact": "Accepted with a warning on 19.0; rejected since 19.1 with 'Invalid operator in "
+            "condition'.",
+            "source": "odoo/orm/domains.py @ saas-19.1; error observed on Odoo Online 19.3",
+        },
+        {
+            "since": "19.1",
+            "old": "ir.config_parameter get_param / set_param",
+            "use": "typed accessors get_str / get_int / get_float / get_bool (key, default) and set_str / set_int / "
+            "set_float / set_bool (writes on this model stay BLOCKED by this server)",
+            "json2_impact": "get_param and set_param no longer exist (404). Through this server read parameters "
+            "with search_read on ir.config_parameter: the typed getters are not in its safe-method list, so they "
+            "are refused like any non-read call on that model.",
             "pr": f"{_PR}223180",
         },
         {
@@ -110,7 +162,9 @@ def version_drift_reference() -> Dict[str, Any]:
             "since": "18.2",
             "old": "read_group",
             "use": "formatted_read_group(domain, groupby, aggregates, …) — param is aggregates, not fields",
-            "json2_impact": "read_group still answers but is deprecated; _read_group is private (404).",
+            "json2_impact": "read_group answers only on 19.0 (deprecated). Removed in Online 19.1-19.4 (404). "
+            "20.0 has a different read_group(domain, groupby, aggregates, having, offset, limit, order) returning "
+            "tuples. formatted_read_group works everywhere. _read_group is private (403).",
             "pr": f"{_PR}163300",
         },
         {
@@ -125,15 +179,16 @@ def version_drift_reference() -> Dict[str, Any]:
             "since": "18.0",
             "old": "check_access_rights",
             "use": "check_access(operation) (raises) or has_access(operation) (bool) — both combine ACL + record rules",
-            "json2_impact": "Still callable in 19.0 but @api.deprecated (server logs a warning); has_access is the "
-            "RPC-friendly replacement (check_access is @api.private → 403).",
+            "json2_impact": "Callable on 19.0 only (@api.deprecated); removed in Online 19.1+ and 20.0 (404). "
+            "has_access is the RPC-friendly replacement (check_access is @api.private → 403).",
             "pr": f"{_PR}179148",
         },
         {
             "since": "18.0",
             "old": "check_access_rule",
             "use": "has_access(operation) — record rules are now checked together with the ACL",
-            "json2_impact": "Still callable in 19.0 but @api.deprecated; prefer has_access.",
+            "json2_impact": "Callable on 19.0 only (@api.deprecated); removed in Online 19.1+ and 20.0 (404). "
+            "Use has_access.",
             "pr": f"{_PR}179148",
         },
         {
@@ -161,7 +216,7 @@ def version_drift_reference() -> Dict[str, Any]:
             "since": "16.4",
             "old": "name_get",
             "use": "read the display_name field",
-            "json2_impact": "name_get is deprecated; read(fields=['display_name']) or search_read.",
+            "json2_impact": "name_get no longer exists in 19.0+ (404); read(fields=['display_name']) or search_read.",
             "pr": f"{_PR}122085",
         },
         {

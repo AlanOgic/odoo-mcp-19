@@ -126,12 +126,12 @@ V2_ARG_MAPPING: dict[str, list[tuple[int, str]]] = {
         (1, "default"),
     ],
     # Check methods
-    # check_access_rights(operation, raise_exception=True) — legacy wrapper, still present in 19.0
+    # check_access_rights(operation, raise_exception=True) — legacy wrapper, 19.0 only (removed in Online 19.1+)
     "check_access_rights": [
         (0, "operation"),
         (1, "raise_exception"),
     ],
-    # check_access_rule(operation) — legacy wrapper, still present in 19.0
+    # check_access_rule(operation) — legacy wrapper, 19.0 only (removed in Online 19.1+)
     "check_access_rule": [
         (0, "operation"),
     ],

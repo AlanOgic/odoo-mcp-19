@@ -50,6 +50,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   role) may write to them, and every side-effect method confirms in every mode,
   including unknown ones such as `run` or `method_direct_trigger`. Any other
   registry role is refused, directly and through x2many commands.
+- `odoo://api/version-drift` entries for changes after 19.0: `ir.config_parameter`
+  typed accessors (19.1), removed domain operators `<>` / `==` / upper-case
+  spellings (19.1), `ir.attachment.datas` → `raw` (19.3), `ir.access` replacing
+  `ir.rule` and `ir.model.access` (19.4), mandatory `rpc` scope on API keys
+  (19.4), binary fields read as a dict (20.0). Entries without an identified PR
+  carry a `source` instead of a `pr`.
+- `odoo://domain-syntax` lists the removed operators.
 
 ### Changed
 - `ir.model` moves from BLOCKED to privileged: an admin can now create a custom
@@ -59,6 +66,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new model's access rights are still granted in the Odoo interface.
 - Reads are unchanged and stay open on every model, blocked ones included: what
   the connected Odoo account can read is decided by Odoo, not by this server.
+
+### Fixed
+- **Static knowledge no longer steers agents to methods Odoo removed.** Checked
+  live against Odoo Online 19.3 (`/doc-bearer`). `read_group`,
+  `check_access_rights`, `check_access_rule` and `toggle_active` were only
+  deprecated in 19.0 and are gone since Online 19.1 (404); `name_get` was already
+  gone in 19.0. The method catalog, `odoo://aggregation`, `odoo://api/version-drift`,
+  the `_read_group` private-method hint and the timeout error advice said
+  "deprecated but still works" and recommended `read_group`; they now scope it to
+  19.0 and point to `formatted_read_group` / `has_access`.
+- **A 404 for a missing method is reported as such.** The suggestion used to be
+  "verify the model name" and the hint "field name error detected"; both now say
+  the method does not exist in this Odoo version and point to
+  `odoo://methods/{model}` and `odoo://api/version-drift`.
+- **`module_knowledge.json` special methods that do not exist** are removed or
+  renamed: `hr.expense` (`action_submit` / `action_approve` / `action_refuse`),
+  `stock.picking.action_scrap` (was `button_scrap`), `account.move.set_moves_checked`
+  (was `button_set_checked`), and the nonexistent `hr.leave.action_confirm`,
+  `project.task.action_assign_to_me`, `discuss.channel.channel_create`,
+  `documents.document.document_create`, `knowledge.article.article_duplicate`,
+  `ai.agent.get_direct_response`, `ai.agent.source.create_from_attachments`.
+- **ORM signatures in `module_knowledge.json`**: `search` no longer lists `count`,
+  `search_count` lists `limit`, `default_get` takes `fields` (not `fields_list`).
 
 ## [1.18.1] - 2026-09-09
 

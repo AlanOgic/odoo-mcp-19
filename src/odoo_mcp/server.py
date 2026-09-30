@@ -499,6 +499,7 @@ def _search_read_fallback(
         )
 
 
+_MISSING_METHOD_PATTERNS = ("the method", "does not exist")
 _FIELD_ERROR_PATTERNS = ("invalid field", "unknown field", "field_get", "keyerror", "no field", "does not exist")
 
 
@@ -506,7 +507,15 @@ def _failure_response(model: str, method: str, error_msg: str, start_time: float
     """Wrap an Odoo error with a pattern-matched suggestion and a schema hint."""
     suggestion = get_error_suggestion(error_msg, model, method)
     hint = None
-    if any(p in error_msg.lower() for p in _FIELD_ERROR_PATTERNS):
+    lowered = error_msg.lower()
+    if all(p in lowered for p in _MISSING_METHOD_PATTERNS):
+        # "The method 'res.partner.read_group' does not exist" also contains a
+        # field-error pattern; it is about the method, not a field.
+        hint = (
+            f"'{method}' does not exist on '{model}' in this Odoo version. Read odoo://methods/{model} for the "
+            f"methods that exist, or odoo://api/version-drift for renamed and removed ones."
+        )
+    elif any(p in lowered for p in _FIELD_ERROR_PATTERNS):
         hint = (
             f"Field name error detected. Read odoo://model/{model}/fields to get exact field names, "
             f"or odoo://model/{model}/schema for full details."
@@ -537,7 +546,7 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
     - odoo://actions/{model} - Discover available actions
     - odoo://methods/{model} - Method signatures
     - odoo://domain-syntax - Domain filter reference
-    - odoo://aggregation - read_group guide
+    - odoo://aggregation - Aggregation guide (formatted_read_group)
 
     MANDATORY WORKFLOW (no guessing!):
     1. FIRST: Read odoo://model/{model}/quick-schema to get exact field names/types
