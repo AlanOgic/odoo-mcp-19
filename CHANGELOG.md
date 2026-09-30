@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-30
+
 ### Changed
 - **FastMCP 4 / MCP 2026-07-28.** The server now runs on `fastmcp[tasks]>=4.0.10,<5`
   (MCP SDK v2). One deployment answers both the sessionless `2026-07-28` protocol and
@@ -993,7 +995,8 @@ This reduces cognitive load and keeps the tool interface minimal:
 
 <!-- Only versions with a published git tag are linked. Intermediate releases were
      cut without tags; their entries above remain the record for those versions. -->
-[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v1.19.2...HEAD
+[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.0
 [1.19.2]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.2
 [1.19.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.1
 [1.19.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.0
