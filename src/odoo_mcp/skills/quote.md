@@ -1,13 +1,18 @@
 ---
 name: cyanview-quote
 description: >
-  Build Cyanview sales quotations in Odoo. Triggers on: "devis", "quote", "quotation", "SO",
-  "sales order", "commande", "price list", "pricing", "how much for", "quote for X cameras",
-  "configure a system", "how much would it cost", "price for", "prepare an offer",
-  "build a system for [company]", or any request involving CY- product selection and pricing
-  — even casual like "4 Sony cameras remote for ProMedia" or "what's the price for 2 RIOs".
+  Build, create, edit, and modify Cyanview sales quotations and sales orders (SO) in Odoo,
+  from first draft to confirmed order, before invoicing. Use for ANY action on a sale.order:
+  new quote, add/remove/change lines, qty, payment term, incoterm, discount, or pricelist.
+  Triggers (FR+EN): "devis", "quote", "SO", "sales order", "commande", "crée un SO",
+  "nouveau SO", "create a SO", "new sales order", "faire un devis", "établir un devis",
+  "modifie le SO", "change le devis", "update the SO", "ajoute une ligne", "add a line",
+  "price list", "how much for", "configure a system", "prepare an offer",
+  "fais un SO pour X avec Y", "crée un SO pour [client] avec [produits]",
+  or any CY- product selection, pricing, or modification of a Cyanview sales document
+  before invoicing — even casual like "4 Sony cameras remote for ProMedia" or
+  "2 rcp j duo for [company]".
 allowed-tools: mcp__odoo19-mcp__execute_method, mcp__odoo19-mcp__batch_execute, mcp__odoo19-mcp__read_resource
-argument-hint: "[customer] [cameras] [details]"
 ---
 
 # Cyanview Quote Builder
@@ -30,7 +35,7 @@ go straight to building the quote, no questions needed.
 
 ## Business rules (quick reference)
 
-Full details: see Appendix A (Product Catalog) and Appendix B (Licence Matrix) at the end of this document.
+Full details: Appendix A (Product Catalog) and Appendix B (Licence Matrix).
 
 ### Licence selection (mandatory — device won't work without it)
 
@@ -57,7 +62,15 @@ CI0/CI03P/CI0BM/NIO/TALLY-BOX → no licence needed
 These products exist in Odoo but must NEVER appear on new quotes:
 - **RCP-DUO / RCP-DUO-J / RCP-QUATTRO / RCP-OCTO-J** — bundled device+licence. Always quote device + licence separately.
 - **RIO-LIVE** — discontinued. Replaced by RIO + CY-LIC-RIO-LAN. If customer mentions it, quote RIO + LAN licence.
-- **GWY** — discontinued.
+- **GWY (CY-GWY, id 6)** — discontinued as a standalone product. It belonged to the old RCP2019 + GWY two-box system. Rare exceptions only, and only when Alan confirms.
+
+#### "RCP with Gateway" is legacy vocabulary, not a line item
+
+A Gateway is embedded in every RCP today. When a customer writes "RCP with GWY" or "RCP with Gateway", they are almost always using RCP2019-era wording for a post-2019 RCP, not asking for a separate CY-GWY box.
+
+Disambiguation: if the request pairs "RCP with GWY" with "joystick" or "RCP-J", it is definitively NOT an exception. The RCP-J came well after the embedded-Gateway RCP, so the two cannot coexist as separate items. Read it as plain CY-RCP-J (id 274).
+
+Never add a CY-GWY line on that basis, and never report CY-GWY stock as a constraint on such a deal. If the customer's wording is ambiguous about capability, the real question is usually the licence tier (CY-LIC-RCP-MSU, CY-LIC-RCP-DUO), not a hardware add-on.
 
 ### Camera adaptor cables (1 per camera — serial control only)
 
@@ -178,7 +191,7 @@ Section: 4x RIO WAN — Sony
   CY-CBL-SONY-8P-03     ×4
 
 Section: Import Duties & Taxes (DDP)
-  XTR-PREP-DUTIES-TAXES ×1  (price_unit = 15% of physical goods subtotal + 80)
+  XTR-PREP-DUTIES-TAXES ×1  (price_unit = 10% of physical goods subtotal + 80)
 ```
 (Duties section is always last; incoterm set to DDP on the SO)
 
@@ -202,7 +215,7 @@ Just set `product_id` and `product_uom_qty` — Odoo computes the price via onch
    - Read back all SO lines after creation to get their `price_subtotal` (post-pricelist, post-discount)
    - Sum only **physical goods** lines: devices (CY-DEV-*), cables (CY-CBL-*), accessories (CY-PWR-*, CY-MEC-*), third-party (MIS-*)
    - **Exclude** licences (CY-LIC-*) from the sum — they are not physical goods
-   - Formula: `price_unit = SUM(physical lines price_subtotal) × 0.15 + 80`
+   - Formula: `price_unit = SUM(physical lines price_subtotal) × 0.10 + 80`
    - Force `price_unit` manually on this line (exception to the "do not set price_unit" rule)
 
 2. **Set Incoterm on the SO** to **DDP**:
@@ -212,7 +225,7 @@ Just set `product_id` and `product_uom_qty` — Odoo computes the price via onch
    args: [[SO_ID], {"incoterm": <DDP_ID>, "incoterm_location": "<delivery country>"}]
    ```
    - Look up DDP incoterm: `search_read` on `account.incoterms` with `[["code", "=", "DDP"]]`
-   - `incoterm_location` = country name from the customer's delivery address
+   - `incoterm_location` = **city name** from the customer's shipping address (e.g. "New York", "Los Angeles"). Read `city` from the partner's `res.partner` record.
 
 ### Step 1: Lookup products (one batch call)
 
@@ -308,12 +321,14 @@ Present to user:
 - **RSBM**: SDI I/O accessory — quote RSBM only, included CY-CBL-6P-ST-15 cable is NOT quoted separately
 - **VP4**: check stock availability (limited 2026, new version in dev)
 - **RIO-LIVE**: legacy — quote RIO + CY-LIC-RIO-LAN instead
-- **US customer**: auto-add section "Import Duties & Taxes (DDP)" with XTR-PREP-DUTIES-TAXES line (15% of physical goods + 80 flat) + set incoterm DDP
+- **US customer**: auto-add section "Import Duties & Taxes (DDP)" with XTR-PREP-DUTIES-TAXES line (10% of physical goods + 80 flat) + set incoterm DDP
 - **Discount**: use product XTR-DISC-EXCP with negative price
 - **Shipping**: use SH-SER-SHIPPING with cost as price
 - **Dreamchip, Marshall (mini-cameras)**: always use CY-RCP (compact) + CI0 (direct, no licence). Cable: DCHIP-01 default, DCHIP-03 for PT heads, DCHIP-02 for SSM500
 - **2 cameras per CI0/RIO**: possible depending on protocol — quote fewer units but same number of cables
 - **Multiple RCPs**: each RCP needs its own licence
+
+---
 
 ## Appendix A — Product Catalog
 
@@ -447,6 +462,8 @@ Prices: managed by Odoo pricelists (auto-selected per customer) — NOT hardcode
 | XTR-DISC-REPL | XTR-DISC-REPL | Replacement discount |
 | XTR-PREP-DUTIES | XTR-PREP-DUTIES-TAXES | Import duties/taxes |
 | DHL Express | SH-SER-SHIPPING | Shipping line item |
+
+---
 
 ## Appendix B — Licence Matrix
 

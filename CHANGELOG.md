@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`cyanview-quote` prompt used a superseded US duties rule** (15 % of physical
+  goods + 80). It now carries the current one — 10 % + 80 — together with the
+  newer quote skill: sales-order editing triggers, the "RCP with Gateway" legacy
+  wording rule, and the DDP incoterm location taken from the shipping city.
+- `cyanview-inventory-watchdog` prompt no longer calls `read_group` "deprecated":
+  it is removed since Odoo Online 19.1.
+
+### Changed
+- Skill prompt bodies are now exported from the canonical `cyanview-skills`
+  repository (`scripts/export_server.py`) instead of being copied by hand from
+  `~/.claude/skills`; reference files are appended as appendices.
+
 ## [1.19.1] - 2026-09-30
 
 ### Fixed
