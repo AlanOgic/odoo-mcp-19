@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.2] - 2026-09-30
+
 ### Fixed
 - **`cyanview-quote` prompt used a superseded US duties rule** (15 % of physical
   goods + 80). It now carries the current one — 10 % + 80 — together with the
@@ -973,7 +975,8 @@ This reduces cognitive load and keeps the tool interface minimal:
 
 <!-- Only versions with a published git tag are linked. Intermediate releases were
      cut without tags; their entries above remain the record for those versions. -->
-[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v1.19.1...HEAD
+[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v1.19.2...HEAD
+[1.19.2]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.2
 [1.19.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.1
 [1.19.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.0
 [1.18.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.18.1
