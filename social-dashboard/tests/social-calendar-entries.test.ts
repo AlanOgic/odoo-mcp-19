@@ -112,3 +112,42 @@ describe("upcomingDeadlineAlerts", () => {
     expect(alerts.every((a) => a.type === "post-deadline")).toBe(true);
   });
 });
+
+describe("hand-added items and the Post log", () => {
+  const LOGGED = { id: 8, posted_date: "2026-09-24", platform: "instagram", post_type: "IG carousel", caption: "Take yourself back to the shore. 🤍\nThe sound of the water." };
+
+  it("shows Post log posts on their day, titled by the caption's first line", () => {
+    const entry = buildCalendarEntries([], [], [], [], [LOGGED]).find((e) => e.loggedPostId === 8)!;
+    expect(entry.type).toBe("logged-post");
+    expect(entry.date).toBe("2026-09-24");
+    expect(entry.label).toBe("Take yourself back to the shore. 🤍");
+  });
+
+  it("hides a Post log post that a posted planner item already stands for", () => {
+    const linked: CalendarContentIdea = { id: 2, idea_type: "new", target_date: "2026-09-24", product: "Shell", platform: "instagram", status: "used", format: "carousel", posted_post_id: 8 };
+    expect(buildCalendarEntries([], [], [linked], [], [LOGGED]).some((e) => e.loggedPostId === 8)).toBe(false);
+    const unlinked: CalendarContentIdea = { ...linked, posted_post_id: null };
+    expect(buildCalendarEntries([], [], [unlinked], [], [LOGGED]).some((e) => e.loggedPostId === 8)).toBe(false);
+    const otherPlatform: CalendarContentIdea = { ...unlinked, platform: "facebook" };
+    expect(buildCalendarEntries([], [], [otherPlatform], [], [LOGGED]).some((e) => e.loggedPostId === 8)).toBe(true);
+  });
+
+  it("turns hand-added holidays and deadlines into movable, noteable entries that feed deadline alerts", () => {
+    const entries = buildCalendarEntries(
+      [],
+      [],
+      [],
+      [
+        { id: 1, kind: "holiday", title: "Studio anniversary", date: "2026-10-10", notes: null },
+        { id: 2, kind: "deadline", title: "Holiday gift guide", date: "2026-10-12", notes: "Needs the new kits" },
+      ],
+    );
+    const holiday = entries.find((e) => e.customItemId === 1)!;
+    expect(holiday.type).toBe("occasion");
+    const deadline = entries.find((e) => e.customItemId === 2)!;
+    expect(deadline.type).toBe("post-deadline");
+    expect(deadline.noteTarget).toEqual({ kind: "calendar-item", id: 2 });
+    expect(deadline.note).toBe("Needs the new kits");
+    expect(upcomingDeadlineAlerts(entries, 2, new Date("2026-10-10T12:00:00")).map((e) => e.customItemId)).toEqual([2]);
+  });
+});

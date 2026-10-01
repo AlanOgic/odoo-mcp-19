@@ -1,13 +1,19 @@
-// dashboard/src/lib/marketing/socialInsightsImport.ts
 import "server-only";
 
 import { getHealthDb } from "../db";
-import { createSocialPost, type SocialPlatform } from "./socialPosts";
+import { createSocialPost, PLANNER_LOG_NOTE, type SocialPlatform } from "./socialPosts";
 
 /**
- * Imports the long-format CSV exported by Meta Business Suite (one row per
- * platform/record_type/metric/date) — real per-post and per-period numbers,
- * never fabricated. Two kinds of rows are used:
+ * Imports two kinds of Meta Business Suite CSV — real numbers, never fabricated:
+ *
+ * 1. Per-post exports (Insights → Content → Export), one file per platform:
+ *    a Facebook Page file ("Page ID", "Reactions", "Total clicks", …) or an
+ *    Instagram file ("Account username", "Likes", "Saves", …), one row per
+ *    post with lifetime totals. Each row updates the matching Post log entry
+ *    or adds one — see importMetaPostExport.
+ *
+ * 2. The long-format summary export (one row per
+ *    platform/record_type/metric/date). Two kinds of rows are used:
  *   - record_type "post": pivoted into social_posts rows (one row per
  *     platform per post), matching the same schema the Social Media page's
  *     manual-entry form writes to.
@@ -20,50 +26,61 @@ import { createSocialPost, type SocialPlatform } from "./socialPosts";
 
 const SUPPORTED_PLATFORMS = new Set<SocialPlatform>(["instagram", "facebook", "tiktok", "pinterest"]);
 
-function parseCsvLine(line: string): string[] {
-  const fields: string[] = [];
-  let cur = "";
+/** Splits CSV text into records of fields. Quoted fields may contain commas,
+ * doubled quotes and line breaks — Meta's post exports put multi-line captions
+ * in quotes, so the text can't be split on newlines first. */
+function parseCsvRecords(text: string): string[][] {
+  const records: string[][] = [];
+  let record: string[] = [];
+  let field = "";
   let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
+  const src = text.replace(/^\uFEFF/, "");
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
     if (inQuotes) {
       if (ch === '"') {
-        if (line[i + 1] === '"') {
-          cur += '"';
+        if (src[i + 1] === '"') {
+          field += '"';
           i++;
         } else {
           inQuotes = false;
         }
       } else {
-        cur += ch;
+        field += ch;
       }
     } else if (ch === '"') {
       inQuotes = true;
     } else if (ch === ",") {
-      fields.push(cur);
-      cur = "";
+      record.push(field);
+      field = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && src[i + 1] === "\n") i++;
+      record.push(field);
+      records.push(record);
+      record = [];
+      field = "";
     } else {
-      cur += ch;
+      field += ch;
     }
   }
-  fields.push(cur);
-  return fields;
+  if (field !== "" || record.length > 0) {
+    record.push(field);
+    records.push(record);
+  }
+  return records.filter((r) => r.some((f) => f.trim() !== ""));
 }
 
 function parseCsv(text: string): Record<string, string>[] {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  if (lines.length === 0) return [];
-  const header = parseCsvLine(lines[0]!).map((h) => h.trim());
-  const rows: Record<string, string>[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const fields = parseCsvLine(lines[i]!);
+  const records = parseCsvRecords(text);
+  if (records.length === 0) return [];
+  const header = records[0]!.map((h) => h.trim());
+  return records.slice(1).map((fields) => {
     const row: Record<string, string> = {};
     header.forEach((h, idx) => {
       row[h] = (fields[idx] ?? "").trim();
     });
-    rows.push(row);
-  }
-  return rows;
+    return row;
+  });
 }
 
 const POST_METRIC_TO_FIELD: Record<string, "reach" | "likes" | "comments" | "shares"> = {
@@ -150,8 +167,129 @@ export function parseSocialInsightsCsv(csvText: string): ParsedSocialInsights {
 
 export interface ImportSocialInsightsResult {
   postsImported: number;
+  /** Existing Post log entries whose numbers were refreshed (per-post exports). */
+  postsUpdated: number;
   postsSkipped: number;
   summariesImported: number;
+}
+
+export interface ParsedPostExportRow {
+  platform: SocialPlatform;
+  externalId: string;
+  postedDate: string;
+  caption: string;
+  postType: string | null;
+  permalink: string | null;
+  views: number | null;
+  reach: number | null;
+  likes: number;
+  comments: number;
+  shares: number;
+  /** Facebook exports have clicks; Instagram's don't, so null means "not in this file". */
+  linkClicks: number | null;
+}
+
+/** "09/28/2026 18:12" → "2026-09-28". */
+function publishDate(raw: string): string | null {
+  const m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  return m ? `${m[3]}-${m[1]!.padStart(2, "0")}-${m[2]!.padStart(2, "0")}` : null;
+}
+
+/**
+ * Parses a Meta per-post export, or returns null if the CSV isn't one. The
+ * platform is told apart by its columns: Facebook Page exports have "Page ID",
+ * Instagram ones "Account username".
+ */
+export function parseMetaPostExport(csvText: string): ParsedPostExportRow[] | null {
+  const rows = parseCsv(csvText);
+  const first = rows[0];
+  if (!first || !("Post ID" in first) || !("Publish time" in first)) return null;
+  const platform: SocialPlatform | null = "Page ID" in first ? "facebook" : "Account username" in first ? "instagram" : null;
+  if (!platform) return null;
+
+  const out: ParsedPostExportRow[] = [];
+  for (const row of rows) {
+    const postedDate = publishDate(row["Publish time"] ?? "");
+    if (!row["Post ID"] || !postedDate) continue;
+    const num = (key: string) => toNumber(row[key]);
+    out.push({
+      platform,
+      externalId: row["Post ID"],
+      postedDate,
+      caption: (platform === "facebook" ? row.Title || row.Description : row.Description || row.Title) ?? "",
+      postType: row["Post type"] || null,
+      permalink: row.Permalink || null,
+      views: num("Views"),
+      reach: num("Reach"),
+      likes: (platform === "facebook" ? num("Reactions") : num("Likes")) ?? 0,
+      comments: num("Comments") ?? 0,
+      shares: num("Shares") ?? 0,
+      // Facebook's "Other Clicks" are clicks on the post other than opening the
+      // photo — the closest the Page export gets to link clicks.
+      linkClicks: platform === "facebook" ? (num("Link clicks") ?? num("Other Clicks")) : null,
+    });
+  }
+  return out;
+}
+
+/** Lowercased, whitespace-collapsed opening of a caption, for matching posts
+ * imported before Post IDs were stored. */
+function captionKey(caption: string | null): string {
+  return (caption ?? "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 40);
+}
+
+/**
+ * Upserts a per-post export into the Post log. A row matches an existing entry
+ * by Meta's Post ID, then permalink, then same platform + day + caption opening
+ * (entries imported before IDs were kept), then an entry the planner logged for
+ * that platform and day without numbers yet. Matches get the export's lifetime
+ * numbers; anything else is added.
+ */
+export function importMetaPostExport(rows: ParsedPostExportRow[]): { postsImported: number; postsUpdated: number } {
+  const db = getHealthDb();
+  const byExternalId = db.prepare("SELECT id FROM social_posts WHERE external_id = ?");
+  const byPermalink = db.prepare("SELECT id FROM social_posts WHERE permalink = ?");
+  const sameDay = db.prepare("SELECT id, caption, notes, likes, comments, shares, reach FROM social_posts WHERE platform = ? AND posted_date = ? AND external_id IS NULL ORDER BY id");
+  const update = db.prepare(`
+    UPDATE social_posts SET external_id = @externalId, permalink = @permalink, post_type = @postType, caption = @caption,
+      views = @views, reach = @reach, likes = @likes, comments = @comments, shares = @shares,
+      link_clicks = COALESCE(@linkClicks, link_clicks),
+      notes = CASE WHEN notes = @plannerNote THEN 'Logged from the planner; numbers from a Meta post export.' ELSE notes END
+    WHERE id = @id`);
+
+  let postsImported = 0;
+  let postsUpdated = 0;
+  db.transaction(() => {
+    for (const r of rows) {
+      let id = (byExternalId.get(r.externalId) as { id: number } | undefined)?.id ?? (r.permalink ? (byPermalink.get(r.permalink) as { id: number } | undefined)?.id : undefined);
+      if (id === undefined) {
+        const candidates = sameDay.all(r.platform, r.postedDate) as { id: number; caption: string | null; notes: string | null; likes: number; comments: number; shares: number; reach: number | null }[];
+        id =
+          candidates.find((c) => captionKey(c.caption) !== "" && captionKey(c.caption) === captionKey(r.caption))?.id ??
+          candidates.find((c) => c.notes === PLANNER_LOG_NOTE && c.likes + c.comments + c.shares === 0 && c.reach === null)?.id;
+      }
+      if (id !== undefined) {
+        update.run({ ...r, id, plannerNote: PLANNER_LOG_NOTE });
+        postsUpdated++;
+        continue;
+      }
+      const created = createSocialPost({
+        posted_date: r.postedDate,
+        platform: r.platform,
+        post_type: r.postType,
+        caption: r.caption || null,
+        likes: r.likes,
+        comments: r.comments,
+        shares: r.shares,
+        link_clicks: r.linkClicks ?? 0,
+        reach: r.reach,
+        notes: "Imported from a Meta post export.",
+      });
+      db.prepare("UPDATE social_posts SET external_id = ?, permalink = ?, views = ? WHERE id = ?").run(r.externalId, r.permalink, r.views, created.id);
+      postsImported++;
+    }
+  })();
+  return { postsImported, postsUpdated };
 }
 
 /** Idempotent: a post already present (matched on platform + posted_date + caption)
@@ -159,15 +297,32 @@ export interface ImportSocialInsightsResult {
  * (platform, metric, period_start, period_end) key, so re-importing a corrected
  * export overwrites rather than duplicating. */
 export function importSocialInsightsCsv(csvText: string): ImportSocialInsightsResult {
+  const postExport = parseMetaPostExport(csvText);
+  if (postExport) return { ...importMetaPostExport(postExport), postsSkipped: 0, summariesImported: 0 };
+
   const { posts, summaries } = parseSocialInsightsCsv(csvText);
   const db = getHealthDb();
 
   let postsImported = 0;
   let postsSkipped = 0;
   const existsPost = db.prepare(`SELECT id FROM social_posts WHERE platform = ? AND posted_date = ? AND caption = ?`);
+  // An entry the planner logged for this platform and day, still without numbers,
+  // is the same post: fill it in rather than adding a second row.
+  const plannerEntry = db.prepare(
+    `SELECT id FROM social_posts WHERE platform = ? AND posted_date = ? AND notes = ? AND likes = 0 AND comments = 0 AND shares = 0 AND reach IS NULL ORDER BY id LIMIT 1`,
+  );
+  const fillPlannerEntry = db.prepare(
+    `UPDATE social_posts SET caption = ?, likes = ?, comments = ?, shares = ?, reach = ?, notes = ? WHERE id = ?`,
+  );
   for (const p of posts) {
     if (existsPost.get(p.platform, p.postedDate, p.title)) {
       postsSkipped++;
+      continue;
+    }
+    const logged = plannerEntry.get(p.platform, p.postedDate, PLANNER_LOG_NOTE) as { id: number } | undefined;
+    if (logged) {
+      fillPlannerEntry.run(p.title, p.likes, p.comments, p.shares, p.reach, "Imported from a Meta Business Suite insights export (matched a post logged from the planner).", logged.id);
+      postsImported++;
       continue;
     }
     createSocialPost({
@@ -197,7 +352,7 @@ export function importSocialInsightsCsv(csvText: string): ImportSocialInsightsRe
     upsertSummary.run(s);
   }
 
-  return { postsImported, postsSkipped, summariesImported: summaries.length };
+  return { postsImported, postsUpdated: 0, postsSkipped, summariesImported: summaries.length };
 }
 
 export interface PlatformInsightRow {

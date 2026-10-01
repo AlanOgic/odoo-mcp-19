@@ -3,7 +3,7 @@ import "server-only";
 import { getHealthDb } from "../db";
 import type { Person } from "./people";
 
-export type ActivityEntity = "content_idea" | "trade_show" | "social_post" | "trend";
+export type ActivityEntity = "content_idea" | "trade_show" | "social_post" | "trend" | "calendar_item";
 
 export interface ActivityEntry {
   id: number;

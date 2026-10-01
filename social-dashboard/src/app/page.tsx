@@ -7,7 +7,7 @@ import { DataTable } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Planner } from "@/components/planner/Planner";
 import type { Me, PlannerIdea } from "@/components/planner/types";
-import type { CalendarOccasion, CalendarTradeShow } from "@/lib/social/calendarEntries";
+import type { CalendarCustomItem, CalendarOccasion, CalendarTradeShow } from "@/lib/social/calendarEntries";
 import { formatNumber, formatCurrency, formatDate } from "@/lib/format";
 import { scoreSocialPosts } from "@/lib/social/scoring";
 import { buildUtmUrl, UTM_SOURCES, UTM_MEDIUMS, InvalidUtmUrlError, type UtmSource, type UtmMedium } from "@/lib/social/utm";
@@ -27,10 +27,13 @@ interface SocialPost {
   comments: number;
   shares: number;
   link_clicks: number;
+  reach: number | null;
+  views: number | null;
   utm_campaign: string | null;
   utm_source: string | null;
   utm_medium: string | null;
   revenue_attributed: number;
+  planner_idea_id: number | null;
 }
 
 interface CampaignAttributionRow {
@@ -399,6 +402,7 @@ export default function SocialPlannerPage() {
   const [ideasLoading, setIdeasLoading] = useState(true);
   const [occasions, setOccasions] = useState<CalendarOccasion[]>([]);
   const [tradeShows, setTradeShows] = useState<CalendarTradeShow[]>([]);
+  const [customItems, setCustomItems] = useState<CalendarCustomItem[]>([]);
   const [calendarLoading, setCalendarLoading] = useState(true);
   const [tab, setTab] = useState<TabKey>("planner");
   const [showTrendForm, setShowTrendForm] = useState(false);
@@ -439,12 +443,14 @@ export default function SocialPlannerPage() {
   }, []);
 
   const loadCalendar = useCallback(async () => {
-    const [occRes, showsRes] = await Promise.all([
+    const [occRes, showsRes, itemsRes] = await Promise.all([
       fetch("/api/social-intelligence/occasions", { cache: "no-store" }),
       fetch("/api/social-intelligence/trade-shows", { cache: "no-store" }),
+      fetch("/api/social-intelligence/calendar-items", { cache: "no-store" }),
     ]);
     if (occRes.ok) setOccasions((await occRes.json()).occasions);
     if (showsRes.ok) setTradeShows((await showsRes.json()).tradeShows);
+    if (itemsRes.ok) setCustomItems((await itemsRes.json()).items);
     setCalendarLoading(false);
   }, []);
 
@@ -464,11 +470,12 @@ export default function SocialPlannerPage() {
       if (document.visibilityState === "visible") {
         loadIdeas();
         loadCalendar();
+        loadPosts();
       }
     };
     document.addEventListener("visibilitychange", onFocus);
     return () => document.removeEventListener("visibilitychange", onFocus);
-  }, [loadIdeas, loadCalendar]);
+  }, [loadIdeas, loadCalendar, loadPosts]);
 
   async function handleDeleteObservation(id: number) {
     await fetch(`/api/social-intelligence/trends/${id}`, { method: "DELETE" });
@@ -556,11 +563,16 @@ export default function SocialPlannerPage() {
           ideas={ideas}
           occasions={occasions}
           tradeShows={tradeShows}
+          customItems={customItems}
+          loggedPosts={posts}
           loading={ideasLoading || calendarLoading}
           me={me}
-          onIdeasChanged={loadIdeas}
+          // Marking a post as posted writes to the Post log, so refresh both.
+          onIdeasChanged={async () => {
+            await Promise.all([loadIdeas(), loadPosts()]);
+          }}
           onCalendarChanged={async () => {
-            await Promise.all([loadCalendar(), loadIdeas()]);
+            await Promise.all([loadCalendar(), loadIdeas(), loadPosts()]);
           }}
         />
       )}

@@ -5,12 +5,13 @@ import { MonthCalendar, type CalendarDayEntry } from "@/components/ui/MonthCalen
 import {
   buildCalendarEntries,
   upcomingDeadlineAlerts,
+  type CalendarCustomItem,
   type CalendarEntry,
   type CalendarOccasion,
   type CalendarTradeShow,
 } from "@/lib/social/calendarEntries";
 import { PostDrawer } from "./PostDrawer";
-import { FORMAT_LABEL, PLATFORM_LABEL, STATUS_LABEL, readError, shortDate, statusPillClass, type Me, type PlannerIdea } from "./types";
+import { FORMAT_LABEL, PLATFORM_LABEL, STATUS_LABEL, postStats, readError, shortDate, statusPillClass, type Me, type PlannerIdea, type PlannerLoggedPost } from "./types";
 
 /**
  * Colour rule for the calendar, kept to the board's two highlights:
@@ -64,6 +65,8 @@ export function Planner({
   ideas,
   occasions,
   tradeShows,
+  customItems,
+  loggedPosts,
   loading,
   me,
   onIdeasChanged,
@@ -72,6 +75,8 @@ export function Planner({
   ideas: PlannerIdea[];
   occasions: CalendarOccasion[];
   tradeShows: CalendarTradeShow[];
+  customItems: CalendarCustomItem[];
+  loggedPosts: PlannerLoggedPost[];
   loading: boolean;
   me: Me | null;
   onIdeasChanged: () => void | Promise<void>;
@@ -81,7 +86,17 @@ export function Planner({
   // Drag-and-drop moves show in their new place at once, before the save round-trip finishes.
   const [ideaMoves, setIdeaMoves] = useState<Record<number, string>>({});
   const [showMoves, setShowMoves] = useState<Record<number, ShowDates>>({});
+  const [customMoves, setCustomMoves] = useState<Record<number, string>>({});
   const [toast, setToast] = useState<Toast | null>(null);
+
+  // The Post log links here with ?idea=<id> to open that post.
+  useEffect(() => {
+    const id = Number(new URLSearchParams(window.location.search).get("idea"));
+    if (id) {
+      setOpenIdeaId(id);
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -99,20 +114,35 @@ export function Planner({
     [tradeShows, showMoves],
   );
 
+  const shownCustom = useMemo(() => customItems.map((c) => (customMoves[c.id] !== undefined ? { ...c, date: customMoves[c.id]! } : c)), [customItems, customMoves]);
+
   const openIdea = shownIdeas.find((i) => i.id === openIdeaId) ?? null;
   const ideaById = useMemo(() => new Map(shownIdeas.map((i) => [i.id, i])), [shownIdeas]);
+  const loggedPostById = useMemo(() => new Map(loggedPosts.map((p) => [p.id, p])), [loggedPosts]);
 
   const entries = useMemo(
     () =>
       buildCalendarEntries(
         occasions,
         shownShows,
-        shownIdeas.map((i) => ({ id: i.id, idea_type: i.idea_type, target_date: i.target_date, product: i.product, platform: i.platform, status: i.status, format: i.format })),
+        shownIdeas.map((i) => ({
+          id: i.id,
+          idea_type: i.idea_type,
+          target_date: i.target_date,
+          product: i.product,
+          platform: i.platform,
+          status: i.status,
+          format: i.format,
+          posted_post_id: i.posted_post_id,
+        })),
+        shownCustom,
+        loggedPosts,
       ),
-    [occasions, shownShows, shownIdeas],
+    [occasions, shownShows, shownIdeas, shownCustom, loggedPosts],
   );
 
   const kindOf = (e: CalendarEntry): DayKind => {
+    if (e.loggedPostId != null) return "posted";
     if (e.ideaId != null) return ideaById.get(e.ideaId)?.status === "used" ? "posted" : "scheduled";
     if (e.type === "post-deadline") return "deadline";
     if (e.type === "trade-show") return "event";
@@ -153,11 +183,26 @@ export function Planner({
     });
   }
 
-  /** Posts still to go out, and events, can be rescheduled by dragging; holidays,
-   * post-by deadlines (computed) and posts already out (history) can't. */
+  async function moveCustom(id: number, name: string, fromDate: string, toDate: string, offerUndo: boolean) {
+    setCustomMoves((m) => ({ ...m, [id]: toDate }));
+    const res = await fetch(`/api/social-intelligence/calendar-items/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date: toDate }),
+    }).catch(() => null);
+    if (res?.ok) await onCalendarChanged();
+    setCustomMoves((m) => without(m, id));
+    if (!res?.ok) return setToast({ message: await readError(res, `Couldn't move "${name}".`), error: true });
+    setToast({ message: `Moved "${name}" to ${shortDate(toDate)}`, undo: offerUndo ? () => moveCustom(id, name, toDate, fromDate, false) : undefined });
+  }
+
+  /** Posts still to go out, events, and holidays/deadlines the team added can be
+   * rescheduled by dragging; computed holidays and deadlines, and anything already
+   * posted (history), can't. */
   const canDrag = (entryKey: string): boolean => {
     const e = entries.find((x) => x.key === entryKey);
     if (!e) return false;
+    if (e.customItemId != null) return true;
     const kind = kindOf(e);
     return kind === "scheduled" || kind === "event";
   };
@@ -168,6 +213,11 @@ export function Planner({
     if (e.ideaId != null) {
       const original = ideas.find((i) => i.id === e.ideaId);
       if (original) moveIdea(original.id, original.product, original.target_date, toDate, true);
+      return;
+    }
+    if (e.customItemId != null) {
+      const item = customItems.find((c) => c.id === e.customItemId);
+      if (item) moveCustom(item.id, item.title, item.date, toDate, true);
       return;
     }
     if (e.deletableTradeShowId != null) {
@@ -207,12 +257,29 @@ export function Planner({
 
       <div className="planner-grid">
         <UpcomingList ideas={upcoming} loading={loading} onOpen={setOpenIdeaId} />
-        <CalendarCard entries={entries} kindOf={kindOf} ideaById={ideaById} onOpenIdea={setOpenIdeaId} onChanged={onCalendarChanged} canDrag={canDrag} onMoveEntry={handleMove} />
+        <CalendarCard
+          entries={entries}
+          kindOf={kindOf}
+          ideaById={ideaById}
+          loggedPostById={loggedPostById}
+          onOpenIdea={setOpenIdeaId}
+          onChanged={onCalendarChanged}
+          canDrag={canDrag}
+          onMoveEntry={handleMove}
+        />
       </div>
 
       <IdeasCard ideas={shownIdeas} loading={loading} onOpen={setOpenIdeaId} />
 
-      {openIdea && <PostDrawer idea={openIdea} me={me} onClose={() => setOpenIdeaId(null)} onChanged={() => void onIdeasChanged()} />}
+      {openIdea && (
+        <PostDrawer
+          idea={openIdea}
+          loggedPost={openIdea.posted_post_id != null ? loggedPostById.get(openIdea.posted_post_id) : undefined}
+          me={me}
+          onClose={() => setOpenIdeaId(null)}
+          onChanged={() => void onIdeasChanged()}
+        />
+      )}
 
       {toast && (
         <div
@@ -323,6 +390,7 @@ function CalendarCard({
   entries,
   kindOf,
   ideaById,
+  loggedPostById,
   onOpenIdea,
   onChanged,
   canDrag,
@@ -331,6 +399,7 @@ function CalendarCard({
   entries: CalendarEntry[];
   kindOf: (e: CalendarEntry) => DayKind;
   ideaById: Map<number, PlannerIdea>;
+  loggedPostById: Map<number, PlannerLoggedPost>;
   onOpenIdea: (id: number) => void;
   onChanged: () => void | Promise<void>;
   canDrag: (entryKey: string) => boolean;
@@ -340,7 +409,8 @@ function CalendarCard({
   const [viewYear, setViewYear] = useState(now.getFullYear());
   const [viewMonth, setViewMonth] = useState(now.getMonth());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [showEventForm, setShowEventForm] = useState(false);
+  // The Add form is open when this is set; its value is the date to start from.
+  const [addDate, setAddDate] = useState<string | null>(null);
 
   const byDate = useMemo(() => {
     const map: Record<string, CalendarEntry[]> = {};
@@ -385,16 +455,19 @@ function CalendarCard({
             ))}
           </div>
         </div>
-        <button type="button" className="btn btn-sm" onClick={() => setShowEventForm((v) => !v)}>
-          {showEventForm ? "Cancel" : "Add event"}
+        <button type="button" className={`btn btn-sm ${addDate !== null ? "btn-ghost" : ""}`} onClick={() => setAddDate((d) => (d !== null ? null : ""))}>
+          {addDate !== null ? "Cancel" : "Add to calendar"}
         </button>
       </div>
 
-      {showEventForm && (
-        <EventForm
-          onSaved={() => {
-            setShowEventForm(false);
-            onChanged();
+      {addDate !== null && (
+        <AddToCalendarForm
+          key={addDate}
+          initialDate={addDate}
+          onCancel={() => setAddDate(null)}
+          onSaved={async () => {
+            setAddDate(null);
+            await onChanged();
           }}
         />
       )}
@@ -432,6 +505,16 @@ function CalendarCard({
               <strong className="font-display" style={{ fontSize: 16, marginRight: "auto" }}>
                 {shortDate(selectedDate)}
               </strong>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  setAddDate(selectedDate);
+                  setSelectedDate(null);
+                }}
+              >
+                Add to this day
+              </button>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSelectedDate(null)} aria-label="Close">
                 ✕
               </button>
@@ -448,6 +531,13 @@ function CalendarCard({
                     entry={e}
                     kind={kindOf(e)}
                     idea={e.ideaId != null ? ideaById.get(e.ideaId) : undefined}
+                    loggedPost={
+                      e.loggedPostId != null
+                        ? loggedPostById.get(e.loggedPostId)
+                        : e.ideaId != null && ideaById.get(e.ideaId)?.posted_post_id != null
+                          ? loggedPostById.get(ideaById.get(e.ideaId)!.posted_post_id!)
+                          : undefined
+                    }
                     onOpenIdea={(id) => {
                       setSelectedDate(null);
                       onOpenIdea(id);
@@ -468,37 +558,61 @@ function DayEntry({
   entry,
   kind,
   idea,
+  loggedPost,
   onOpenIdea,
   onChanged,
 }: {
   entry: CalendarEntry;
   kind: DayKind;
   idea?: PlannerIdea;
+  loggedPost?: PlannerLoggedPost;
   onOpenIdea: (id: number) => void;
-  onChanged: () => void;
+  onChanged: () => void | Promise<void>;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const deleteTarget =
+    entry.deletableTradeShowId != null
+      ? { url: `/api/social-intelligence/trade-shows/${entry.deletableTradeShowId}`, what: "event" }
+      : entry.customItemId != null
+        ? { url: `/api/social-intelligence/calendar-items/${entry.customItemId}`, what: entry.type === "occasion" ? "holiday" : "deadline" }
+        : null;
 
-  async function deleteEvent(id: number) {
-    await fetch(`/api/social-intelligence/trade-shows/${id}`, { method: "DELETE" });
-    onChanged();
+  async function remove() {
+    if (!deleteTarget) return;
+    await fetch(deleteTarget.url, { method: "DELETE" });
+    await onChanged();
   }
+
+  const stats = loggedPost ? postStats(loggedPost) : null;
 
   return (
     <div style={{ display: "flex", gap: 10 }}>
       <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: DAY_KIND[kind].color, marginTop: 7, flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginBottom: 2 }}>{DAY_KIND[kind].label}</div>
-        <div style={{ fontSize: 14, fontWeight: 500 }}>{idea ? idea.product : entry.label}</div>
+        <div style={{ fontSize: 14, fontWeight: 500 }}>{idea ? idea.product : entry.label.replace(/^Post-by deadline: /, "")}</div>
         {idea ? (
           <>
             <p className="muted" style={{ margin: "2px 0 8px", fontSize: 12.5 }}>
               {PLATFORM_LABEL[idea.platform] ?? idea.platform} · {FORMAT_LABEL[idea.format]} · {STATUS_LABEL[idea.status]}
               {idea.comments.length > 0 ? ` · ${idea.comments.length} comment${idea.comments.length === 1 ? "" : "s"}` : ""}
             </p>
+            {loggedPost && <PostLogLine stats={stats} />}
             <button type="button" className="btn btn-sm" onClick={() => onOpenIdea(idea.id)}>
               Open post
             </button>
+          </>
+        ) : loggedPost ? (
+          <>
+            <p className="muted" style={{ margin: "2px 0 6px", fontSize: 12.5 }}>
+              {entry.detail}
+            </p>
+            <PostLogLine stats={stats} />
+            {loggedPost.planner_idea_id != null && (
+              <button type="button" className="btn btn-sm" style={{ marginRight: 8 }} onClick={() => onOpenIdea(loggedPost.planner_idea_id!)}>
+                Open post
+              </button>
+            )}
           </>
         ) : (
           entry.detail && (
@@ -507,15 +621,15 @@ function DayEntry({
             </p>
           )
         )}
-        {entry.noteTarget && <EventNote key={`${entry.key}-${entry.note ?? ""}`} showId={entry.noteTarget.id} note={entry.note ?? null} onChanged={onChanged} />}
-        {entry.deletableTradeShowId != null && (
+        {entry.noteTarget && <EntryNote key={`${entry.key}-${entry.note ?? ""}`} target={entry.noteTarget} note={entry.note ?? null} onChanged={onChanged} />}
+        {deleteTarget && (
           <div style={{ marginTop: 8, display: "flex", gap: 10, alignItems: "center" }}>
             {confirmDelete ? (
               <>
                 <span className="muted" style={{ fontSize: 12 }}>
-                  Delete this event for everyone?
+                  Delete this {deleteTarget.what} for everyone?
                 </span>
-                <button type="button" className="link-btn danger" style={{ color: "var(--negative)" }} onClick={() => deleteEvent(entry.deletableTradeShowId!)}>
+                <button type="button" className="link-btn danger" style={{ color: "var(--negative)" }} onClick={remove}>
                   Delete
                 </button>
                 <button type="button" className="link-btn" onClick={() => setConfirmDelete(false)}>
@@ -524,7 +638,7 @@ function DayEntry({
               </>
             ) : (
               <button type="button" className="link-btn danger" onClick={() => setConfirmDelete(true)}>
-                Delete event
+                Delete {deleteTarget.what}
               </button>
             )}
           </div>
@@ -534,8 +648,26 @@ function DayEntry({
   );
 }
 
-/** Add / edit / remove the free-form note on an event. */
-function EventNote({ showId, note, onChanged }: { showId: number; note: string | null; onChanged: () => void }) {
+/** How a posted item is doing, from the Post log. */
+function PostLogLine({ stats }: { stats: string | null }) {
+  return (
+    <p style={{ margin: "0 0 8px", fontSize: 12.5 }}>
+      <span style={{ color: "var(--second)" }}>Post log</span>
+      <span className="muted"> · {stats ?? "no numbers yet; the next Meta import fills them in"} · </span>
+      <a href="/posts" style={{ color: "var(--text-soft)" }}>
+        Open Post log
+      </a>
+    </p>
+  );
+}
+
+const NOTE_ENDPOINT: Record<NonNullable<CalendarEntry["noteTarget"]>["kind"], string> = {
+  "trade-show": "/api/social-intelligence/trade-shows",
+  "calendar-item": "/api/social-intelligence/calendar-items",
+};
+
+/** Add / edit / remove the free-form note on an event or a hand-added holiday/deadline. */
+function EntryNote({ target, note, onChanged }: { target: NonNullable<CalendarEntry["noteTarget"]>; note: string | null; onChanged: () => void | Promise<void> }) {
   const [editing, setEditing] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [draft, setDraft] = useState(note ?? "");
@@ -545,7 +677,7 @@ function EventNote({ showId, note, onChanged }: { showId: number; note: string |
   async function save(notes: string | null) {
     setSaving(true);
     setError(null);
-    const res = await fetch(`/api/social-intelligence/trade-shows/${showId}`, {
+    const res = await fetch(`${NOTE_ENDPOINT[target.kind]}/${target.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ notes }),
@@ -554,13 +686,13 @@ function EventNote({ showId, note, onChanged }: { showId: number; note: string |
     if (!res?.ok) return setError(await readError(res, "Couldn't save the note."));
     setEditing(false);
     setConfirmingRemove(false);
-    onChanged();
+    await onChanged();
   }
 
   if (editing) {
     return (
       <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
-        <textarea className="input" rows={3} value={draft} onChange={(e) => setDraft(e.target.value)} aria-label="Event note" autoFocus />
+        <textarea className="input" rows={3} value={draft} onChange={(e) => setDraft(e.target.value)} aria-label="Note" autoFocus />
         <div style={{ display: "flex", gap: 8 }}>
           <button type="button" className="btn btn-sm btn-primary" disabled={saving} onClick={() => save(draft.trim() || null)}>
             {saving ? "Saving…" : "Save note"}
@@ -584,7 +716,7 @@ function EventNote({ showId, note, onChanged }: { showId: number; note: string |
 
   if (!note) {
     return (
-      <button type="button" className="link-btn" style={{ marginTop: 8, color: "var(--accent)" }} onClick={() => setEditing(true)}>
+      <button type="button" className="link-btn" style={{ marginTop: 8, color: "var(--accent)", display: "block" }} onClick={() => setEditing(true)}>
         + Add note
       </button>
     );
@@ -629,66 +761,156 @@ function EventNote({ showId, note, onChanged }: { showId: number; note: string |
   );
 }
 
-const EMPTY_EVENT = { name: "", location: "", start_date: "", end_date: "", lead_days: "10", notes: "" };
+type AddKind = "scheduled" | "deadline" | "posted" | "event" | "holiday";
+const ADD_KINDS: { key: AddKind; label: string; hint: string }[] = [
+  { key: "scheduled", label: "Scheduled post", hint: "A post planned for this day. It opens in the planner so the team can add the caption and comment." },
+  { key: "deadline", label: "Post-by deadline", hint: "The last day to have something live. Shows in the Due soon alert two days before." },
+  { key: "posted", label: "Posted", hint: "Something that already went out. It's added to the Post log too, and the next Meta import fills in its numbers." },
+  { key: "event", label: "Event", hint: "A show, market or appearance. Its post-by deadline is worked out from the lead time." },
+  { key: "holiday", label: "Holiday", hint: "A date worth planning around that isn't already on the calendar." },
+];
 
-function EventForm({ onSaved }: { onSaved: () => void }) {
-  const [form, setForm] = useState(EMPTY_EVENT);
+function AddToCalendarForm({ initialDate, onCancel, onSaved }: { initialDate: string; onCancel: () => void; onSaved: () => void | Promise<void> }) {
+  const [kind, setKind] = useState<AddKind>("scheduled");
+  const [form, setForm] = useState({
+    title: "",
+    date: initialDate || (kind === "posted" ? todayIso() : ""),
+    end_date: "",
+    platform: "instagram",
+    format: "photo",
+    caption: "",
+    location: "",
+    lead_days: "10",
+    notes: "",
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
+  const isPost = kind === "scheduled" || kind === "posted";
+
+  function pickKind(k: AddKind) {
+    setKind(k);
+    // Something that already went out usually went out today.
+    if (k === "posted" && !form.date) setForm((f) => ({ ...f, date: todayIso() }));
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
     setError(null);
-    const res = await fetch("/api/social-intelligence/trade-shows", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: form.name,
-        location: form.location || null,
-        start_date: form.start_date,
-        end_date: form.end_date || null,
-        lead_days: Number(form.lead_days) || 10,
-        notes: form.notes || null,
-      }),
-    }).catch(() => null);
+    const request =
+      kind === "event"
+        ? {
+            url: "/api/social-intelligence/trade-shows",
+            body: { name: form.title, location: form.location || null, start_date: form.date, end_date: form.end_date || null, lead_days: Number(form.lead_days) || 10, notes: form.notes || null },
+          }
+        : isPost
+          ? {
+              url: "/api/social-intelligence/content-ideas",
+              body: { manual: true, product: form.title, target_date: form.date, platform: form.platform, format: form.format, caption: form.caption, status: kind === "posted" ? "used" : undefined },
+            }
+          : { url: "/api/social-intelligence/calendar-items", body: { kind: kind === "holiday" ? "holiday" : "deadline", title: form.title, date: form.date, notes: form.notes } };
+    const res = await fetch(request.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.body) }).catch(() => null);
     setSaving(false);
-    if (!res?.ok) return setError(await readError(res, "Couldn't save the event."));
-    setForm(EMPTY_EVENT);
-    onSaved();
+    if (!res?.ok) return setError(await readError(res, "Couldn't add that to the calendar."));
+    await onSaved();
   }
 
+  const titleLabel = { scheduled: "Post title", posted: "Post title", deadline: "What needs to be live", event: "Event name", holiday: "Holiday name" }[kind];
+  const titlePlaceholder = { scheduled: "e.g. Dragon kit before / after", posted: "e.g. Shell pendant carousel", deadline: "e.g. Holiday gift guide", event: "e.g. Circle Craft", holiday: "e.g. Studio anniversary" }[kind];
+
   return (
-    <form onSubmit={submit} className="card-quiet" style={{ padding: 16, marginBottom: 16, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
-      <div className="field" style={{ gridColumn: "1 / -1" }}>
-        <label htmlFor="event-name">Event name</label>
-        <input id="event-name" className="input" required placeholder="e.g. Circle Craft, TV feature" value={form.name} onChange={set("name")} />
+    <form onSubmit={submit} className="card-quiet" style={{ padding: 16, marginBottom: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+      <div role="radiogroup" aria-label="What are you adding?" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+        {ADD_KINDS.map((k) => {
+          const on = k.key === kind;
+          return (
+            <button
+              key={k.key}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              onClick={() => pickKind(k.key)}
+              className="btn btn-sm"
+              style={{ borderColor: on ? "var(--accent)" : "var(--border-strong)", background: on ? "var(--accent-soft)" : "transparent", color: on ? "var(--text)" : "var(--text-soft)" }}
+            >
+              <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: DAY_KIND[k.key].color }} />
+              {k.label}
+            </button>
+          );
+        })}
       </div>
-      <div className="field">
-        <label htmlFor="event-location">Location</label>
-        <input id="event-location" className="input" placeholder="Vancouver, BC" value={form.location} onChange={set("location")} />
+      <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+        {ADD_KINDS.find((k) => k.key === kind)!.hint}
+      </p>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+        <div className="field" style={{ gridColumn: "1 / -1" }}>
+          <label htmlFor="add-title">{titleLabel}</label>
+          <input id="add-title" className="input" required maxLength={120} placeholder={titlePlaceholder} value={form.title} onChange={set("title")} />
+        </div>
+        <div className="field">
+          <label htmlFor="add-date">{kind === "event" ? "Starts" : kind === "posted" ? "Posted on" : "Date"}</label>
+          <input id="add-date" className="input" type="date" required value={form.date} onChange={set("date")} />
+        </div>
+        {kind === "event" && (
+          <>
+            <div className="field">
+              <label htmlFor="add-end">Ends</label>
+              <input id="add-end" className="input" type="date" min={form.date || undefined} value={form.end_date} onChange={set("end_date")} />
+            </div>
+            <div className="field">
+              <label htmlFor="add-location">Location</label>
+              <input id="add-location" className="input" placeholder="Vancouver, BC" value={form.location} onChange={set("location")} />
+            </div>
+            <div className="field">
+              <label htmlFor="add-lead">Post this many days before</label>
+              <input id="add-lead" className="input" type="number" min={0} value={form.lead_days} onChange={set("lead_days")} />
+            </div>
+          </>
+        )}
+        {isPost && (
+          <>
+            <div className="field">
+              <label htmlFor="add-platform">Platform</label>
+              <select id="add-platform" className="input" value={form.platform} onChange={set("platform")}>
+                {Object.entries(PLATFORM_LABEL).map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="add-format">Format</label>
+              <select id="add-format" className="input" value={form.format} onChange={set("format")}>
+                {Object.entries(FORMAT_LABEL).map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field" style={{ gridColumn: "1 / -1" }}>
+              <label htmlFor="add-caption">Caption (optional)</label>
+              <textarea id="add-caption" className="input" rows={3} value={form.caption} onChange={set("caption")} />
+            </div>
+          </>
+        )}
+        {!isPost && (
+          <div className="field" style={{ gridColumn: "1 / -1" }}>
+            <label htmlFor="add-notes">Note (optional)</label>
+            <input id="add-notes" className="input" value={form.notes} onChange={set("notes")} />
+          </div>
+        )}
       </div>
-      <div className="field">
-        <label htmlFor="event-start">Starts</label>
-        <input id="event-start" className="input" type="date" required value={form.start_date} onChange={set("start_date")} />
-      </div>
-      <div className="field">
-        <label htmlFor="event-end">Ends</label>
-        <input id="event-end" className="input" type="date" value={form.end_date} onChange={set("end_date")} />
-      </div>
-      <div className="field">
-        <label htmlFor="event-lead">Post this many days before</label>
-        <input id="event-lead" className="input" type="number" min={0} value={form.lead_days} onChange={set("lead_days")} />
-      </div>
-      <div className="field" style={{ gridColumn: "1 / -1" }}>
-        <label htmlFor="event-notes">Note</label>
-        <input id="event-notes" className="input" value={form.notes} onChange={set("notes")} />
-      </div>
-      {error && <p style={{ margin: 0, fontSize: 12.5, color: "var(--negative)", gridColumn: "1 / -1" }}>{error}</p>}
-      <div style={{ gridColumn: "1 / -1" }}>
-        <button type="submit" className="btn btn-primary" disabled={saving}>
-          {saving ? "Saving…" : "Save event"}
+      {error && <p style={{ margin: 0, fontSize: 12.5, color: "var(--negative)" }}>{error}</p>}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="submit" className="btn btn-primary" disabled={saving || !form.title.trim() || !form.date}>
+          {saving ? "Adding…" : `Add ${ADD_KINDS.find((k) => k.key === kind)!.label.toLowerCase()}`}
+        </button>
+        <button type="button" className="btn btn-ghost" onClick={onCancel}>
+          Cancel
         </button>
       </div>
     </form>

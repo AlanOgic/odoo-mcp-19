@@ -7,6 +7,7 @@ import {
   FORMAT_LABEL,
   PLATFORM_LABEL,
   STATUS_LABEL,
+  postStats,
   readError,
   relativeTime,
   shortDate,
@@ -16,6 +17,7 @@ import {
   type Me,
   type PlannerComment,
   type PlannerIdea,
+  type PlannerLoggedPost,
 } from "./types";
 
 export function Avatar({ name, size = 24 }: { name: string; size?: number }) {
@@ -46,7 +48,19 @@ const STATUS_ACTIONS: { status: ContentIdeaStatus; label: string }[] = [
   { status: "suggested", label: "Back to suggested" },
 ];
 
-export function PostDrawer({ idea, me, onClose, onChanged }: { idea: PlannerIdea; me: Me | null; onClose: () => void; onChanged: () => void }) {
+export function PostDrawer({
+  idea,
+  loggedPost,
+  me,
+  onClose,
+  onChanged,
+}: {
+  idea: PlannerIdea;
+  loggedPost?: PlannerLoggedPost;
+  me: Me | null;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -128,6 +142,19 @@ export function PostDrawer({ idea, me, onClose, onChanged }: { idea: PlannerIdea
             </p>
           )}
           {statusError && <p style={{ margin: 0, fontSize: 12, color: "var(--negative)" }}>{statusError}</p>}
+          {idea.status === "used" && (
+            <p className="card-quiet" style={{ margin: "4px 0 0", padding: "10px 12px", fontSize: 12.5 }}>
+              <span style={{ color: "var(--second)" }}>In the Post log</span>
+              <span className="muted">
+                {" · "}
+                {loggedPost ? (postStats(loggedPost) ?? "no numbers yet; the next Meta import fills them in") : "linking…"}
+                {" · "}
+              </span>
+              <a href="/posts" style={{ color: "var(--text-soft)" }}>
+                Open Post log
+              </a>
+            </p>
+          )}
         </div>
 
         <hr className="divider" />
@@ -152,7 +179,13 @@ export function PostDrawer({ idea, me, onClose, onChanged }: { idea: PlannerIdea
               </button>
             </div>
             {idea.hook && <p style={{ margin: 0, fontSize: 15, fontWeight: 500 }}>“{idea.hook}”</p>}
-            <p style={{ margin: 0, fontSize: 14, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{idea.caption}</p>
+            {idea.caption ? (
+              <p style={{ margin: 0, fontSize: 14, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{idea.caption}</p>
+            ) : (
+              <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>
+                No caption yet.
+              </p>
+            )}
             {idea.hashtags.length > 0 && <p style={{ margin: 0, fontSize: 13, color: "var(--text-soft)" }}>{idea.hashtags.map((h) => h.tag).join(" ")}</p>}
             {idea.cta && (
               <p style={{ margin: 0, fontSize: 13 }}>
@@ -278,7 +311,7 @@ function PostEditor({ idea, onCancel, onSaved }: { idea: PlannerIdea; onCancel: 
       </div>
       <div className="field">
         <label htmlFor={id("caption")}>Caption</label>
-        <textarea id={id("caption")} className="input" required rows={7} value={form.caption} onChange={set("caption")} />
+        <textarea id={id("caption")} className="input" rows={7} value={form.caption} onChange={set("caption")} />
       </div>
       <div className="field">
         <label htmlFor={id("hashtags")}>Hashtags</label>

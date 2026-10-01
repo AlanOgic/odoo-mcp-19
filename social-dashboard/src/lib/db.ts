@@ -45,14 +45,22 @@ export function getHealthDb(): Database.Database {
  */
 function runMigrations(db: Database.Database): void {
   dropAccessCodes(db);
+  allowCalendarItemActivity(db);
   addColumnIfMissing(db, "social_posts", "utm_source", "TEXT");
   addColumnIfMissing(db, "social_posts", "utm_medium", "TEXT");
   addColumnIfMissing(db, "social_posts", "utm_campaign", "TEXT");
   addColumnIfMissing(db, "social_posts", "revenue_attributed", "REAL NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "social_posts", "reach", "INTEGER");
+  // Meta per-post exports: a stable Post ID to match re-imports on (Facebook's
+  // permalinks change between exports), the permalink itself, and view counts.
+  addColumnIfMissing(db, "social_posts", "external_id", "TEXT");
+  addColumnIfMissing(db, "social_posts", "permalink", "TEXT");
+  addColumnIfMissing(db, "social_posts", "views", "INTEGER");
   addColumnIfMissing(db, "trade_shows", "lead_days", "INTEGER NOT NULL DEFAULT 10");
   addColumnIfMissing(db, "content_ideas", "format", "TEXT NOT NULL DEFAULT 'photo'");
   addColumnIfMissing(db, "content_ideas", "suggested_time", "TEXT");
+  // The Post log entry a posted planner item corresponds to (see lib/social/postLink.ts).
+  addColumnIfMissing(db, "content_ideas", "posted_post_id", "INTEGER REFERENCES social_posts(id) ON DELETE SET NULL");
 }
 
 /**
@@ -81,6 +89,31 @@ function dropAccessCodes(db: Database.Database): void {
   } finally {
     db.pragma("foreign_keys = ON");
   }
+}
+
+/** activity_log's entity_type CHECK predates calendar_items; SQLite can't alter
+ * a CHECK in place, so rebuild the table once with the wider list, keeping rows. */
+function allowCalendarItemActivity(db: Database.Database): void {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_log'").get() as { sql: string } | undefined;
+  if (!row || row.sql.includes("'calendar_item'")) return;
+  db.transaction(() => {
+    db.exec(`
+      CREATE TABLE activity_log_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
+        author_name TEXT NOT NULL,
+        entity_type TEXT NOT NULL CHECK(entity_type IN ('content_idea','trade_show','social_post','trend','calendar_item')),
+        entity_id INTEGER NOT NULL,
+        action TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO activity_log_new SELECT id, person_id, author_name, entity_type, entity_id, action, summary, created_at FROM activity_log;
+      DROP TABLE activity_log;
+      ALTER TABLE activity_log_new RENAME TO activity_log;
+      CREATE INDEX IF NOT EXISTS idx_activity_entity ON activity_log(entity_type, entity_id);
+    `);
+  })();
 }
 
 function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string): void {
@@ -261,11 +294,24 @@ CREATE TABLE IF NOT EXISTS activity_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
   author_name TEXT NOT NULL,
-  entity_type TEXT NOT NULL CHECK(entity_type IN ('content_idea','trade_show','social_post','trend')),
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('content_idea','trade_show','social_post','trend','calendar_item')),
   entity_id INTEGER NOT NULL,
   action TEXT NOT NULL,
   summary TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_activity_entity ON activity_log(entity_type, entity_id);
+
+-- Holidays and post-by deadlines people add themselves on the calendar. The
+-- standard retail holidays and the deadlines before them are computed in code
+-- (lib/social/seasonalCalendar.ts); these are the extra, studio-specific ones.
+CREATE TABLE IF NOT EXISTS calendar_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL CHECK(kind IN ('holiday','deadline')),
+  title TEXT NOT NULL,
+  date TEXT NOT NULL,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_calendar_items_date ON calendar_items(date);
 `;

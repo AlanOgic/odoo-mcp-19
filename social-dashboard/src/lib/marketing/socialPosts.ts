@@ -1,9 +1,13 @@
-// dashboard/src/lib/marketing/socialPosts.ts
 import "server-only";
 
 import { getHealthDb } from "../db";
 
 export type SocialPlatform = "instagram" | "facebook" | "tiktok" | "pinterest";
+
+/** Marks a Post log entry the planner created when a post was marked as posted.
+ * A later Meta import for the same platform and day fills in that entry's
+ * numbers instead of adding a duplicate (socialInsightsImport.ts). */
+export const PLANNER_LOG_NOTE = "Logged from the planner.";
 
 export interface SocialPost {
   id: number;
@@ -16,6 +20,9 @@ export interface SocialPost {
   shares: number;
   link_clicks: number;
   reach: number | null;
+  views: number | null;
+  permalink: string | null;
+  external_id: string | null;
   notes: string | null;
   utm_source: string | null;
   utm_medium: string | null;

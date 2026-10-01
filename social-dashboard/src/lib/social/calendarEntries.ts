@@ -1,14 +1,12 @@
-// dashboard/src/lib/social/calendarEntries.ts
-
 /**
- * Pure merge of occasions + trade shows + dated content ideas into one
- * calendar-entry list, used by both the Content Calendar (month grid) and
- * the deadline alert banner so they share one source of truth for what a
- * "post-by deadline" entry looks like. No DB access here — safe to import
- * from a client component.
+ * Pure merge of occasions + trade shows + dated content ideas + hand-added
+ * holidays/deadlines + posts from the Post log into one calendar-entry list,
+ * used by both the Content Calendar (month grid) and the deadline alert banner
+ * so they share one source of truth for what a "post-by deadline" entry looks
+ * like. No DB access here — safe to import from a client component.
  */
 
-export type CalendarEntryType = "occasion" | "trade-show" | "content-idea" | "story-post" | "post-deadline";
+export type CalendarEntryType = "occasion" | "trade-show" | "content-idea" | "story-post" | "post-deadline" | "logged-post";
 
 export interface CalendarEntry {
   key: string;
@@ -17,11 +15,15 @@ export interface CalendarEntry {
   label: string;
   detail: string;
   deletableTradeShowId?: number;
-  /** Set on an event day: the trade show whose free-form note can be edited here. */
-  noteTarget?: { kind: "trade-show"; id: number };
+  /** The record whose free-form note can be edited here (events and hand-added items). */
+  noteTarget?: { kind: "trade-show" | "calendar-item"; id: number };
   note?: string | null;
   /** Set on a scheduled/posted post: opens that post (content, comments, history). */
   ideaId?: number;
+  /** Set on a holiday or deadline someone added by hand (movable and deletable, unlike computed ones). */
+  customItemId?: number;
+  /** Set on a post from the Post log (imported or logged there). */
+  loggedPostId?: number;
 }
 
 export interface CalendarOccasion {
@@ -51,6 +53,33 @@ export interface CalendarContentIdea {
   platform: string;
   status: string;
   format: string;
+  /** The Post log entry this post is linked to once posted. */
+  posted_post_id?: number | null;
+}
+
+export interface CalendarCustomItem {
+  id: number;
+  kind: "holiday" | "deadline";
+  title: string;
+  date: string;
+  notes: string | null;
+}
+
+export interface CalendarLoggedPost {
+  id: number;
+  posted_date: string;
+  platform: string;
+  post_type: string | null;
+  caption: string | null;
+}
+
+const PLATFORM_NAMES: Record<string, string> = { instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok", pinterest: "Pinterest" };
+
+/** First line of a caption, trimmed for a calendar label. */
+function captionTitle(caption: string | null, platform: string): string {
+  const first = caption?.split("\n").find((l) => l.trim())?.trim();
+  if (!first) return `${PLATFORM_NAMES[platform] ?? platform} post`;
+  return first.length > 60 ? `${first.slice(0, 57)}…` : first;
 }
 
 function isoRange(start: string, end: string): string[] {
@@ -64,7 +93,13 @@ function isoRange(start: string, end: string): string[] {
   return out;
 }
 
-export function buildCalendarEntries(occasions: CalendarOccasion[], tradeShows: CalendarTradeShow[], contentIdeas: CalendarContentIdea[]): CalendarEntry[] {
+export function buildCalendarEntries(
+  occasions: CalendarOccasion[],
+  tradeShows: CalendarTradeShow[],
+  contentIdeas: CalendarContentIdea[],
+  customItems: CalendarCustomItem[] = [],
+  loggedPosts: CalendarLoggedPost[] = [],
+): CalendarEntry[] {
   const occasionEntries: CalendarEntry[] = occasions.flatMap((o) => [
     { key: `occasion-${o.id}`, type: "occasion" as const, date: o.date, label: o.name, detail: o.note },
     {
@@ -117,7 +152,36 @@ export function buildCalendarEntries(occasions: CalendarOccasion[], tradeShows: 
       };
     });
 
-  return [...occasionEntries, ...tradeShowEntries, ...ideaEntries].sort((a, b) => a.date.localeCompare(b.date));
+  const customEntries: CalendarEntry[] = customItems.map((c) => ({
+    key: `calendar-item-${c.id}`,
+    type: c.kind === "holiday" ? ("occasion" as const) : ("post-deadline" as const),
+    date: c.date,
+    label: c.kind === "holiday" ? c.title : `Post-by deadline: ${c.title}`,
+    detail: c.kind === "holiday" ? "Added to the calendar by the team." : `Have a post live for ${c.title} by this day.`,
+    customItemId: c.id,
+    noteTarget: { kind: "calendar-item" as const, id: c.id },
+    note: c.notes,
+  }));
+
+  // A posted planner item stands for its Post log entry, so the day doesn't show
+  // the same post twice: linked entries are hidden, and so is an unlinked entry on
+  // the same day and platform as a posted item that hasn't been linked yet.
+  const linkedPostIds = new Set(contentIdeas.map((i) => i.posted_post_id).filter((id): id is number => id != null));
+  const unlinkedPostedKeys = new Set(
+    contentIdeas.filter((i) => i.status === "used" && i.target_date && i.posted_post_id == null).map((i) => `${i.target_date}|${i.platform}`),
+  );
+  const loggedEntries: CalendarEntry[] = loggedPosts
+    .filter((p) => !linkedPostIds.has(p.id) && !unlinkedPostedKeys.has(`${p.posted_date}|${p.platform}`))
+    .map((p) => ({
+      key: `logged-post-${p.id}`,
+      type: "logged-post" as const,
+      date: p.posted_date,
+      label: captionTitle(p.caption, p.platform),
+      detail: [PLATFORM_NAMES[p.platform] ?? p.platform, p.post_type].filter(Boolean).join(" · ") + " · from the Post log",
+      loggedPostId: p.id,
+    }));
+
+  return [...occasionEntries, ...tradeShowEntries, ...ideaEntries, ...customEntries, ...loggedEntries].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /** Post-by deadlines occurring within `daysAhead` days from `now` (inclusive of today). */

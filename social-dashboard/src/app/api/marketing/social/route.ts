@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listSocialPosts, createSocialPost, type NewSocialPost, type SocialPlatform } from "@/lib/marketing/socialPosts";
+import { linkWaitingPostedIdeas, plannerIdeaByPost } from "@/lib/social/postLink";
 
 export const dynamic = "force-dynamic";
 
@@ -8,7 +9,9 @@ const VALID_PLATFORMS: SocialPlatform[] = ["instagram", "facebook", "tiktok", "p
 export async function GET(request: NextRequest) {
   const platform = request.nextUrl.searchParams.get("platform") as SocialPlatform | null;
   try {
-    return NextResponse.json({ posts: listSocialPosts(platform && VALID_PLATFORMS.includes(platform) ? platform : undefined) });
+    const planned = plannerIdeaByPost();
+    const posts = listSocialPosts(platform && VALID_PLATFORMS.includes(platform) ? platform : undefined).map((p) => ({ ...p, planner_idea_id: planned.get(p.id) ?? null }));
+    return NextResponse.json({ posts });
   } catch (error) {
     console.error("[social-dashboard] failed to list social posts:", error);
     return NextResponse.json({ error: "Unable to load social posts." }, { status: 500 });
@@ -37,6 +40,7 @@ export async function POST(request: NextRequest) {
       utm_campaign: body.utm_campaign ?? null,
       revenue_attributed: Number(body.revenue_attributed) || 0,
     });
+    linkWaitingPostedIdeas();
     return NextResponse.json({ post }, { status: 201 });
   } catch (error) {
     console.error("[social-dashboard] failed to create social post:", error);

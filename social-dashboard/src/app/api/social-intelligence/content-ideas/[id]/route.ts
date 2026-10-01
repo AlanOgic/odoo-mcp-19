@@ -11,6 +11,7 @@ import {
 } from "@/lib/social/contentIdeas";
 import { describeIdeaEdit, parseHashtagInput, type EditableIdeaFields } from "@/lib/social/contentIdeaEdits";
 import { logActivity } from "@/lib/team/activity";
+import { linkPostedIdea, syncLinkedPost, unlinkPostedIdea } from "@/lib/social/postLink";
 import { currentPerson, unauthorized } from "@/lib/team/session";
 
 export const dynamic = "force-dynamic";
@@ -54,10 +55,7 @@ function buildUpdate(body: PatchBody, existing: ContentIdea): { update: ContentI
     if (typeof body.product !== "string" || !body.product.trim()) return { error: "The post needs a title." };
     update.product = body.product.trim();
   }
-  if (body.caption !== undefined) {
-    if (typeof body.caption !== "string" || !body.caption.trim()) return { error: "The caption can't be empty." };
-    update.caption = body.caption.trim();
-  }
+  if (body.caption !== undefined) update.caption = typeof body.caption === "string" ? body.caption.trim() : "";
   if (body.hook !== undefined) update.hook = optionalText(body.hook);
   if (body.cta !== undefined) update.cta = optionalText(body.cta);
   if (body.pillar !== undefined) update.pillar = optionalText(body.pillar);
@@ -99,10 +97,13 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     if (!VALID_STATUSES.includes(body.status as ContentIdeaStatus)) {
       return NextResponse.json({ error: `status must be one of: ${VALID_STATUSES.join(", ")}.` }, { status: 400 });
     }
-    const idea = updateContentIdeaStatus(ideaId, body.status as ContentIdeaStatus);
-    if (!idea) return NextResponse.json({ error: "Idea not found." }, { status: 404 });
-    if (existing.status !== idea.status) logActivity(person, "content_idea", ideaId, "status", STATUS_SUMMARY[idea.status]);
-    return NextResponse.json({ idea });
+    const updated = updateContentIdeaStatus(ideaId, body.status as ContentIdeaStatus);
+    if (!updated) return NextResponse.json({ error: "Idea not found." }, { status: 404 });
+    // Keep the Post log in step: posted items get an entry there, un-posting removes an empty one.
+    if (updated.status === "used") linkPostedIdea(ideaId);
+    else if (existing.status === "used") unlinkPostedIdea(ideaId);
+    if (existing.status !== updated.status) logActivity(person, "content_idea", ideaId, "status", STATUS_SUMMARY[updated.status]);
+    return NextResponse.json({ idea: findIdea(ideaId) });
   }
 
   const built = buildUpdate(body, existing);
@@ -112,6 +113,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
 
   const idea = updateContentIdea(ideaId, built.update);
   if (!idea) return NextResponse.json({ error: "Idea not found." }, { status: 404 });
+  if (idea.status === "used") syncLinkedPost(ideaId);
   logActivity(person, "content_idea", ideaId, "edit", summary);
   return NextResponse.json({ idea });
 }

@@ -45,8 +45,41 @@ export interface PlannerIdea {
   confidence: ContentIdeaConfidence;
   inventory_verified: boolean;
   status: ContentIdeaStatus;
+  /** The Post log entry this post is linked to once it's posted. */
+  posted_post_id: number | null;
   comments: PlannerComment[];
   activity: PlannerActivity[];
+}
+
+/** A row from the Post log (imported from Meta, typed in, or logged by the planner). */
+export interface PlannerLoggedPost {
+  id: number;
+  posted_date: string;
+  platform: string;
+  post_type: string | null;
+  caption: string | null;
+  likes: number;
+  comments: number;
+  shares: number;
+  link_clicks: number;
+  reach: number | null;
+  views: number | null;
+  revenue_attributed: number;
+  planner_idea_id: number | null;
+}
+
+/** "22 reach · 4 likes · 1 share", or null when nothing has been measured yet. */
+export function postStats(p: PlannerLoggedPost): string | null {
+  const parts: string[] = [];
+  if (p.views != null) parts.push(`${p.views.toLocaleString()} views`);
+  if (p.reach != null) parts.push(`${p.reach.toLocaleString()} reach`);
+  const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+  if (p.likes) parts.push(plural(p.likes, "like"));
+  if (p.comments) parts.push(plural(p.comments, "comment"));
+  if (p.shares) parts.push(plural(p.shares, "share"));
+  if (p.link_clicks) parts.push(plural(p.link_clicks, "click"));
+  if (p.revenue_attributed) parts.push(`$${p.revenue_attributed.toFixed(2)} sales`);
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 export const FORMAT_LABEL: Record<ContentIdeaFormat, string> = { photo: "Photo", reel: "Reel", carousel: "Carousel", story: "Story" };

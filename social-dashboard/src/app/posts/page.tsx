@@ -21,8 +21,11 @@ interface SocialPost {
   shares: number;
   link_clicks: number;
   reach: number | null;
+  views: number | null;
   utm_campaign: string | null;
   revenue_attributed: number;
+  /** The planner post this entry belongs to, if any. */
+  planner_idea_id: number | null;
 }
 
 interface PlatformInsightRow {
@@ -108,27 +111,41 @@ export default function SocialMediaPage() {
   }, [loadInsights]);
 
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
     setImporting(true);
     setImportMessage(null);
+    const totals = { added: 0, updated: 0, skipped: 0, summaries: 0 };
+    const failures: string[] = [];
     try {
-      const csv = await file.text();
-      const res = await fetch("/api/marketing/social/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ csv }),
-      });
-      if (res.ok) {
+      // Facebook and Instagram come as separate files, so take several at once.
+      for (const file of files) {
+        const res = await fetch("/api/marketing/social/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ csv: await file.text() }),
+        }).catch(() => null);
+        if (!res?.ok) {
+          const body = res ? await res.json().catch(() => ({})) : {};
+          failures.push(`${file.name}: ${body.error ?? "couldn't be imported"}`);
+          continue;
+        }
         const { result } = await res.json();
-        setImportMessage(`Imported ${result.postsImported} post(s), skipped ${result.postsSkipped} already-imported post(s), updated ${result.summariesImported} summary metric(s).`);
-        load(filter);
-        loadInsights();
-      } else {
-        const body = await res.json().catch(() => ({}));
-        setImportMessage(body.error ?? "Import failed.");
+        totals.added += result.postsImported;
+        totals.updated += result.postsUpdated ?? 0;
+        totals.skipped += result.postsSkipped;
+        totals.summaries += result.summariesImported;
       }
+      const parts = [
+        `${totals.added} new post${totals.added === 1 ? "" : "s"} added`,
+        totals.updated > 0 ? `${totals.updated} updated with the latest numbers` : null,
+        totals.skipped > 0 ? `${totals.skipped} already imported` : null,
+        totals.summaries > 0 ? `${totals.summaries} period totals refreshed` : null,
+      ].filter(Boolean);
+      setImportMessage([parts.join(", ") + ".", ...failures].join(" "));
+      load(filter);
+      loadInsights();
     } finally {
       setImporting(false);
     }
@@ -181,7 +198,10 @@ export default function SocialMediaPage() {
   }
 
   return (
-    <Page title="Post log" description="Everything that's gone out, with its numbers. Meta exports fill this in; log anything else by hand.">
+    <Page
+      title="Post log"
+      description="Everything that's gone out, with its numbers. Meta exports fill this in, and posts marked as posted in the planner appear here too. Everything here also shows on the calendar."
+    >
       <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
         <StatCard label={filter === "all" ? "Posts" : `${PLATFORM_LABEL[filter]} posts`} value={String(posts.length)} />
         <StatCard label="Engagement" value={formatNumber(totalEngagement)} />
@@ -262,6 +282,18 @@ export default function SocialMediaPage() {
               { header: "Date", render: (p) => formatDate(p.posted_date) },
               { header: "Platform", render: (p) => PLATFORM_LABEL[p.platform] ?? p.platform },
               { header: "Type", render: (p) => <span className="muted">{p.post_type ?? "—"}</span> },
+              {
+                header: "Planner",
+                render: (p) =>
+                  p.planner_idea_id != null ? (
+                    <a href={`/?idea=${p.planner_idea_id}`} className="pill pill-second" style={{ textDecoration: "none" }} title="Open this post in the planner">
+                      Open in planner
+                    </a>
+                  ) : (
+                    <span style={{ color: "var(--text-faint)" }}>—</span>
+                  ),
+              },
+              { header: "Views", render: (p) => (p.views == null ? "—" : formatNumber(p.views)), align: "right" },
               { header: "Reach", render: (p) => (p.reach === null ? "—" : formatNumber(p.reach)), align: "right" },
               { header: "Likes", render: (p) => formatNumber(p.likes), align: "right" },
               { header: "Comments", render: (p) => formatNumber(p.comments), align: "right" },
@@ -295,12 +327,17 @@ export default function SocialMediaPage() {
 
       <Panel
         title="Import from Meta"
-        subtitle="Upload a Meta Business Suite insights export (Instagram or Facebook)"
-        about={<p>Re-uploading the same or an overlapping export is safe. Posts already imported are skipped, and period totals are updated in place rather than duplicated.</p>}
+        subtitle="Upload Meta Business Suite exports: the Facebook and Instagram post files together, or a summary export"
+        about={
+          <p>
+            Re-uploading the same or an overlapping export is safe. Posts already in the log get the latest numbers instead of a second row, and
+            period totals are updated in place.
+          </p>
+        }
         headerAction={
           <label className={`btn btn-sm ${importing ? "" : "btn-primary"}`} style={{ opacity: importing ? 0.6 : 1, cursor: importing ? "default" : "pointer" }}>
-            {importing ? "Importing…" : "Choose CSV"}
-            <input type="file" accept=".csv,text/csv" onChange={handleImportFile} disabled={importing} style={{ display: "none" }} />
+            {importing ? "Importing…" : "Choose CSV files"}
+            <input type="file" accept=".csv,text/csv" multiple onChange={handleImportFile} disabled={importing} style={{ display: "none" }} />
           </label>
         }
       >
