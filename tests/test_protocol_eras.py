@@ -65,7 +65,7 @@ def test_surface_is_the_same_in_both_eras(odoo, era):
 
     assert tools == TOOLS
     assert resource_count == 38
-    assert prompt_count == 19
+    assert prompt_count == 12
 
 
 @pytest.mark.parametrize("era", [MODERN, LEGACY])

@@ -40,7 +40,7 @@ layer blocks every non-safe method.
 |---|---|
 | **4 tools** | `execute_method` reaches any method on any model; `batch_execute`, `execute_workflow` and `read_resource` cover the rest |
 | **38 resources** | Model discovery, compact schemas, state-machine workflows, introspection, API reference (`odoo://api/*`), and runtime posture (`odoo://server-status`) |
-| **19 prompts** | 12 generic guided workflows plus 7 `cyanview-*` skill prompts, gated per user in multi-user mode |
+| **12 prompts** | Generic guided workflows (aging reports, inventory checks, domain building, pagination, …) |
 | **Safety layer** | Risk classification before execution, 8 blocked models, 6 sensitive models, cascade warnings |
 | **Locked mode** | One flag (`MCP_SAFETY_MODE=locked`) turns writes off, enforces a write allowlist, binds HTTP to localhost, and pre-flights payloads against live `fields_get` — each layer independently overridable |
 | **Multi-user mode** | Per-user bearer keys and personal Odoo clients, so every write is attributed to a real person |
@@ -146,9 +146,9 @@ Edit your Claude Desktop configuration file:
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
 > **Server name:** register this server as `odoo19-mcp` (the name the `--setup`
-> wizard generates and the one used in every example below). The companion
-> Cyanview skills assume this name in their `allowed-tools`, so a different name
-> means those skills won't be permitted to call the server's tools.
+> wizard generates and the one used in every example below). Skills installed
+> alongside it (distributed separately) may refer to its tools under this name, so a
+> different name can leave them unable to call the server's tools.
 
 ### Using Docker (recommended)
 
@@ -314,7 +314,7 @@ token issued for `unlink([1])` and reuse it on `unlink([1, 2, …, 1000])`.
 | `odoo://api/xmlids` | XML id resolution over JSON-2 (`check_object_reference`) and custom model/field constraints. **New in v1.18.0.** |
 | `odoo://session` | Live identity: uid, login, lang, tz, current and allowed companies, installed languages. **New in v1.18.0.** |
 
-### Prompts (19)
+### Prompts (12)
 
 12 generic guided prompts:
 
@@ -332,18 +332,6 @@ token issued for `unlink([1])` and reuse it on `unlink([1, 2, …, 1000])`.
 | `hierarchical-query` | Query parent/child trees |
 | `paginated-search` | Paginate large result sets |
 | `aggregation-report` | Aggregation reports |
-
-7 `cyanview-*` workflow skill prompts (bodies loaded from `skills/*.md`; in multi-user mode each is gated per user via the `user_skills` allowlist):
-
-| Prompt | Purpose |
-|--------|---------|
-| `cyanview-quote` | Build a Cyanview sales quotation |
-| `cyanview-rma` | Manage an RMA / repair order |
-| `cyanview-customer-360` | Full 360° customer briefing |
-| `cyanview-serial-tracker` | Trace a device by serial number |
-| `cyanview-project-designer` | Design a camera-control system |
-| `cyanview-shipping-watchdog` | Audit unshipped/overdue orders |
-| `cyanview-inventory-watchdog` | Monitor stock levels and reorders |
 
 ## Safety layer
 
@@ -541,8 +529,8 @@ Odoo account — so every write is attributed to the real person, not a shared s
 
 ### How it works
 
-- **Registry** — users, their per-server API keys, encrypted Odoo credentials, and skill
-  allowlists live in a SQLite registry (`users.db`) owned and written by **CLORAG** (a
+- **Registry** — users, their per-server API keys and encrypted Odoo credentials live in
+  a SQLite registry (`users.db`) owned and written by **CLORAG** (a
   companion app with an `/admin/users` page). This server is a **pure reader** — it opens
   the database with `mode=ro` and never writes.
 - **Per-request identity** — an incoming bearer token is hashed (sha256) and looked up in
@@ -552,8 +540,6 @@ Odoo account — so every write is attributed to the real person, not a shared s
   identity.
 - **Roles** — `admin` → unrestricted; `readonly` → read-only, with the safety layer blocking
   every non-safe method; other roles → normal safety rules on their own account.
-- **Per-user skills** — the `cyanview-*` workflow prompts are filtered per user against a
-  `user_skills` allowlist (fails closed without a token). Generic prompts stay visible to all.
 
 ### Deployment
 
@@ -611,7 +597,7 @@ Full documentation lives in the **[Wiki](https://github.com/AlanOgic/odoo-mcp-19
 - [Domain syntax](https://github.com/AlanOgic/odoo-mcp-19/wiki/Domain-Syntax) — Polish-prefix search filters
 - [Module knowledge](https://github.com/AlanOgic/odoo-mcp-19/wiki/Module-Knowledge) — special methods across 13 modules
 - [AI module](https://github.com/AlanOgic/odoo-mcp-19/wiki/AI-Module) — Odoo 19 Enterprise AI integration
-- [Prompts](https://github.com/AlanOgic/odoo-mcp-19/wiki/Prompts) — the 19 guided workflow prompts
+- [Prompts](https://github.com/AlanOgic/odoo-mcp-19/wiki/Prompts) — the 12 guided workflow prompts
 
 **Operations**
 

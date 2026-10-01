@@ -9,7 +9,7 @@ even if the mount is read-write. Schema contract — never change it here:
     api_keys(id, user_id, server, key_hash, key_prefix, created_at,
              last_used_at, revoked_at)
     user_odoo_credentials(user_id, odoo_username, encrypted_secret, updated_at)
-    user_skills(user_id, skill_name)
+    user_skills(user_id, skill_name)   -- CLORAG's; not read since v2.1.0
 """
 
 from __future__ import annotations
@@ -81,11 +81,6 @@ class UsersDb:
             encrypted_secret=row["encrypted_secret"],
             updated_at=row["updated_at"],
         )
-
-    def get_skills(self, user_id: str) -> frozenset[str]:
-        with self._connect() as conn:
-            rows = conn.execute("SELECT skill_name FROM user_skills WHERE user_id = ?", (user_id,)).fetchall()
-        return frozenset(row["skill_name"] for row in rows)
 
 
 _users_db: UsersDb | None = None

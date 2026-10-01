@@ -28,7 +28,6 @@ from fastmcp.dependencies import Progress
 
 from . import prompts as _prompts  # noqa: F401 -- import triggers prompt registration
 from . import resources as _resources  # noqa: F401 -- import triggers resource registration
-from . import skill_prompts as _skill_prompts  # noqa: F401 -- import triggers skill prompt registration
 from .app import ODOO_ICON, mcp  # noqa: F401 -- mcp import triggers FastMCP setup
 from .arg_mapping import convert_args_to_v2
 from .constants import (

@@ -89,7 +89,7 @@ class RegistrySeed:
 
 @pytest.fixture()
 def users_db_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RegistrySeed:
-    """A seeded registry with salt, users, keys, credentials and skills."""
+    """A seeded registry with salt, users, keys and credentials."""
     db_path = tmp_path / "users.db"
     salt = os.urandom(16)
     (tmp_path / ".token_salt").write_bytes(salt)
@@ -121,10 +121,6 @@ def users_db_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RegistrySe
             encrypt_with_contract({"api_key": "thierry-odoo-key"}, salt, TEST_ENCRYPTION_KEY),
             now,
         ),
-    )
-    conn.executemany(
-        "INSERT INTO user_skills VALUES (?, ?)",
-        [(member_id, "cyanview-rma"), (member_id, "cyanview-serial-tracker")],
     )
     conn.commit()
     conn.close()

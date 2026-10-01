@@ -126,19 +126,3 @@ mcp = FastMCP(
 # tasks are an extension (io.modelcontextprotocol/tasks): without it the server refuses
 # to start. Registered here, before server.py declares the tools.
 mcp.add_extension(TasksExtension())
-
-
-# ----- Per-user skill visibility (multi-user mode only) -----
-
-
-def _register_skill_visibility() -> None:
-    from .users_db import get_users_db
-
-    users_db = get_users_db()
-    if users_db is not None:
-        from .skill_visibility import SkillVisibilityMiddleware
-
-        mcp.add_middleware(SkillVisibilityMiddleware(users_db))
-
-
-_register_skill_visibility()

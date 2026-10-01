@@ -74,7 +74,7 @@ class TestInstalledVersions:
         assert installed.major == MCP_SDK_MAJOR, (
             f"mcp SDK {installed} is installed but this server targets"
             f" {MCP_SDK_MAJOR}.x. An SDK major changes the wire types used by"
-            f" app.py and skill_visibility.py — see {MIGRATION_DOC}."
+            f" app.py — see {MIGRATION_DOC}."
         )
 
     def test_tasks_extra_is_installed(self):
