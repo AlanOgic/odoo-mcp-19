@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-01
+
 ### Fixed
 - **`cyanview-*` prompts no longer assume who runs them.** In multi-user mode every
   colleague reaches Odoo through their own account, so a skill that names, addresses
@@ -1007,7 +1009,8 @@ This reduces cognitive load and keeps the tool interface minimal:
 
 <!-- Only versions with a published git tag are linked. Intermediate releases were
      cut without tags; their entries above remain the record for those versions. -->
-[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.1
 [2.0.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.0
 [1.19.2]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.2
 [1.19.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.1
