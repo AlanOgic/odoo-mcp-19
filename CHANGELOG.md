@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-10-01
+
 ### Fixed
 - **`cyanview-*` prompts named this server's tools with one client's prefix**
   (`mcp__odoo19-mcp__execute_method`, …). Each client prefixes the server its own way —
@@ -1016,7 +1018,8 @@ This reduces cognitive load and keeps the tool interface minimal:
 
 <!-- Only versions with a published git tag are linked. Intermediate releases were
      cut without tags; their entries above remain the record for those versions. -->
-[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.2
 [2.0.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.1
 [2.0.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.0
 [1.19.2]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.2
