@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`cyanview-*` prompts named this server's tools with one client's prefix**
+  (`mcp__odoo19-mcp__execute_method`, …). Each client prefixes the server its own way —
+  the claude.ai connector exposes `mcp__claude_ai_Odoo_prod__…` — so the prompts now
+  use the bare names (`execute_method`, `batch_execute`, `read_resource`), which resolve
+  in every client. `tests/test_skill_prompts.py` pins it against the registered tools.
+
 ## [2.0.1] - 2026-10-01
 
 ### Fixed

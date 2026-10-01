@@ -14,8 +14,8 @@ description: >
 
 This skill runs for every Cyanview colleague, each through their own Odoo account. Never assume who is asking: no name, id or email address of the user is written in this skill.
 
-1. Read `odoo://session` with `mcp__odoo19-mcp__read_resource`. Keep `uid`, `name` and `login`.
-2. Read the user's partner and mail: `mcp__odoo19-mcp__execute_method` on `res.users`, method `read`, `args_json='[[<uid>]]'`, `kwargs_json='{"fields": ["partner_id", "email"]}'`.
+1. Read `odoo://session` with `read_resource`. Keep `uid`, `name` and `login`.
+2. Read the user's partner and mail: `execute_method` on `res.users`, method `read`, `args_json='[[<uid>]]'`, `kwargs_json='{"fields": ["partner_id", "email"]}'`.
 
 Use these values for the rest of the run:
 

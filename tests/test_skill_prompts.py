@@ -6,9 +6,11 @@ rendering injects the user's variables.
 """
 
 import asyncio
+import re
 
 import pytest
 
+import odoo_mcp.server  # noqa: F401  registers the tools the skills refer to
 from odoo_mcp.app import mcp
 from odoo_mcp.skill_prompts import _SKILLS_DIR, load_skill
 
@@ -74,3 +76,14 @@ def test_skill_prompt_renders_with_variables():
     text = result.messages[0].content.text
     assert "CY-RIO-15-042" in text
     assert "User request:" in text
+
+
+@pytest.mark.parametrize("name", EXPECTED_SKILLS)
+def test_skill_names_this_servers_tools_without_a_client_prefix(name):
+    """The prompt is served by this server, whose tools each client prefixes its own way
+    (mcp__claude_ai_Odoo_prod__…, mcp__odoo19-mcp__…, a plugin prefix): a prefixed name
+    points at a tool the client may not have, the bare name resolves everywhere."""
+    tool_names = {t.name for t in asyncio.run(mcp.list_tools())}
+    assert tool_names, "no tool registered: the pattern below would match nothing"
+    prefixed = re.compile(rf"mcp__[\w-]+__({'|'.join(map(re.escape, sorted(tool_names)))})\b")
+    assert prefixed.findall(load_skill(name)) == []
