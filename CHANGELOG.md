@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-10-01
+
+### Fixed
+- **`cyanview-*` prompts named this server's tools with one client's prefix**
+  (`mcp__odoo19-mcp__execute_method`, …). Each client prefixes the server its own way —
+  the claude.ai connector exposes `mcp__claude_ai_Odoo_prod__…` — so the prompts now
+  use the bare names (`execute_method`, `batch_execute`, `read_resource`), which resolve
+  in every client. `tests/test_skill_prompts.py` pins it against the registered tools.
+
+## [2.0.1] - 2026-10-01
+
+### Fixed
+- **`cyanview-*` prompts no longer assume who runs them.** In multi-user mode every
+  colleague reaches Odoo through their own account, so a skill that names, addresses
+  or filters on a fixed person reports on the wrong one. The six prompts that query
+  Odoo (`customer-360`, `inventory-watchdog`, `quote`, `rma`, `serial-tracker`,
+  `shipping-watchdog`) now open on a shared "Step 0": read `odoo://session` and the
+  caller's `res.users` record, then use `USER_ID` (a `res.users` id) and
+  `USER_PARTNER_ID` (a `res.partner` id) where each belongs. If the session is not
+  authenticated, the prompt stops instead of guessing an identity.
+- CLORAG tool names in `rma` and `project-designer` follow the claude.ai connector
+  (`search_devices` / `get_device`, formerly `search_cameras` / `get_camera`).
+
 ## [2.0.0] - 2026-09-30
 
 ### Changed
@@ -995,7 +1018,9 @@ This reduces cognitive load and keeps the tool interface minimal:
 
 <!-- Only versions with a published git tag are linked. Intermediate releases were
      cut without tags; their entries above remain the record for those versions. -->
-[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.2
+[2.0.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.1
 [2.0.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.0
 [1.19.2]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.2
 [1.19.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.1

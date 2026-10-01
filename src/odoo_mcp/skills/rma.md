@@ -9,6 +9,28 @@ description: >
 
 # Cyanview RMA / Repair Manager
 
+<!-- identity:start -->
+## Step 0 — Identify the user (before anything else)
+
+This skill runs for every Cyanview colleague, each through their own Odoo account. Never assume who is asking: no name, id or email address of the user is written in this skill.
+
+1. Read `odoo://session` with `read_resource`. Keep `uid`, `name` and `login`.
+2. Read the user's partner and mail: `execute_method` on `res.users`, method `read`, `args_json='[[<uid>]]'`, `kwargs_json='{"fields": ["partner_id", "email"]}'`.
+
+Use these values for the rest of the run:
+
+| Placeholder | Value | Use it for |
+|---|---|---|
+| `USER_NAME` | `name` | Addressing the user (by first name); "you" and "me" in reports |
+| `USER_ID` | `uid`, a `res.users` id | `user_id` filters and values: salesperson, assignee, activity owner, `create_uid` |
+| `USER_PARTNER_ID` | `partner_id[0]`, a `res.partner` id | `author_id`, `res_partner_id`, chatter authorship |
+| `USER_EMAIL` | `email`, else `login` | Recognising the user's own messages outside Odoo |
+
+The two ids live in different tables: filtering `user_id` with the partner id silently returns nothing. In Gmail queries write `from:me` / `to:me`, never an address.
+
+If `odoo://session` returns an error, stop and say the Odoo connection is not authenticated. Never continue under a guessed or default identity.
+<!-- identity:end -->
+
 ## Purpose
 
 Create, track, and manage repair orders for Cyanview devices. Handles the full
@@ -38,7 +60,7 @@ case_id: [from step 1 results]
 
 **Step 3 — Check device/camera info if relevant:**
 ```
-Tool: get_camera  (if "camera not detected" type fault)
+Tool: search_devices, then get_device on the match  (if "camera not detected" type fault)
 Tool: search      (general RAG query for broader context)
 ```
 
@@ -48,7 +70,7 @@ Tool: search      (general RAG query for broader context)
 2. If similar case found with remote fix → share troubleshooting steps with customer, **NO RMA**
 3. If similar case shows hardware failure → proceed to create RMA
 4. If no match, use `search` for general RAG context
-5. If fault is "camera not detected" → use `get_camera` / `search_cameras` first — may be
+5. If fault is "camera not detected" → use `search_devices` / `get_device` first — may be
    wrong cable or unsupported camera, not a faulty device
 
 ### Example: "RIO ethernet port dead"
