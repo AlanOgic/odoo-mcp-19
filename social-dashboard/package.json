@@ -10,7 +10,11 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "migrate:from-dashboard": "node --conditions=react-server scripts/migrate-from-dashboard.mts",
-    "share": "next build && next start -p 3100 -H 0.0.0.0"
+    "share": "next build && next start -p 3100 -H 0.0.0.0",
+    "service:install": "scripts/service.sh install",
+    "service:restart": "scripts/service.sh restart",
+    "service:uninstall": "scripts/service.sh uninstall",
+    "service:status": "scripts/service.sh status"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
