@@ -12,7 +12,7 @@ description: >
   or any CY- product selection, pricing, or modification of a Cyanview sales document
   before invoicing — even casual like "4 Sony cameras remote for ProMedia" or
   "2 rcp j duo for [company]".
-allowed-tools: mcp__odoo19-mcp__execute_method, mcp__odoo19-mcp__batch_execute, mcp__odoo19-mcp__read_resource
+allowed-tools: execute_method, batch_execute, read_resource
 ---
 
 # Cyanview Quote Builder
@@ -22,8 +22,8 @@ allowed-tools: mcp__odoo19-mcp__execute_method, mcp__odoo19-mcp__batch_execute, 
 
 This skill runs for every Cyanview colleague, each through their own Odoo account. Never assume who is asking: no name, id or email address of the user is written in this skill.
 
-1. Read `odoo://session` with `mcp__odoo19-mcp__read_resource`. Keep `uid`, `name` and `login`.
-2. Read the user's partner and mail: `mcp__odoo19-mcp__execute_method` on `res.users`, method `read`, `args_json='[[<uid>]]'`, `kwargs_json='{"fields": ["partner_id", "email"]}'`.
+1. Read `odoo://session` with `read_resource`. Keep `uid`, `name` and `login`.
+2. Read the user's partner and mail: `execute_method` on `res.users`, method `read`, `args_json='[[<uid>]]'`, `kwargs_json='{"fields": ["partner_id", "email"]}'`.
 
 Use these values for the rest of the run:
 

@@ -10,7 +10,7 @@ description: >
   serial number (format CY-XXX-NN-NNN). Also triggers when a serial is mentioned in
   the context of support, RMA, or customer questions — even casual like "who bought
   CY-RIO-15-42" or "has this CI0 been repaired before".
-allowed-tools: mcp__odoo19-mcp__execute_method, mcp__odoo19-mcp__batch_execute, mcp__odoo19-mcp__read_resource
+allowed-tools: execute_method, batch_execute, read_resource
 argument-hint: "[serial-number]"
 ---
 
@@ -25,8 +25,8 @@ from when it was created to where it is right now, in one consolidated view.
 
 This skill runs for every Cyanview colleague, each through their own Odoo account. Never assume who is asking: no name, id or email address of the user is written in this skill.
 
-1. Read `odoo://session` with `mcp__odoo19-mcp__read_resource`. Keep `uid`, `name` and `login`.
-2. Read the user's partner and mail: `mcp__odoo19-mcp__execute_method` on `res.users`, method `read`, `args_json='[[<uid>]]'`, `kwargs_json='{"fields": ["partner_id", "email"]}'`.
+1. Read `odoo://session` with `read_resource`. Keep `uid`, `name` and `login`.
+2. Read the user's partner and mail: `execute_method` on `res.users`, method `read`, `args_json='[[<uid>]]'`, `kwargs_json='{"fields": ["partner_id", "email"]}'`.
 
 Use these values for the rest of the run:
 
