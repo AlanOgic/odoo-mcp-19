@@ -12,7 +12,7 @@ description: >
   "broadcast setup", "live production setup", "studio design", "REMI setup",
   "remote production", "fly-pack design", "OB van setup", or any request to
   design or visualize a Cyanview camera control system.
-allowed-tools: mcp__MCP_DOCKER__export_to_excalidraw, mcp__MCP_DOCKER__create_view, mcp__Clorag-mcp__search, mcp__Clorag-mcp__search_cameras, mcp__Clorag-mcp__get_camera
+allowed-tools: mcp__MCP_DOCKER__export_to_excalidraw, mcp__MCP_DOCKER__create_view, mcp__claude_ai_CLORAG__search, mcp__claude_ai_CLORAG__search_devices, mcp__claude_ai_CLORAG__get_device
 ---
 
 # Cyanview Project Designer

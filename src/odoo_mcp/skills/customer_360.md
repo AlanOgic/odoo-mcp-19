@@ -21,6 +21,28 @@ This is the "prep for a call in 2 minutes" skill — it queries multiple Odoo mo
 parallel and surfaces what matters: open deals, pending invoices, active repairs, loan
 status, and recent communication.
 
+<!-- identity:start -->
+## Step 0 — Identify the user (before anything else)
+
+This skill runs for every Cyanview colleague, each through their own Odoo account. Never assume who is asking: no name, id or email address of the user is written in this skill.
+
+1. Read `odoo://session` with `mcp__odoo19-mcp__read_resource`. Keep `uid`, `name` and `login`.
+2. Read the user's partner and mail: `mcp__odoo19-mcp__execute_method` on `res.users`, method `read`, `args_json='[[<uid>]]'`, `kwargs_json='{"fields": ["partner_id", "email"]}'`.
+
+Use these values for the rest of the run:
+
+| Placeholder | Value | Use it for |
+|---|---|---|
+| `USER_NAME` | `name` | Addressing the user (by first name); "you" and "me" in reports |
+| `USER_ID` | `uid`, a `res.users` id | `user_id` filters and values: salesperson, assignee, activity owner, `create_uid` |
+| `USER_PARTNER_ID` | `partner_id[0]`, a `res.partner` id | `author_id`, `res_partner_id`, chatter authorship |
+| `USER_EMAIL` | `email`, else `login` | Recognising the user's own messages outside Odoo |
+
+The two ids live in different tables: filtering `user_id` with the partner id silently returns nothing. In Gmail queries write `from:me` / `to:me`, never an address.
+
+If `odoo://session` returns an error, stop and say the Odoo connection is not authenticated. Never continue under a guessed or default identity.
+<!-- identity:end -->
+
 ## Why this matters
 
 Before any customer call, email, or meeting, the team needs context. Hunting through
