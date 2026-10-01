@@ -110,7 +110,7 @@ ODOO_VERSION = "19.0"
 # Known @api.private methods that cannot be called via RPC in Odoo 19
 PRIVATE_METHOD_HINTS = {
     "check_access": "check_access is @api.private in v19. Use has_access(operation) instead (returns boolean).",
-    "_read_group": "_read_group is @api.private. Use formatted_read_group (v19+) or read_group (deprecated but still works).",
+    "_read_group": "_read_group is @api.private. Use formatted_read_group (read_group is removed since Odoo Online 19.1).",
     "search_fetch": "search_fetch is @api.private. Use search_read instead.",
     "fetch": "fetch is @api.private. Use read instead.",
 }
@@ -296,7 +296,7 @@ ERROR_CATEGORIES = {
         "solutions": [
             "Reduce limit parameter",
             "Simplify domain (remove complex joins)",
-            "Use read_group for aggregation instead",
+            "Use formatted_read_group for aggregation instead",
             "Add database indexes on filtered fields",
         ],
     },

@@ -9,6 +9,7 @@ at render time. Generic Odoo prompts stay visible to everyone. Stdio mode
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Sequence
 
 import mcp.types as mt
@@ -21,6 +22,18 @@ from .auth_verifier import ENV_ADMIN_CLIENT_ID
 from .users_db import UsersDb
 
 CYANVIEW_PREFIX = "cyanview-"
+STDIO_TRANSPORT = "stdio"
+
+
+def _serves_stdio() -> bool:
+    """True when this process was started on the stdio transport.
+
+    Read from MCP_TRANSPORT, the same setting ``__main__`` starts the server from,
+    rather than from the request context: under the sessionless 2026-07-28 protocol
+    "no HTTP request in context" is not proof of stdio, and guessing wrong here would
+    show every skill to an unauthenticated caller.
+    """
+    return os.environ.get("MCP_TRANSPORT", STDIO_TRANSPORT).strip().lower() == STDIO_TRANSPORT
 
 
 class SkillVisibilityMiddleware(Middleware):
@@ -31,9 +44,7 @@ class SkillVisibilityMiddleware(Middleware):
 
     def _allowed_skills(self) -> frozenset[str] | None:
         """None = unrestricted (stdio, admin role, static env-admin key)."""
-        from fastmcp.server.context import _current_transport
-
-        if _current_transport.get() == "stdio":
+        if _serves_stdio():
             return None  # Alan local: everything visible, unchanged
         token = get_access_token()
         if token is None:

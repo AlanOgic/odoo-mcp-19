@@ -196,7 +196,7 @@ kwargs_json: {
 }
 ```
 
-Note: `read_group` is deprecated in Odoo 19 — use `formatted_read_group`, whose
+Note: `read_group` no longer exists since Odoo Online 19.1 — use `formatted_read_group`, whose
 measure param is `aggregates` (not `fields`); `["__count"]` returns the per-group count.
 
 Compare the list of products that had outgoing moves against the full product catalog.

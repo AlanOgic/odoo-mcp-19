@@ -43,20 +43,40 @@ def _list(mw, transport, token):
     return asyncio.run(run())
 
 
+class _TransportState(dict):
+    """Fixture state whose "transport" key drives MCP_TRANSPORT, as __main__ reads it."""
+
+    def __init__(self, monkeypatch):
+        super().__init__(token=None)
+        self._monkeypatch = monkeypatch
+        self["transport"] = "http"
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        if key == "transport":
+            self._monkeypatch.setenv("MCP_TRANSPORT", "stdio" if value == "stdio" else "streamable-http")
+
+
 @pytest.fixture()
 def patched_context(monkeypatch):
-    """Patch the transport contextvar and access token lookups."""
-    state = {"transport": "http", "token": None}
-
-    class FakeVar:
-        def get(self):
-            return state["transport"]
-
-    import fastmcp.server.context as fctx
-
-    monkeypatch.setattr(fctx, "_current_transport", FakeVar())
+    """Drive the transport setting and the access token lookup."""
+    state = _TransportState(monkeypatch)
     monkeypatch.setattr(sv, "get_access_token", lambda: state["token"])
     return state
+
+
+def test_unset_transport_is_stdio(users_db_seed, patched_context, monkeypatch):
+    """MCP_TRANSPORT defaults to stdio, exactly as the server entry point does."""
+    monkeypatch.delenv("MCP_TRANSPORT", raising=False)
+    result = _list(_middleware(users_db_seed), "stdio", None)
+    assert len(result) == len(ALL_PROMPTS)
+
+
+def test_no_private_fastmcp_api_is_used():
+    """The transport check must not reach into FastMCP internals (it broke across majors)."""
+    import inspect
+
+    assert "_current_transport" not in inspect.getsource(sv)
 
 
 def test_stdio_sees_everything(users_db_seed, patched_context):

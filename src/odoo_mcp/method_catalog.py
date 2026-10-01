@@ -42,14 +42,15 @@ _STATIC_TABLE: Dict[str, List[tuple[str, str, Optional[str]]]] = {
         ("search_count", "Count matching records", None),
         (
             "read_group",
-            "Aggregation with grouping (deprecated in v19, use formatted_read_group)",
-            "Deprecated in v19. Use formatted_read_group instead. Still works for backward compatibility.",
+            "Aggregation with grouping (Odoo 19.0 only — use formatted_read_group)",
+            "Answers on Odoo 19.0 only (deprecated). Removed in Odoo Online 19.1-19.4 (404); Odoo 20.0 has a "
+            "different read_group returning tuples. formatted_read_group works on every version.",
         ),
         (
             "formatted_read_group",
             "Aggregation with grouping (v19+ replacement for read_group)",
             "Uses 'aggregates' param with 'field:agg' format (e.g. 'amount_total:sum', '__count'). "
-            "Replaces deprecated read_group.",
+            "Replaces read_group, which is gone since Odoo Online 19.1.",
         ),
     ],
     "write_methods": [
@@ -68,13 +69,14 @@ _STATIC_TABLE: Dict[str, List[tuple[str, str, Optional[str]]]] = {
         ("name_search", "Search by name (autocomplete)", None),
         (
             "check_access_rights",
-            "Check user permissions (legacy, still works)",
-            "Still works but has_access is preferred in v19+.",
+            "Check user permissions (Odoo 19.0 only — use has_access)",
+            "Answers on Odoo 19.0 only. Removed in Odoo Online 19.1+ and 20.0 (404): use has_access.",
         ),
         (
             "has_access",
             "Check if user has access (returns boolean)",
-            "Preferred over check_access_rights in v19+. Returns True/False without raising exceptions.",
+            "Works on every Odoo 19+ version (check_access_rights is gone since 19.1). Returns True/False "
+            "without raising exceptions.",
         ),
     ],
 }

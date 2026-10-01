@@ -93,3 +93,7 @@ social-dashboard/next-env.d.ts
 
 # Local git worktrees used for isolated feature work (superpowers skills).
 .worktrees/
+
+# Coverage data (pytest-cov)
+.coverage
+htmlcov/

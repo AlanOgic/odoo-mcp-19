@@ -214,3 +214,43 @@ class TestUnmappablePositionalRaises:
 
     def test_ids_fallback_alone_does_not_raise(self):
         assert convert_args_to_v2("action_set_won", ([9],), {}) == {"ids": [9]}
+
+
+class TestPositionalAndNamedConflict:
+    """A parameter given both ways is ambiguous: the safety gate reads the positional
+    form while JSON-2 would receive the named one. Refuse instead of picking."""
+
+    def test_same_parameter_positional_and_named_is_rejected(self):
+        with pytest.raises(ValueError, match="'ids'.*both"):
+            convert_args_to_v2("unlink", [[1]], {"ids": [1, 2, 3]})
+
+    def test_conflict_through_a_renamed_kwarg_is_rejected(self):
+        with pytest.raises(ValueError, match="'order'.*both"):
+            convert_args_to_v2("search", [[], 0, 10, "name"], {"orderby": "id desc"})
+
+    def test_conflict_with_the_record_bound_fallback_is_rejected(self):
+        with pytest.raises(ValueError, match="'ids'.*both"):
+            convert_args_to_v2("action_set_won", [[1]], {"ids": [2]})
+
+    def test_distinct_positional_and_named_parameters_still_combine(self):
+        result = convert_args_to_v2("write", [[1]], {"vals": {"name": "x"}})
+
+        assert result == {"ids": [1], "vals": {"name": "x"}}
+
+
+def test_execute_method_rejects_a_duplicated_parameter_before_issuing_a_token(monkeypatch):
+    from unittest.mock import MagicMock
+
+    odoo = MagicMock()
+    monkeypatch.setattr("odoo_mcp.server.get_odoo_client", lambda: odoo)
+    from odoo_mcp.server import execute_method
+
+    response = execute_method(
+        ctx=MagicMock(), model="res.partner", method="unlink", args_json="[[1]]", kwargs_json='{"ids": [1, 2, 3]}'
+    )
+
+    assert response.success is False
+    assert response.pending_confirmation is False
+    assert "both" in response.error
+    assert "confirmation_token" not in (response.hint or "")
+    odoo.execute_method.assert_not_called()

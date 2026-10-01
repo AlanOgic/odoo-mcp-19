@@ -30,8 +30,10 @@ from . import prompts as _prompts  # noqa: F401 -- import triggers prompt regist
 from . import resources as _resources  # noqa: F401 -- import triggers resource registration
 from . import skill_prompts as _skill_prompts  # noqa: F401 -- import triggers skill prompt registration
 from .app import ODOO_ICON, mcp  # noqa: F401 -- mcp import triggers FastMCP setup
+from .arg_mapping import convert_args_to_v2
 from .constants import (
     _READ_RESOURCE_MAX_CHARS,
+    COMPACT_FIELD_ATTRIBUTES,
     DEFAULT_LIMIT,
     MAX_LIMIT,
     PRIVATE_METHOD_HINTS,
@@ -64,6 +66,7 @@ from .utils import (
     _get_live_doc,
     _track_model_issue,
     get_error_suggestion,
+    get_fields_for_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -325,6 +328,11 @@ def _reject_private_method(model: str, method: str, start_time: float) -> Execut
     return None
 
 
+def _fields_loader(odoo: Any) -> Callable[[str], dict]:
+    """Schema loader for the classifier's relational check (cached compact fields_get)."""
+    return lambda model: get_fields_for_model(odoo, model, attributes=COMPACT_FIELD_ATTRIBUTES)
+
+
 def _classify_and_gate(
     odoo: Any,
     model: str,
@@ -343,7 +351,9 @@ def _classify_and_gate(
     success response can report it — a caller must be able to see *why* a write
     was or was not gated.
     """
-    classification = classify_operation(model, method, args, kwargs, role=current_role())
+    classification = classify_operation(
+        model, method, args, kwargs, role=current_role(), fields_loader=_fields_loader(odoo)
+    )
 
     if classification.risk_level == RiskLevel.BLOCKED:
         audit_log(classification, confirmed=confirmed, executed=False)
@@ -489,6 +499,7 @@ def _search_read_fallback(
         )
 
 
+_MISSING_METHOD_PATTERNS = ("the method", "does not exist")
 _FIELD_ERROR_PATTERNS = ("invalid field", "unknown field", "field_get", "keyerror", "no field", "does not exist")
 
 
@@ -496,7 +507,15 @@ def _failure_response(model: str, method: str, error_msg: str, start_time: float
     """Wrap an Odoo error with a pattern-matched suggestion and a schema hint."""
     suggestion = get_error_suggestion(error_msg, model, method)
     hint = None
-    if any(p in error_msg.lower() for p in _FIELD_ERROR_PATTERNS):
+    lowered = error_msg.lower()
+    if all(p in lowered for p in _MISSING_METHOD_PATTERNS):
+        # "The method 'res.partner.read_group' does not exist" also contains a
+        # field-error pattern; it is about the method, not a field.
+        hint = (
+            f"'{method}' does not exist on '{model}' in this Odoo version. Read odoo://methods/{model} for the "
+            f"methods that exist, or odoo://api/version-drift for renamed and removed ones."
+        )
+    elif any(p in lowered for p in _FIELD_ERROR_PATTERNS):
         hint = (
             f"Field name error detected. Read odoo://model/{model}/fields to get exact field names, "
             f"or odoo://model/{model}/schema for full details."
@@ -512,7 +531,7 @@ def _failure_response(model: str, method: str, error_msg: str, start_time: float
     )
 
 
-# ----- MCP Tools (execute_method, batch_execute, execute_workflow, configure_odoo, read_resource) -----
+# ----- MCP Tools (execute_method, batch_execute, execute_workflow, read_resource) -----
 
 # Icon list for tools (reusable)
 _tool_icons = [ODOO_ICON] if ODOO_ICON else None
@@ -527,7 +546,7 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
     - odoo://actions/{model} - Discover available actions
     - odoo://methods/{model} - Method signatures
     - odoo://domain-syntax - Domain filter reference
-    - odoo://aggregation - read_group guide
+    - odoo://aggregation - Aggregation guide (formatted_read_group)
 
     MANDATORY WORKFLOW (no guessing!):
     1. FIRST: Read odoo://model/{model}/quick-schema to get exact field names/types
@@ -658,6 +677,11 @@ def execute_method(
         rejected = _reject_private_method(model, method, start_time)
         if rejected:
             return rejected
+
+        # Reject a payload JSON-2 cannot express (unmappable positional, parameter
+        # given twice) before the gate: no token is spent on a call that cannot be sent,
+        # and the gate never classifies a payload that differs from the one sent.
+        convert_args_to_v2(method, tuple(args), kwargs)
 
         gated, classification = _classify_and_gate(
             odoo, model, method, args, kwargs, confirmed, confirmation_token, start_time
@@ -852,7 +876,10 @@ async def batch_execute(
     odoo = get_odoo_client()
     await progress.set_total(len(operations))
 
-    classifications, overall_risk, any_needs_confirmation = classify_batch(operations, role=current_role())
+    # Off the loop thread: the relational check may call fields_get.
+    classifications, overall_risk, any_needs_confirmation = await _run_blocking(
+        classify_batch, operations, role=current_role(), fields_loader=_fields_loader(odoo)
+    )
     gated = _batch_safety_gate(
         operations, classifications, overall_risk, any_needs_confirmation, confirmed, confirmation_token, start_time
     )
@@ -884,126 +911,6 @@ async def batch_execute(
         return _batch_response(operations, results, start_time, success=False, error=str(e))
 
 
-# ----- User Elicitation Tool -----
-
-
-@dataclass
-class OdooConnectionConfig:
-    """Configuration collected from user elicitation."""
-
-    url: str
-    database: str
-    username: str
-
-
-@mcp.tool(
-    description="""Interactive Odoo connection configuration using user elicitation.
-
-    This tool guides users through setting up Odoo connection parameters
-    interactively, collecting URL, database and username; authentication is
-    always an API key (the JSON-2 API accepts nothing else).
-
-    Note: This requires an MCP client that supports user elicitation.
-    The collected configuration is returned but not automatically applied -
-    users should set the corresponding environment variables.
-    """,
-    annotations={
-        "title": "Configure Odoo Connection",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    },
-    icons=_tool_icons,
-)
-async def configure_odoo(ctx: Context) -> Dict[str, Any]:
-    """
-    Interactive Odoo connection configuration using MCP elicitation.
-
-    Returns:
-        Configuration summary with environment variable instructions
-    """
-    from fastmcp.server.elicitation import AcceptedElicitation, CancelledElicitation, DeclinedElicitation
-
-    results = {
-        "success": False,
-        "config": {},
-        "env_vars": {},
-    }
-
-    try:
-        # Step 1: Ask for Odoo URL
-        url_result = await ctx.elicit(
-            message="Enter your Odoo server URL (e.g., https://mycompany.odoo.com):",
-            response_type=str,
-        )
-
-        match url_result:
-            case AcceptedElicitation(data=url):
-                results["config"]["url"] = url
-            case DeclinedElicitation() | CancelledElicitation():
-                results["error"] = "Configuration cancelled by user"
-                return results
-
-        # Step 2: Ask for database name
-        db_result = await ctx.elicit(
-            message="Enter the database name:",
-            response_type=str,
-        )
-
-        match db_result:
-            case AcceptedElicitation(data=database):
-                results["config"]["database"] = database
-            case DeclinedElicitation() | CancelledElicitation():
-                results["error"] = "Configuration cancelled by user"
-                return results
-
-        # Step 3: Ask for username
-        user_result = await ctx.elicit(
-            message="Enter your Odoo username (email):",
-            response_type=str,
-        )
-
-        match user_result:
-            case AcceptedElicitation(data=username):
-                results["config"]["username"] = username
-            case DeclinedElicitation() | CancelledElicitation():
-                results["error"] = "Configuration cancelled by user"
-                return results
-
-        # Build environment variables
-        results["success"] = True
-        results["env_vars"] = {
-            "ODOO_URL": results["config"]["url"],
-            "ODOO_DB": results["config"]["database"],
-            "ODOO_USERNAME": results["config"]["username"],
-        }
-
-        # JSON-2 authenticates with bearer API keys only — a login password is
-        # rejected by Odoo 19 with HTTP 401, so the wizard never offers it.
-        results["env_vars"]["ODOO_API_KEY"] = "<your-api-key>"
-        results["note"] = (
-            "Generate an API key in Odoo: Settings > Users > Preferences > API Keys. "
-            "The Odoo 19 JSON-2 API accepts API keys only (passwords are rejected)."
-        )
-
-        results["instructions"] = "Set these environment variables to configure the Odoo MCP server:\n" + "\n".join(
-            f"export {k}='{v}'" for k, v in results["env_vars"].items()
-        )
-
-        return results
-
-    except Exception as e:
-        if "elicitation is not supported" in str(e).lower():
-            return {
-                "success": False,
-                "error": "User elicitation not supported by this MCP client",
-                "alternative": "Set environment variables manually: ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_API_KEY",
-            }
-        results["error"] = str(e)
-        return results
-
-
 # ----- execute_workflow runners -----
 
 _AVAILABLE_WORKFLOWS = [
@@ -1032,6 +939,34 @@ def _workflow_safety_gate(
     safety_preview = classify_workflow(workflow, params, role=current_role())
     if safety_preview is None:
         return None
+    step_preview = [
+        SafetyClassification(
+            risk_level=step.risk_level,
+            model=step.model,
+            method=step.method,
+            record_count=None,
+            requires_confirmation=step.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED),
+            reason=f"Step '{step.step}': {step.risk_level.value} risk",
+            cascade_warning=step.cascade_warning,
+        )
+        for step in safety_preview.steps
+    ]
+    # A BLOCKED step (readonly role, write allowlist, blocked model) is a refusal, not
+    # something to confirm: checked on every call, before a token is issued or consumed.
+    blocked = [c for c in step_preview if c.risk_level == RiskLevel.BLOCKED]
+    if blocked:
+        for c in blocked:
+            audit_log(c, confirmed=confirmed, executed=False)
+        blocked_steps = ", ".join(f"{c.model}.{c.method}" for c in blocked)
+        return _workflow_response(
+            workflow,
+            [],
+            start_time,
+            success=False,
+            safety_preview=step_preview,
+            overall_risk=safety_preview.overall_risk.value,
+            error=f"Workflow '{workflow}' contains blocked steps: {blocked_steps}. It cannot be run.",
+        )
     # Bind the token to (workflow_name, params). A different order_id or partner_id
     # on the re-call produces a different digest and is rejected.
     decision = _confirmation_gate("__workflow__", workflow.lower().strip(), params, confirmed, confirmation_token)
@@ -1042,18 +977,7 @@ def _workflow_safety_gate(
             start_time,
             success=False,
             pending_confirmation=True,
-            safety_preview=[
-                SafetyClassification(
-                    risk_level=step.risk_level,
-                    model=step.model,
-                    method=step.method,
-                    record_count=None,
-                    requires_confirmation=step.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED),
-                    reason=f"Step '{step.step}': {step.risk_level.value} risk",
-                    cascade_warning=step.cascade_warning,
-                )
-                for step in safety_preview.steps
-            ],
+            safety_preview=step_preview,
             overall_risk=safety_preview.overall_risk.value,
             error=safety_preview.message,
             tip=(

@@ -3,15 +3,15 @@
 This repo is deliberately **not** on PyPI: the documented install path is
 ``pip install git+https://github.com/AlanOgic/odoo-mcp-19.git``, which resolves
 dependencies fresh and ignores ``uv.lock``. An unbounded ``fastmcp`` requirement
-therefore drifts silently on every install — and FastMCP 4.x is not a drop-in:
+therefore drifts silently on every install, and a FastMCP major is not a drop-in.
+The 3.x -> 4.x move (MCP spec 2026-07-28, MCP SDK v2) showed what a major costs:
 
-  - it targets MCP spec 2026-07-28 (stateless core, no server-initiated
-    requests), so ``ctx.elicit()`` in ``configure_odoo`` raises at runtime;
-  - it moves to MCP SDK v2 (``mcp>=2.0`` + the split-out ``mcp-types``), which
-    changes the ``mcp.types`` imports in ``app.py`` / ``skill_visibility.py``;
-  - the ``[tasks]`` extra becomes the separate ``fastmcp-tasks`` package and
-    task-enabled tools need an explicit ``TasksExtension``, so ``batch_execute``
-    and ``execute_workflow`` fail to register without it.
+  - server-initiated requests went away, which removed the ``configure_odoo``
+    elicitation tool;
+  - the wire types moved to ``mcp-types`` with snake_case fields, which changed
+    ``app.py`` / ``skill_visibility.py``;
+  - background tasks became the ``fastmcp-tasks`` package and task-enabled tools
+    need an explicit ``TasksExtension``, or the server refuses to start.
 
 Two independent assertions, because they catch different failures: the runtime
 check catches a stale or bypassed lock, the declared check catches somebody
@@ -41,8 +41,8 @@ DOCKERFILE = Path(__file__).resolve().parent.parent / "Dockerfile"
 MIGRATION_DOC = "docs/mcp-2026-07-28-migration.md"
 
 # Majors this codebase is written against.
-FASTMCP_MAJOR = 3
-MCP_SDK_MAJOR = 1
+FASTMCP_MAJOR = 4
+MCP_SDK_MAJOR = 2
 
 
 def _declared_dependencies() -> list[str]:
@@ -65,16 +65,15 @@ class TestInstalledVersions:
         installed = Version(metadata.version("fastmcp"))
         assert installed.major == FASTMCP_MAJOR, (
             f"fastmcp {installed} is installed but this server targets"
-            f" {FASTMCP_MAJOR}.x. FastMCP 4.x breaks elicitation, background"
-            f" tasks, and the mcp.types imports — see {MIGRATION_DOC}."
+            f" {FASTMCP_MAJOR}.x. A FastMCP major changes the protocol engine,"
+            f" background tasks and the wire types — see {MIGRATION_DOC}."
         )
 
     def test_mcp_sdk_major_is_supported(self):
         installed = Version(metadata.version("mcp"))
         assert installed.major == MCP_SDK_MAJOR, (
             f"mcp SDK {installed} is installed but this server targets"
-            f" {MCP_SDK_MAJOR}.x. SDK v2 moves the wire types to the mcp-types"
-            f" package and renames attributes to snake_case, which changes"
+            f" {MCP_SDK_MAJOR}.x. An SDK major changes the wire types used by"
             f" app.py and skill_visibility.py — see {MIGRATION_DOC}."
         )
 
@@ -176,3 +175,21 @@ class TestDockerfileUsesDeclaredDependencies:
             " Every install is --no-deps, so the image would ship without"
             " fastmcp, requests, python-dotenv or cryptography."
         )
+
+    def test_dockerfile_discards_the_stub_build_tree(self):
+        """The dependency-resolving stub must not leave a `build/` directory behind.
+
+        The stub installs an empty `src/odoo_mcp/__init__.py`. setuptools keeps it
+        in `build/lib/`, and the real install then skips `__init__.py` because the
+        stub copy is newer than the COPY'd source (which keeps its host mtime). The
+        image shipped an empty `__init__.py`: no `__version__`, and no handler on
+        the `odoo_mcp` logger, so safety audit lines never reached stderr.
+        """
+        run_steps = re.split(r"(?m)^RUN ", _dockerfile_instructions())[1:]
+        stub_steps = [step for step in run_steps if "touch src/odoo_mcp/__init__.py" in step]
+        assert len(stub_steps) == 1, "expected exactly one stub-package step in the Dockerfile"
+        cleanup = re.search(r"rm -rf ([^&\n]+)", stub_steps[0])
+        assert cleanup, "the stub step must remove what it created"
+        removed = cleanup.group(1).split()
+        assert "build" in removed, "stub step leaves build/ behind: the real package would ship the stub __init__.py"
+        assert "src" in removed

@@ -1,8 +1,8 @@
 {
   "_description": "Module-specific methods and patterns for Odoo 19+",
-  "_version": "1.5.0",
-  "_updated": "2026-03-10",
-  "_validated_against": "Odoo 19.0 source code and official documentation",
+  "_version": "1.6.0",
+  "_updated": "2026-09-30",
+  "_validated_against": "Odoo 19.0 source code and official documentation; method removals and module special methods re-checked against Odoo Online 19.3 (live /doc-bearer) on 2026-09-30",
   "model_limitations": {
     "_note": "Known model-specific limitations and workarounds for the JSON-2 API. This list is enriched automatically when 500 errors trigger the fallback mechanism.",
     "stock.move.line": {
@@ -579,6 +579,12 @@
           "description": "Group orders by calendar month across years"
         }
       ]
+    },
+    "removed_operators": {
+      "_note": "Accepted with a deprecation warning on Odoo 19.0, rejected since Odoo Online 19.1 ('Invalid operator in condition')",
+      "<>": "use !=",
+      "==": "use =",
+      "upper-case operators (ILIKE, IN, NOT IN, ...)": "write them lower-case"
     }
   },
   "pagination": {
@@ -669,9 +675,9 @@
     }
   },
   "aggregation": {
-    "_note": "Aggregation reference: read_group (deprecated) and formatted_read_group (v19+ recommended)",
+    "_note": "Aggregation reference: formatted_read_group (use this) and read_group (19.0 only, removed since 19.1)",
     "read_group": {
-      "status": "deprecated in v19 - still works for backward compatibility",
+      "status": "Odoo 19.0 only: deprecated but still answers. Removed in Odoo Online 19.1-19.4 (404 'method does not exist'). Odoo 20.0 has a different read_group(domain, groupby, aggregates, having, offset, limit, order) returning tuples. formatted_read_group works on every version: use it.",
       "method": "read_group",
       "parameters": {
         "domain": "Filter records before grouping",
@@ -750,7 +756,7 @@
   "orm_methods": {
     "_note": "Detailed ORM method reference for Odoo 19",
     "search": {
-      "signature": "Model.search(domain, offset=0, limit=None, order=None, count=False)",
+      "signature": "Model.search(domain, offset=0, limit=None, order=None)",
       "description": "Search for record IDs matching domain criteria",
       "parameters": {
         "domain": {
@@ -796,7 +802,7 @@
       ]
     },
     "search_count": {
-      "signature": "Model.search_count(domain)",
+      "signature": "Model.search_count(domain, limit=None)",
       "description": "Count records matching domain without loading them",
       "parameters": {
         "domain": {
@@ -1047,10 +1053,10 @@
       }
     },
     "default_get": {
-      "signature": "Model.default_get(fields_list)",
+      "signature": "Model.default_get(fields)",
       "description": "Get default values for specified fields when creating new records",
       "parameters": {
-        "fields_list": {
+        "fields": {
           "type": "list[str]",
           "description": "List of field names to get defaults for"
         }
@@ -1112,7 +1118,7 @@
     },
     "check_access_rights": {
       "signature": "Model.check_access_rights(operation, raise_exception=True)",
-      "description": "Check if current user has permission for operation on model (legacy, still works)",
+      "description": "Check if current user has permission for operation on model (Odoo 19.0 only; removed since 19.1)",
       "parameters": {
         "operation": {
           "type": "str",
@@ -1125,7 +1131,7 @@
         }
       },
       "returns": "True if permitted, False or raises AccessError if not",
-      "note": "Still works in v19 but has_access is preferred. Note: check_access (without _rights) is @api.private and NOT callable via RPC.",
+      "note": "Odoo 19.0 only. Removed in Odoo Online 19.1+ and Odoo 20.0 (404 'method does not exist'): use has_access(operation), which works on every version. check_access (without _rights) is @api.private and NOT callable via RPC.",
       "example": {
         "description": "Check if user can create invoices",
         "call": "execute_method('account.move', 'check_access_rights', args_json='[\"create\"]')"
@@ -1141,7 +1147,7 @@
         }
       },
       "returns": "Boolean - True if user has access, False otherwise. Never raises an exception.",
-      "note": "Preferred over check_access_rights in v19+. Simpler API: always returns boolean, never raises.",
+      "note": "The access check that works on every Odoo 19+ version (check_access_rights is gone since 19.1). Always returns a boolean, never raises.",
       "example": {
         "description": "Check if user can read partners",
         "call": "execute_method('res.partner', 'has_access', args_json='[\"read\"]')"
@@ -1525,7 +1531,7 @@
       },
       "binary": {
         "python": "bytes",
-        "json": "base64 string",
+        "json": "base64 string (Odoo 20.0 read returns {'filename', 'content': base64, 'size'} instead)",
         "note": "for files, images, attachments"
       },
       "html": {
@@ -1987,10 +1993,6 @@
             "parent_id": "integer|false"
           },
           "description": "Create a new knowledge article"
-        },
-        "article_duplicate": {
-          "params": {},
-          "description": "Duplicate an existing article"
         }
       },
       "field_mappings": {
@@ -2087,9 +2089,11 @@
           "description": "Cancel the entry",
           "requires_ids": true
         },
-        "button_set_checked": {
-          "params": {},
-          "description": "Mark entry as checked/reviewed",
+        "set_moves_checked": {
+          "params": {
+            "is_checked": "boolean (default true)"
+          },
+          "description": "Mark entries as checked/reviewed (or unchecked)",
           "requires_ids": true
         },
         "action_register_payment": {
@@ -2247,9 +2251,10 @@
           },
           "description": "Put selected items into a package"
         },
-        "button_scrap": {
+        "action_scrap": {
           "params": {},
-          "description": "Open scrap wizard for the picking"
+          "description": "Open scrap wizard for the picking (named button_scrap on Odoo 19.0)",
+          "requires_ids": true
         },
         "action_see_move_scrap": {
           "params": {},
@@ -2329,19 +2334,20 @@
     "hr_expense": {
       "model": "hr.expense",
       "special_methods": {
-        "action_submit_expenses": {
+        "action_submit": {
           "params": {},
-          "description": "Submit expense for approval"
+          "description": "Submit expense for approval",
+          "requires_ids": true
         },
-        "action_approve_expense_sheets": {
+        "action_approve": {
           "params": {},
-          "description": "Approve expense report"
+          "description": "Approve expense",
+          "requires_ids": true
         },
-        "action_refuse_expense": {
-          "params": {
-            "reason": "string"
-          },
-          "description": "Refuse expense with reason"
+        "action_refuse": {
+          "params": {},
+          "description": "Refuse expense",
+          "requires_ids": true
         }
       }
     },
@@ -2356,20 +2362,12 @@
         "action_refuse": {
           "params": {},
           "description": "Refuse leave request"
-        },
-        "action_confirm": {
-          "params": {},
-          "description": "Confirm leave request (employee)"
         }
       }
     },
     "project": {
       "model": "project.task",
       "special_methods": {
-        "action_assign_to_me": {
-          "params": {},
-          "description": "Assign task to current user"
-        },
         "action_open_parent_task": {
           "params": {},
           "description": "Navigate to parent task"
@@ -2378,29 +2376,12 @@
     },
     "documents": {
       "model": "documents.document",
-      "special_methods": {
-        "document_create": {
-          "instead_of": "create",
-          "params": {
-            "name": "string",
-            "folder_id": "integer",
-            "datas": "base64"
-          },
-          "description": "Create a new document"
-        }
-      },
-      "notes": "Some document operations require specific folder permissions"
+      "special_methods": {},
+      "notes": "No dedicated create method on Odoo Online 19.3: use create. Some document operations require specific folder permissions"
     },
     "discuss": {
       "model": "discuss.channel",
       "special_methods": {
-        "channel_create": {
-          "params": {
-            "name": "string",
-            "group_id": "integer|false"
-          },
-          "description": "Create a new channel"
-        },
         "add_members": {
           "params": {
             "partner_ids": "list[integer]"
@@ -2484,29 +2465,11 @@
         }
       },
       "special_methods": {
-        "get_direct_response": {
-          "model": "ai.agent",
-          "params": {
-            "prompt": "string",
-            "context_message": "string",
-            "enable_html_response": "boolean"
-          },
-          "description": "Generate AI response directly without chat",
-          "requires_ids": true
-        },
         "open_agent_chat": {
           "model": "ai.agent",
           "params": {},
           "description": "Open chat window with the agent",
           "requires_ids": true
-        },
-        "create_from_attachments": {
-          "model": "ai.agent.source",
-          "params": {
-            "attachment_ids": "list[integer]",
-            "agent_id": "integer"
-          },
-          "description": "Create sources from existing attachments"
         },
         "create_from_binary_files": {
           "model": "ai.agent.source",
@@ -2793,6 +2756,10 @@
     },
     "404": {
       "patterns": [
+        {
+          "match": "the method",
+          "suggestion": "Method not found on {model}: it does not exist in this Odoo version. read_group, check_access_rights, check_access_rule, toggle_active and name_get are gone since Odoo Online 19.1. Read odoo://methods/{model} for the methods that exist and odoo://api/version-drift for replacements."
+        },
         {
           "match": "json/2",
           "suggestion": "API endpoint not found. Verify the model name '{model}' is correct (use odoo://find-model to search)"

@@ -7,6 +7,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-30
+
+### Changed
+- **FastMCP 4 / MCP 2026-07-28.** The server now runs on `fastmcp[tasks]>=4.0.10,<5`
+  (MCP SDK v2). One deployment answers both the sessionless `2026-07-28` protocol and
+  the session-based `2025-11-25` handshake, negotiated per connection, so existing
+  clients keep working. Verified in both eras in-process, over HTTP against an Odoo
+  Online 19.3 instance, and in multi-user mode with a seeded registry.
+  `tests/test_protocol_eras.py` pins it.
+- Background tasks (`batch_execute`, `execute_workflow`) run through the
+  `io.modelcontextprotocol/tasks` extension, registered in `app.py`.
+- The per-user skill filter decides "stdio" from `MCP_TRANSPORT` instead of a private
+  FastMCP context variable.
+
+### Removed
+- **`configure_odoo` tool** (tools 5 → 4). It relied on elicitation, a
+  server-initiated request that does not exist on a `2026-07-28` connection. Use
+  `python -m odoo_mcp --setup`, which also writes `.env`, the Docker command and the
+  Claude Desktop config. In multi-user mode credentials come from the registry.
+
+## [1.19.2] - 2026-09-30
+
+### Fixed
+- **`cyanview-quote` prompt used a superseded US duties rule** (15 % of physical
+  goods + 80). It now carries the current one — 10 % + 80 — together with the
+  newer quote skill: sales-order editing triggers, the "RCP with Gateway" legacy
+  wording rule, and the DDP incoterm location taken from the shipping city.
+- `cyanview-inventory-watchdog` prompt no longer calls `read_group` "deprecated":
+  it is removed since Odoo Online 19.1.
+
+### Changed
+- Skill prompt bodies are now exported from the canonical `cyanview-skills`
+  repository (`scripts/export_server.py`) instead of being copied by hand from
+  `~/.claude/skills`; reference files are appended as appendices.
+
+## [1.19.1] - 2026-09-30
+
+### Fixed
+- **The Docker image shipped an empty `odoo_mcp/__init__.py`.** The
+  dependency-resolving stub step left its `build/` tree behind; setuptools then
+  skipped the real `__init__.py` because the stub copy was newer than the COPY'd
+  source. Inside the image `odoo_mcp.__version__` was missing and the `odoo_mcp`
+  logger had no handler, so `MCP_SAFETY_AUDIT` lines and INFO-level warnings never
+  reached stderr. The stub step now removes `build/` too;
+  `tests/test_dependency_pins.py` pins it. pip and STDIO installs were unaffected.
+
+## [1.19.0] - 2026-09-30
+
+### Security
+- **`execute_workflow` refuses BLOCKED steps.** The workflow gate only issued and
+  validated a confirmation token, so a `readonly` registry user — or any call
+  outside `MCP_WRITE_ALLOWLIST` — could self-confirm and run `lead_to_won` or
+  `create_and_post_invoice`. A BLOCKED step is now a refusal, checked on every
+  call before a token is issued or consumed, as `execute_method` and
+  `batch_execute` already did. `tests/test_workflow_blocked_gate.py`.
+- **`BLOCKED_MODELS` holds against indirect writes.** The classifier only looked
+  at the top-level model name, so `res.users` was writable through x2many
+  commands on an allowed model (`res.partner.user_ids`, `res.company.user_ids`).
+  `classify_operation` now takes a `fields_loader` and refuses any command that
+  creates, updates or deletes records of a forbidden comodel, following nested
+  vals through allowed comodels. Fail-closed: a payload carrying commands is
+  refused when the schema needed to resolve them cannot be loaded. Attaching or
+  detaching existing records on a many2many stays allowed; on a one2many every
+  list is refused. The same check covers `default_<field>` context keys, `load`
+  column paths (`user_ids/login`), bare id lists, and command codes Odoo treats
+  as equal (`true`, `1.0`). The schema is fetched (cached compact `fields_get`)
+  only when a vals dict carries a list.
+- **Proxy models added to `BLOCKED_MODELS`** — models that act on a blocked one
+  without naming it: password wizards (`change.password.*`),
+  `res.config.settings`, `res.groups.privilege`, `ir.model.data`,
+  `base_import.import`, the `base.module.*` wizards, `ir.mail_server`,
+  `fetchmail.server`, `auth.oauth.provider`, `res.company.ldap`, the portal
+  wizards, and the credential / 2FA / session satellites of `res.users`. Also
+  `ir.access`, which replaces `ir.rule` and `ir.model.access` from Odoo 19.4.
+- **`default_get` is no longer a safe method.** It runs on a read-write cursor and
+  addons override it with writes; it passed the token gate, `MCP_READ_ONLY`, the
+  `readonly` role and the allowlist. It now classifies as an unknown method.
+  `name_get`, gone from Odoo 19, is dropped from `SAFE_METHODS` too.
+- **A parameter given both positionally and by name is rejected**, before the
+  gate. The gate read the positional form while JSON-2 received the named one.
+- **An unrecognised `MCP_SAFETY_MODE` falls back to `strict` in the classifier**
+  as it already did in `odoo://server-status`; a typo used to report strict while
+  classifying as permissive.
+
+### Added
+- **`PRIVILEGED_MODELS`** — `ir.actions.server`, `base.automation`, `ir.cron`,
+  `ir.model`, `ir.model.fields`, `ir.default`, `ir.ui.view`: models that run code
+  or reshape the database. The operator's own session (stdio, static key, `admin`
+  role) may write to them, and every side-effect method confirms in every mode,
+  including unknown ones such as `run` or `method_direct_trigger`. Any other
+  registry role is refused, directly and through x2many commands.
+- `odoo://api/version-drift` entries for changes after 19.0: `ir.config_parameter`
+  typed accessors (19.1), removed domain operators `<>` / `==` / upper-case
+  spellings (19.1), `ir.attachment.datas` → `raw` (19.3), `ir.access` replacing
+  `ir.rule` and `ir.model.access` (19.4), mandatory `rpc` scope on API keys
+  (19.4), binary fields read as a dict (20.0). Entries without an identified PR
+  carry a `source` instead of a `pr`.
+- `odoo://domain-syntax` lists the removed operators.
+
+### Changed
+- `ir.model` moves from BLOCKED to privileged: an admin can now create a custom
+  model. `ir.cron` and `ir.model.fields` move from sensitive to privileged: they
+  now confirm in `permissive` for every method, and are refused for non-admin
+  registry roles. `ir.model.access` / `ir.rule` / `ir.access` stay BLOCKED, so a
+  new model's access rights are still granted in the Odoo interface.
+- Reads are unchanged and stay open on every model, blocked ones included: what
+  the connected Odoo account can read is decided by Odoo, not by this server.
+
+### Fixed
+- **Static knowledge no longer steers agents to methods Odoo removed.** Checked
+  live against Odoo Online 19.3 (`/doc-bearer`). `read_group`,
+  `check_access_rights`, `check_access_rule` and `toggle_active` were only
+  deprecated in 19.0 and are gone since Online 19.1 (404); `name_get` was already
+  gone in 19.0. The method catalog, `odoo://aggregation`, `odoo://api/version-drift`,
+  the `_read_group` private-method hint and the timeout error advice said
+  "deprecated but still works" and recommended `read_group`; they now scope it to
+  19.0 and point to `formatted_read_group` / `has_access`.
+- **A 404 for a missing method is reported as such.** The suggestion used to be
+  "verify the model name" and the hint "field name error detected"; both now say
+  the method does not exist in this Odoo version and point to
+  `odoo://methods/{model}` and `odoo://api/version-drift`.
+- **`module_knowledge.json` special methods that do not exist** are removed or
+  renamed: `hr.expense` (`action_submit` / `action_approve` / `action_refuse`),
+  `stock.picking.action_scrap` (was `button_scrap`), `account.move.set_moves_checked`
+  (was `button_set_checked`), and the nonexistent `hr.leave.action_confirm`,
+  `project.task.action_assign_to_me`, `discuss.channel.channel_create`,
+  `documents.document.document_create`, `knowledge.article.article_duplicate`,
+  `ai.agent.get_direct_response`, `ai.agent.source.create_from_attachments`.
+- **ORM signatures in `module_knowledge.json`**: `search` no longer lists `count`,
+  `search_count` lists `limit`, `default_get` takes `fields` (not `fields_list`).
+
 ## [1.18.1] - 2026-09-09
 
 ### Fixed
@@ -864,7 +995,11 @@ This reduces cognitive load and keeps the tool interface minimal:
 
 <!-- Only versions with a published git tag are linked. Intermediate releases were
      cut without tags; their entries above remain the record for those versions. -->
-[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v1.18.1...HEAD
+[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.0
+[1.19.2]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.2
+[1.19.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.1
+[1.19.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.19.0
 [1.18.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.18.1
 [1.18.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.18.0
 [1.17.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v1.17.0
