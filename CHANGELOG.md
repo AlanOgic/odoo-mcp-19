@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`cyanview-*` prompts no longer assume who runs them.** In multi-user mode every
+  colleague reaches Odoo through their own account, so a skill that names, addresses
+  or filters on a fixed person reports on the wrong one. The six prompts that query
+  Odoo (`customer-360`, `inventory-watchdog`, `quote`, `rma`, `serial-tracker`,
+  `shipping-watchdog`) now open on a shared "Step 0": read `odoo://session` and the
+  caller's `res.users` record, then use `USER_ID` (a `res.users` id) and
+  `USER_PARTNER_ID` (a `res.partner` id) where each belongs. If the session is not
+  authenticated, the prompt stops instead of guessing an identity.
+- CLORAG tool names in `rma` and `project-designer` follow the claude.ai connector
+  (`search_devices` / `get_device`, formerly `search_cameras` / `get_camera`).
+
 ## [2.0.0] - 2026-09-30
 
 ### Changed
