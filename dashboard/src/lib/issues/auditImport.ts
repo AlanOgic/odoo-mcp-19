@@ -62,9 +62,14 @@ function parseFindings(markdown: string): ParsedFinding[] {
     const headingMatch = block.match(/^###\s+(P[0-3])\b/m);
     const blockPriority = headingMatch ? (headingMatch[1] ?? null) : null;
     // Body capture must not require a leading newline — compact P2/P3 bullets
-    // put the description straight after the closing "**" on the same line.
+    // put the description straight after the closing "**" on the same line,
+    // while other entries put it on the following line(s). The lookahead's
+    // end-of-input branch MUST be a true end-of-string assertion, not a bare
+    // `$` — under the /m flag, `$` also matches the end of the title's own
+    // line, so a lazy `[\s\S]*?` would stop there immediately (zero-length
+    // body) for any entry whose description starts on a new line.
     const entryRe =
-      /(?:^\*\*\d+\.\s+(.+?)\*\*|^####\s+P[0-3]-\d+\.\s+(.+?)$)([\s\S]*?)(?=\n(?:\*\*\d+\.|####\s+P[0-3]-\d+\.|###\s+P[0-3]\b)|$)/gm;
+      /(?:^\*\*\d+\.\s+(.+?)\*\*|^####\s+P[0-3]-\d+\.\s+(.+?)$)([\s\S]*?)(?=\n(?:\*\*\d+\.|####\s+P[0-3]-\d+\.|###\s+P[0-3]\b)|$(?![\s\S]))/gm;
     let m: RegExpExecArray | null;
     while ((m = entryRe.exec(block)) !== null) {
       const title = (m[1] ?? m[2] ?? "").trim();
@@ -268,6 +273,10 @@ export interface ContentFindingRow {
 
 export interface AuditDetail extends AuditImportRow {
   findings: ContentFindingRow[];
+  /** Raw Markdown of the full report, read fresh from disk each call (not
+   * cached) so this always reflects the current file content. Null if the
+   * file has since moved or been deleted. */
+  reportMarkdown: string | null;
 }
 
 export function getAuditDetail(id: number): AuditDetail | null {
@@ -277,5 +286,11 @@ export function getAuditDetail(id: number): AuditDetail | null {
   const findings = db
     .prepare(`SELECT * FROM content_findings WHERE audit_import_id = ? ORDER BY priority ASC, id ASC`)
     .all(id) as ContentFindingRow[];
-  return { ...audit, findings };
+  let reportMarkdown: string | null = null;
+  try {
+    reportMarkdown = readFileSync(audit.report_path, "utf-8");
+  } catch {
+    reportMarkdown = null;
+  }
+  return { ...audit, findings, reportMarkdown };
 }
