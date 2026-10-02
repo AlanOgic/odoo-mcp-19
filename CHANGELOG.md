@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-02
+
 ### Removed
 - **The 7 `cyanview-*` skill prompts** (prompts 19 → 12). The Cyanview workflows are now
   distributed exclusively from the private skills repository, installed client side
@@ -1027,7 +1029,8 @@ This reduces cognitive load and keeps the tool interface minimal:
 
 <!-- Only versions with a published git tag are linked. Intermediate releases were
      cut without tags; their entries above remain the record for those versions. -->
-[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v2.0.2...HEAD
+[Unreleased]: https://github.com/AlanOgic/odoo-mcp-19/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.1.0
 [2.0.2]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.2
 [2.0.1]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.1
 [2.0.0]: https://github.com/AlanOgic/odoo-mcp-19/releases/tag/v2.0.0
