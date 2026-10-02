@@ -57,7 +57,7 @@ package-dir = {"" = "src"}
 packages = ["odoo_mcp"]
 
 [tool.setuptools.package-data]
-odoo_mcp = ["*.json", "assets/*.svg", "skills/*.md"]
+odoo_mcp = ["*.json", "assets/*.svg"]
 
 [tool.mypy]
 python_version = "3.10"

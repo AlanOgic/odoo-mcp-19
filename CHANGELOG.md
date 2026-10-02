@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **The 7 `cyanview-*` skill prompts** (prompts 19 → 12). The Cyanview workflows are now
+  distributed exclusively from the private skills repository, installed client side
+  (plugin or local skills), so their business rules are maintained in one place and no
+  longer ship in this public package. Gone with them: `skill_prompts.py`, the packaged
+  `skills/*.md`, the `skill_visibility.py` middleware that filtered them per user, and
+  `UsersDb.get_skills()`. The registry's `user_skills` table stays in the CLORAG schema
+  contract but is no longer read. `tests/test_prompt_surface.py` pins the removal.
+
 ## [2.0.2] - 2026-10-01
 
 ### Fixed

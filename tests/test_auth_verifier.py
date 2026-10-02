@@ -83,13 +83,6 @@ def test_lookup_uses_sha256(users_db_seed):
     assert hashlib.sha256(full_key.encode()).hexdigest() in hashes
 
 
-def test_get_skills(users_db_seed):
-    db = UsersDb(users_db_seed.db_path)
-    skills = db.get_skills(users_db_seed.user_ids["member"])
-    assert skills == frozenset({"cyanview-rma", "cyanview-serial-tracker"})
-    assert db.get_skills(users_db_seed.user_ids["admin"]) == frozenset()
-
-
 def test_get_odoo_credentials(users_db_seed):
     db = UsersDb(users_db_seed.db_path)
     creds = db.get_odoo_credentials(users_db_seed.user_ids["member"])
