@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .server import mcp
+from .user_clients import declare_stdio_transport
 
 # Locally built image (docker build -t odoo-mcp-19:latest .) — no Docker Hub image exists
 DOCKER_IMAGE = "odoo-mcp-19:latest"
@@ -404,7 +405,10 @@ def main():
             print("🔐 Authentication enabled (Bearer token required)", file=sys.stderr)
         mcp.run(transport="streamable-http", host=host, port=port)
     else:
-        mcp.run()
+        # Nobody authenticates over STDIO: a token-less call is the operator (user_clients).
+        # The transport is explicit because a bare run() takes FASTMCP_TRANSPORT instead.
+        declare_stdio_transport()
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

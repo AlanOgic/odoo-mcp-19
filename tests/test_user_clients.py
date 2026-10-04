@@ -18,6 +18,9 @@ def _clean_state(monkeypatch, users_db_seed):
     monkeypatch.setenv("USERS_DB_PATH", str(users_db_seed.db_path))
     monkeypatch.setenv("ODOO_URL", "https://odoo.example.com")
     monkeypatch.setenv("ODOO_DB", "cyanview")
+    # These tests exercise the STDIO-side resolution (a token-less call is the operator);
+    # tests/test_identity_fail_closed.py covers servers not started on STDIO.
+    monkeypatch.setattr(user_clients, "_serving_stdio", True)
     # reset users_db singleton so it picks the temp path
     import odoo_mcp.users_db as users_db_module
 
@@ -25,8 +28,10 @@ def _clean_state(monkeypatch, users_db_seed):
     yield
 
 
-def _fake_token(client_id, role="support", name="Test"):
-    return SimpleNamespace(client_id=client_id, claims={"role": role, "name": name})
+def _fake_token(client_id, role="support", name="Test", auth="registry"):
+    """Shaped like DbTokenVerifier's AccessToken: registry keys carry auth="registry",
+    the static MCP_API_KEY carries auth="static"."""
+    return SimpleNamespace(client_id=client_id, claims={"role": role, "name": name, "auth": auth})
 
 
 def test_no_token_returns_none(monkeypatch, users_db_seed):
@@ -39,7 +44,7 @@ def test_env_admin_returns_none(monkeypatch, users_db_seed):
     monkeypatch.setattr(
         user_clients,
         "_safe_get_access_token",
-        lambda: _fake_token("env-admin", role="admin"),
+        lambda: _fake_token("env-admin", role="admin", auth="static"),
     )
     assert user_clients.get_client_for_current_user() is None
     assert user_clients.current_role() == "admin"
@@ -110,7 +115,7 @@ def test_dispatcher_falls_back_to_env_singleton(monkeypatch, users_db_seed):
 
     monkeypatch.setattr(user_clients, "_safe_get_access_token", lambda: None)
     sentinel = object()
-    monkeypatch.setattr(odoo_client_module, "_get_env_client", lambda: sentinel)
+    monkeypatch.setattr(odoo_client_module, "get_env_client", lambda: sentinel)
     assert odoo_client_module.get_odoo_client() is sentinel
 
 

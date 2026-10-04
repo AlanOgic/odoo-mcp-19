@@ -71,25 +71,43 @@ def _strip_html(html_str: str) -> str:
     return " ".join(text.split()).strip()
 
 
+def _client_identity(client: Any) -> tuple[Any, Any]:
+    """``(url, username)`` of an OdooClient, the identity part of a cache key.
+
+    Odoo filters fields, docs and the api index by the caller's rights, so cached
+    copies must never cross identities.
+    """
+    return (getattr(client, "url", None), getattr(client, "username", None))
+
+
 def _get_live_doc(model_name: str) -> Optional[Dict[str, Any]]:
     """Fetch live model docs from /doc-bearer/ with in-memory caching.
 
-    Returns the doc dict if available, or None on any failure.
-    Failures are silent -- the caller falls back to static data.
+    Cached per caller identity: Odoo builds the document for the requesting user.
+    Returns the doc dict if available, or None when the endpoint fails -- the
+    caller then falls back to static data. A caller whose identity cannot be
+    resolved (``PermissionError``) is refused, not answered from static data.
     """
-    now = time.time()
-    with _DOC_CACHE_LOCK:
-        if model_name in _DOC_CACHE:
-            ts, data = _DOC_CACHE[model_name]
-            if now - ts < _DOC_CACHE_TTL:
-                return data
-
     try:
         odoo = get_odoo_client()
+    except PermissionError:
+        raise
+    except Exception as e:
+        logger.warning("/doc-bearer/ unavailable for %s: %s", model_name, e)
+        return None
+
+    key = (*_client_identity(odoo), model_name)
+    now = time.time()
+    with _DOC_CACHE_LOCK:
+        cached = _DOC_CACHE.get(key)
+        if cached and now - cached[0] < _DOC_CACHE_TTL:
+            return cast(Dict[str, Any], cached[1])
+
+    try:
         doc = odoo.get_model_doc(model_name)
         if doc and isinstance(doc, dict) and "methods" in doc:
             with _DOC_CACHE_LOCK:
-                _DOC_CACHE[model_name] = (now, doc)
+                _DOC_CACHE[key] = (now, doc)
                 if len(_DOC_CACHE) > _DOC_CACHE_MAX_ENTRIES:
                     oldest = min(_DOC_CACHE, key=lambda k: _DOC_CACHE[k][0])
                     del _DOC_CACHE[oldest]
@@ -109,7 +127,7 @@ def get_live_api_index() -> Optional[Dict[str, Any]]:
     (oldest evicted). Returns None when the endpoint is unavailable.
     """
     client = get_odoo_client()
-    key = (getattr(client, "url", None), getattr(client, "username", None))
+    key = _client_identity(client)
     now = time.time()
     with _API_INDEX_CACHE_LOCK:
         cached = _API_INDEX_CACHE.get(key)
@@ -477,12 +495,7 @@ _FIELDS_CACHE_MAX = 100
 
 def fields_cache_key(client: Any, model: str, attributes: Sequence[str] | None = None) -> _FieldsCacheKey:
     """Build the cache key for one (client, model, attribute subset) fetch."""
-    return (
-        getattr(client, "url", None),
-        getattr(client, "username", None),
-        model,
-        tuple(attributes) if attributes else None,
-    )
+    return (*_client_identity(client), model, tuple(attributes) if attributes else None)
 
 
 def fields_cache_get(key: _FieldsCacheKey) -> dict | None:

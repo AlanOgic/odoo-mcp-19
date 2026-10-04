@@ -17,7 +17,7 @@ from fastmcp import FastMCP
 from fastmcp_tasks import TasksExtension
 from mcp.types import Icon
 
-from .odoo_client import OdooClient, get_odoo_client
+from .odoo_client import OdooClient, get_env_client
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     missing env config must not prevent startup.
     """
     try:
-        odoo_client: Optional[OdooClient] = get_odoo_client()
+        odoo_client: Optional[OdooClient] = get_env_client()
     except (FileNotFoundError, KeyError) as e:
         if os.environ.get("USERS_DB_PATH"):
             logger.warning("No env Odoo credentials (%s) — multi-user registry mode only", e)
@@ -92,7 +92,9 @@ def _get_auth_provider():
     users_db = get_users_db()
     if users_db is not None:
         from .auth_verifier import DbTokenVerifier
+        from .user_clients import declare_registry_auth
 
+        declare_registry_auth(users_db)
         return DbTokenVerifier(users_db, static_api_key=api_key)
 
     if api_key:

@@ -350,7 +350,7 @@ Pre-execution safety classification gates dangerous operations behind confirmati
 
 `ir.rule`, `ir.model.access`, `ir.access`, `ir.module.module`, `ir.config_parameter`, `res.users`, `res.groups`, `res.users.apikeys`, plus the models that act on one of those without naming it: password wizards (`change.password.*`), `res.config.settings`, `res.groups.privilege`, `ir.model.data`, `base_import.import`, the `base.module.*` wizards, mail servers, auth providers, portal wizards, and the credential / 2FA / session satellites of `res.users`.
 
-Only writes are blocked — reads stay open on every model, the connected Odoo account's rights decide what is readable. A blocked model is also protected against indirect writes: x2many commands, `default_<field>` context keys and `load` column paths that would create, change or delete its records through an allowed model (`res.partner.user_ids` → `res.users`) are refused.
+Only writes are blocked — reads stay open on every model, the connected Odoo account's rights decide what is readable. A blocked model is also protected against indirect writes: x2many commands, `default_<field>` context keys and `load` column paths that would create, change or delete its records through an allowed model (`res.partner.user_ids` → `res.users`) are refused. Every value shape Odoo turns into such a write is judged the same way: `null`/`false` on an x2many is Odoo's *clear* (which deletes the lines of a one2many whose inverse cascades), and a bare dict in an x2many list is a new record.
 
 ### Privileged models (admin only, always confirm)
 
@@ -537,7 +537,12 @@ Odoo account — so every write is attributed to the real person, not a shared s
   the registry. The caller gets a **personal `OdooClient`** built from their stored Odoo
   username + decrypted API key (cached 300s, re-checked on credential rotation). Plaintext
   keys are never stored; the static `MCP_API_KEY` still works and maps to an `env-admin`
-  identity.
+  identity — the only one served by the env Odoo account.
+- **Fail-closed identity** — a call that reaches the server without the caller's key is
+  refused, never served by the env account with the operator's role. Only a server started
+  on STDIO by `python -m odoo_mcp` (or `odoo-mcp-19`), where nobody authenticates, treats a
+  key-less call as the operator; that and the registry in use are fixed at startup, so no
+  later environment change (`.env` reload, `MCP_TRANSPORT`, `FASTMCP_TRANSPORT`) reopens it.
 - **Roles** — `admin` → unrestricted; `readonly` → read-only, with the safety layer blocking
   every non-safe method; other roles → normal safety rules on their own account.
 

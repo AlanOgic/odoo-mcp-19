@@ -68,7 +68,7 @@ def _stubbed(stub):
     """
     with (
         patch.object(resources, "get_odoo_client", return_value=stub),
-        patch.object(app, "get_odoo_client", return_value=stub),
+        patch.object(app, "get_env_client", return_value=stub),
     ):
         yield
 

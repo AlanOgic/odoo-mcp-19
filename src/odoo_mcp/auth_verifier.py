@@ -17,6 +17,8 @@ from fastmcp.server.auth import AccessToken, TokenVerifier
 from .users_db import UsersDb
 
 ENV_ADMIN_CLIENT_ID = "env-admin"
+# "auth" claim of the static MCP_API_KEY identity — the only one served by the env Odoo account.
+STATIC_KEY_AUTH = "static"
 
 
 class DbTokenVerifier(TokenVerifier):
@@ -33,7 +35,7 @@ class DbTokenVerifier(TokenVerifier):
                 token=token,
                 client_id=ENV_ADMIN_CLIENT_ID,
                 scopes=["read", "write"],
-                claims={"role": "admin", "auth": "static"},
+                claims={"role": "admin", "auth": STATIC_KEY_AUTH},
             )
         key_hash = hashlib.sha256(token.encode()).hexdigest()
         # SQLite lookup off the event loop

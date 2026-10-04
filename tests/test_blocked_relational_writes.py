@@ -22,6 +22,11 @@ SCHEMAS = {
     "sale.order": {"order_line": {"type": "one2many", "relation": "sale.order.line"}},
     "sale.order.line": {"name": {"type": "char"}},
     "res.partner.category": {"name": {"type": "char"}},
+    "ir.model": {
+        "name": {"type": "char"},
+        "rule_ids": {"type": "one2many", "relation": "ir.rule"},
+        "access_ids": {"type": "one2many", "relation": "ir.model.access"},
+    },
 }
 
 
@@ -127,6 +132,98 @@ class TestX2manyCommandsOnBlockedComodel:
     @pytest.mark.parametrize("value", [[[4, 5, 0]], [[3, 5, 0]], [[6, 0, [5, 6]]], [5, 6], []])
     def test_many2many_link_commands_on_blocked_comodel_are_allowed(self, value):
         result = _classify("res.company", "write", [[1], {"user_ids": value}])
+
+        assert result.risk_level == RiskLevel.MEDIUM
+
+
+class TestClearingAnX2manyWithNullOrFalse:
+    """Odoo reads ``None``/``False`` on an x2many as ``[Command.clear()]``.
+
+    On a one2many whose inverse is ``ondelete="cascade"`` that deletes every line
+    (``odoo/orm/fields_relational.py``), so the value must get the same verdict as
+    an explicit ``[[5, 0, 0]]``.
+    """
+
+    @pytest.mark.parametrize("value", [None, False])
+    def test_clearing_a_one2many_to_a_blocked_comodel_is_blocked(self, value):
+        result = _classify("res.partner", "write", [[7], {"user_ids": value}])
+
+        assert result.risk_level == RiskLevel.BLOCKED
+        assert "res.users" in result.blocked_reason
+
+    @pytest.mark.parametrize("field_name, comodel", [("rule_ids", "ir.rule"), ("access_ids", "ir.model.access")])
+    def test_clearing_the_rules_of_a_model_through_ir_model_is_blocked(self, field_name, comodel):
+        result = _classify("ir.model", "write", [[42], {field_name: None}])
+
+        assert result.risk_level == RiskLevel.BLOCKED
+        assert comodel in result.blocked_reason
+
+    def test_clearing_inside_an_update_command_is_followed(self):
+        vals = {"child_ids": [[1, 8, {"user_ids": False}]]}
+
+        assert _classify("res.partner", "write", [[7], vals]).risk_level == RiskLevel.BLOCKED
+
+    def test_clearing_through_a_named_vals_argument_is_blocked(self):
+        result = _classify("res.partner", "write", kwargs={"ids": [7], "vals": {"user_ids": None}})
+
+        assert result.risk_level == RiskLevel.BLOCKED
+
+    @pytest.mark.parametrize("value", [None, False])
+    def test_clearing_a_many2many_to_a_blocked_comodel_is_allowed_like_command_5(self, value):
+        """Detaching every user from a company is the same as ``[[5, 0, 0]]``: link-only."""
+        result = _classify("res.company", "write", [[1], {"user_ids": value}])
+
+        assert result.risk_level == RiskLevel.MEDIUM
+
+    def test_null_and_false_on_scalar_and_many2one_fields_pass(self):
+        result = _classify("res.partner", "write", [[7], {"name": False, "user_id": None}])
+
+        assert result.risk_level == RiskLevel.MEDIUM
+
+    def test_clearing_inside_a_create_command_is_followed(self):
+        vals = {"child_ids": [[0, 0, {"name": "kid", "user_ids": None}]]}
+
+        assert _classify("res.partner", "write", [[7], vals]).risk_level == RiskLevel.BLOCKED
+
+    def test_clearing_through_a_context_default_is_blocked(self):
+        result = _classify("res.partner", "create", [[{"name": "x"}]], {"context": {"default_user_ids": None}})
+
+        assert result.risk_level == RiskLevel.BLOCKED
+
+    @pytest.mark.parametrize("value", [0, ""])
+    def test_other_falsy_values_are_not_a_clear(self, value):
+        """Odoo uses identity checks: only None and False become Command.clear()."""
+        assert _classify("res.partner", "write", [[7], {"user_ids": value}]).risk_level == RiskLevel.MEDIUM
+
+    def test_unavailable_schema_blocks_a_payload_clearing_a_field(self):
+        result = _classify("res.partner", "write", [[7], {"user_ids": None}], loader=Loader({}))
+
+        assert result.risk_level == RiskLevel.BLOCKED
+        assert "schema" in result.blocked_reason.lower()
+
+
+class TestDictShorthandInX2manyLists:
+    """Odoo's ``convert_to_cache`` reads a bare dict in an x2many list as a new record
+    (``comodel.new(vals)``), and ``default_get`` sends every ``default_<field>``
+    context key through it, so the dict is created on ``create``."""
+
+    def test_a_dict_in_a_context_default_is_followed_to_a_blocked_comodel(self):
+        context = {"default_child_ids": [{"name": "kid", "user_ids": [[0, 0, {"login": "x"}]]}]}
+
+        result = _classify("res.partner", "create", [[{"name": "x"}]], {"context": context})
+
+        assert result.risk_level == RiskLevel.BLOCKED
+        assert "res.users" in result.blocked_reason
+
+    def test_a_dict_in_vals_is_followed_to_a_blocked_comodel(self):
+        vals = {"child_ids": [{"name": "kid", "user_ids": [[0, 0, {"login": "x"}]]}]}
+
+        assert _classify("res.partner", "write", [[7], vals]).risk_level == RiskLevel.BLOCKED
+
+    def test_a_dict_on_an_allowed_comodel_passes(self):
+        context = {"default_child_ids": [{"name": "kid"}]}
+
+        result = _classify("res.partner", "create", [[{"name": "x"}]], {"context": context})
 
         assert result.risk_level == RiskLevel.MEDIUM
 
