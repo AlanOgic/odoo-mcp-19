@@ -124,7 +124,7 @@ mcp = FastMCP(
     icons=_icons,
 )
 
-# batch_execute and execute_workflow are task=True tools. Since FastMCP 4 background
-# tasks are an extension (io.modelcontextprotocol/tasks): without it the server refuses
-# to start. Registered here, before server.py declares the tools.
+# batch_execute is a task=True tool. Since FastMCP 4 background tasks are an extension
+# (io.modelcontextprotocol/tasks): without it the server refuses to start. Registered
+# here, before server.py declares the tools.
 mcp.add_extension(TasksExtension())

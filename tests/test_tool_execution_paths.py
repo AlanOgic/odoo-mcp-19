@@ -1,9 +1,8 @@
-"""Characterization tests for the execution paths of the three write-capable tools.
+"""Characterization tests for the execution paths of the two write-capable tools.
 
 Before the v1.17 refactor these branches had no direct unit test: the
 ``resolve_json`` Many2one resolution, the ``search_read`` → ``search`` + ``read``
-fallback, the search defaults, both ``execute_workflow`` bodies and
-``batch_execute`` with ``atomic=False``. They pin the observable behaviour so the
+fallback, the search defaults and ``batch_execute`` with ``atomic=False``. They pin the observable behaviour so the
 long functions can be split into helpers without drift.
 
 No live Odoo: ``get_odoo_client`` is patched with a stub. Tests that exercise a
@@ -12,7 +11,6 @@ the way — the gate itself is pinned by ``test_token_gate.py``.
 """
 
 import asyncio
-import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -289,123 +287,6 @@ def test_batch_reports_invalid_operation_without_calling_odoo():
     assert response.results[0].success is False
     assert response.results[0].error  # the JSON decode message
     assert client.execute_method.call_count == 0
-
-
-# ----- execute_workflow -----
-
-
-def _workflow(client, **kwargs):
-    """Run a workflow, confirming through the token gate when it asks."""
-
-    async def _run():
-        response = await server.execute_workflow(progress=AsyncMock(), **kwargs)
-        if response.pending_confirmation:
-            token = re.search(r"confirmation_token='([^']+)'", response.tip).group(1)
-            response = await server.execute_workflow(
-                progress=AsyncMock(), confirmed=True, confirmation_token=token, **kwargs
-            )
-        return response
-
-    with patch.object(server, "get_odoo_client", return_value=client):
-        return asyncio.run(_run())
-
-
-def test_lead_to_won_converts_a_lead_then_marks_it_won():
-    client = _client(search_read=lambda *a, **k: [{"id": 7, "type": "lead"}], execute_method=lambda *a, **k: True)
-    response = _workflow(client, workflow="lead_to_won", params_json='{"lead_id": 7, "partner_id": 3}')
-    assert response.success is True
-    assert [s.step for s in response.steps] == ["convert_to_opportunity", "mark_won"]
-    assert ("crm.lead", "convert_opportunity", [[7]], {"partner_id": 3}) in _sent(client)
-    assert ("crm.lead", "action_set_won", [[7]], {}) in _sent(client)
-
-
-def test_lead_to_won_skips_conversion_for_an_opportunity():
-    client = _client(
-        search_read=lambda *a, **k: [{"id": 7, "type": "opportunity"}], execute_method=lambda *a, **k: True
-    )
-    response = _workflow(client, workflow="crm_workflow", params_json='{"lead_id": 7}')
-    assert response.success is True
-    assert response.steps[0].skipped is True
-    assert [c[1] for c in _sent(client)] == ["action_set_won"]
-
-
-def test_lead_to_won_reports_a_failed_step():
-    def _execute(model, method, *a, **k):
-        raise ValueError("cannot win")
-
-    client = _client(search_read=lambda *a, **k: [{"id": 7, "type": "opportunity"}], execute_method=_execute)
-    response = _workflow(client, workflow="lead_to_won", params_json='{"lead_id": 7}')
-    assert response.success is False
-    assert response.steps[1].success is False and "cannot win" in response.steps[1].error
-
-
-def test_lead_to_won_requires_lead_id():
-    response = _workflow(_client(), workflow="lead_to_won", params_json="{}")
-    assert response.success is False and "lead_id" in response.error
-
-
-def test_create_and_post_invoice_creates_then_posts():
-    def _execute(model, method, *a, **k):
-        return 99 if method == "create" else True
-
-    client = _client(execute_method=_execute)
-    response = _workflow(
-        client,
-        workflow="quick_invoice",
-        params_json='{"partner_id": 5, "lines": [{"product_id": 1, "quantity": 2, "price_unit": 10}]}',
-    )
-    assert response.success is True and response.invoice_id == 99
-    create = next(c for c in _sent(client) if c[1] == "create")
-    vals = create[2][0][0]  # args == ([invoice_vals],)
-    assert vals["move_type"] == "out_invoice" and vals["partner_id"] == 5
-    assert vals["invoice_line_ids"] == [(0, 0, {"product_id": 1, "quantity": 2, "price_unit": 10, "name": "Product"})]
-    assert ("account.move", "action_post", [[99]], {}) in _sent(client)
-
-
-def test_create_and_post_invoice_can_skip_posting():
-    client = _client(execute_method=lambda model, method, *a, **k: 99)
-    response = _workflow(
-        client,
-        workflow="create_and_post_invoice",
-        params_json='{"partner_id": 5, "lines": [{"product_id": 1}], "post": false}',
-    )
-    assert response.success is True
-    assert [c[1] for c in _sent(client)] == ["create"]
-
-
-def test_create_and_post_invoice_stops_when_create_fails():
-    def _execute(*a, **k):
-        raise ValueError("no journal")
-
-    response = _workflow(
-        _client(execute_method=_execute),
-        workflow="create_and_post_invoice",
-        params_json='{"partner_id": 5, "lines": [{"product_id": 1}]}',
-    )
-    assert response.success is False
-    assert [s.step for s in response.steps] == ["create_invoice"]
-    assert "no journal" in response.steps[0].error
-
-
-@pytest.mark.parametrize(
-    "params, fragment",
-    [('{"lines": [{"product_id": 1}]}', "partner_id required"), ('{"partner_id": 5}', "lines required")],
-)
-def test_create_and_post_invoice_validates_params(params, fragment):
-    response = _workflow(_client(), workflow="create_and_post_invoice", params_json=params)
-    assert response.success is False and fragment in response.error
-
-
-def test_unknown_workflow_lists_available_ones():
-    response = _workflow(_client(), workflow="stock_transfer", params_json="{}")
-    assert response.success is False
-    assert response.error == "Unknown workflow: stock_transfer"
-    assert any(w.startswith("lead_to_won") for w in response.available_workflows)
-
-
-def test_invalid_params_json_is_rejected():
-    response = _workflow(_client(), workflow="lead_to_won", params_json="{oops")
-    assert response.success is False and "Invalid params_json" in response.error
 
 
 # ----- batch_execute: per-operation parsing (shared with execute_method) -----

@@ -21,7 +21,6 @@ from odoo_mcp.safety import (
     audit_log,
     classify_batch,
     classify_operation,
-    classify_workflow,
 )
 
 # =====================================================
@@ -359,47 +358,6 @@ class TestUnknownMethods:
             result = classify_operation("res.partner", "custom_action")
             assert result.risk_level == RiskLevel.MEDIUM
             assert result.requires_confirmation is False
-
-
-# =====================================================
-# Test: Workflow classification
-# =====================================================
-
-
-class TestWorkflowClassification:
-    def test_removed_quote_to_cash_returns_none(self):
-        # quote_to_cash and its aliases were removed post-1.15.0
-        for name in ["quote_to_cash", "quotation_to_invoice", "sales_workflow"]:
-            assert classify_workflow(name) is None
-
-    def test_lead_to_won(self):
-        preview = classify_workflow("lead_to_won")
-        assert preview is not None
-        assert len(preview.steps) == 2
-
-    def test_create_and_post_invoice(self):
-        preview = classify_workflow("create_and_post_invoice")
-        assert preview is not None
-        assert preview.overall_risk == RiskLevel.HIGH
-
-    def test_stock_transfer(self):
-        preview = classify_workflow("stock_transfer")
-        assert preview is not None
-        assert preview.overall_risk == RiskLevel.HIGH
-
-    def test_unknown_workflow_returns_none(self):
-        preview = classify_workflow("nonexistent_workflow")
-        assert preview is None
-
-    def test_case_insensitive(self):
-        preview = classify_workflow("Lead_To_Won")
-        assert preview is not None
-
-    def test_cascade_warnings_in_workflow(self):
-        preview = classify_workflow("create_and_post_invoice")
-        assert preview is not None
-        warnings = [s.cascade_warning for s in preview.steps if s.cascade_warning]
-        assert len(warnings) > 0  # account.move action_post is irreversible
 
 
 # =====================================================

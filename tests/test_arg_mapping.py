@@ -52,7 +52,7 @@ class TestUnmappedRecordMethods:
     """Methods absent from the table but called on records must still send ids."""
 
     def test_unmapped_method_with_id_list_becomes_ids(self):
-        # e.g. crm.lead action_set_won([9]) used by the lead_to_won workflow
+        # e.g. crm.lead action_set_won([9]): not in V2_ARG_MAPPING, still record-bound
         body = convert_args_to_v2("action_set_won", ([9],), {})
         assert body == {"ids": [9]}
 

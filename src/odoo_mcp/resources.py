@@ -122,6 +122,12 @@ def _map_in_caller_context(fn: Callable[[_U], _T], items: Sequence[_U]) -> list[
         return [future.result() for future in futures]
 
 
+# How an agent runs a TOOL_REGISTRY entry (odoo://tools/{query}, odoo://tool-registry).
+_REGISTRY_USAGE = (
+    "Entries with a method map to execute_method(model, method, ...); the others are "
+    "recipes (steps, domain templates) to compose from execute_method or batch_execute calls"
+)
+
 # Hint appended to model-resolution errors so agents know where to look next.
 _MODEL_LOOKUP_HINT = "Use odoo://models or odoo://find-model/{concept} to find the right model."
 
@@ -1398,7 +1404,7 @@ def search_tools_resource(query: str) -> str:
             "tools_found": len(matches) + len(special_matches),
             "workflows": matches,
             "special_methods": special_matches,
-            "usage": "Use execute_workflow() for workflows or execute_method() for special methods",
+            "usage": _REGISTRY_USAGE,
         },
         indent=2,
     )
@@ -1503,7 +1509,7 @@ def get_tool_registry() -> str:
     return json.dumps(
         {
             "description": "Pre-built tools and workflows for common Odoo operations",
-            "usage": "Read odoo://tools/{query} to find tools, execute_workflow(name, params) to run",
+            "usage": f"Read odoo://tools/{{query}} to find an operation. {_REGISTRY_USAGE}",
             "tools": TOOL_REGISTRY,
             "categories": {
                 "sales": [k for k, v in TOOL_REGISTRY.items() if "sale" in v.get("model", "")],

@@ -185,8 +185,8 @@ transports, capability counts), plus:
 
 - **Dual-era**: connect a `mode="legacy"` client and a `2026-07-28` client to the same
   running server; both must work. This is the whole premise of migrating without a flag day.
-- **Tasks**: `batch_execute` and `execute_workflow` must register at startup *and* report
-  progress through the new `tasks/get` polling flow.
+- **Tasks**: `batch_execute` (and `execute_workflow`, until its removal after 2.1.1) must
+  register at startup *and* report progress through the new `tasks/get` polling flow.
 - **Resource templates**: read all 27 URIs, with attention to `odoo://bundle/{m1,m2,...}` and
   any dotted model name, to confirm the path-traversal screen does not reject legitimate params.
 - **Multi-user, against a real CLORAG registry** (not just the seeded fixture): a registry

@@ -38,7 +38,7 @@ layer blocks every non-safe method.
 
 | | |
 |---|---|
-| **4 tools** | `execute_method` reaches any method on any model; `batch_execute`, `execute_workflow` and `read_resource` cover the rest |
+| **3 tools** | `execute_method` reaches any method on any model; `batch_execute` and `read_resource` cover the rest |
 | **38 resources** | Model discovery, compact schemas, state-machine workflows, introspection, API reference (`odoo://api/*`), and runtime posture (`odoo://server-status`) |
 | **12 prompts** | Generic guided workflows (aging reports, inventory checks, domain building, pagination, …) |
 | **Safety layer** | Risk classification before execution, 8 blocked models, 6 sensitive models, cascade warnings |
@@ -252,8 +252,12 @@ result = execute_method("sale.order", "action_confirm", args_json='[[15]]')
 execute_method("sale.order", "action_confirm", args_json='[[15]]',
     confirmed=true, confirmation_token='<token from step 1>')
 
-# Multi-step workflow in one call (also gated — posting an invoice is irreversible)
-execute_workflow("create_and_post_invoice", '{"partner_id": 123, "invoice_lines": [...]}')
+# Several operations in one call: each is classified, and the batch confirms once,
+# with one token bound to the whole operations list
+batch_execute(operations=[
+    {"model": "sale.order", "method": "action_confirm", "args_json": "[[15]]"},
+    {"model": "sale.order", "method": "action_confirm", "args_json": "[[16]]"},
+])
 ```
 
 Note that `confirmed=true` on its own does nothing. The token is single-use, expires after
@@ -262,13 +266,12 @@ token issued for `unlink([1])` and reuse it on `unlink([1, 2, …, 1000])`.
 
 ## Architecture
 
-### Tools (4)
+### Tools (3)
 
 | Tool | Purpose |
 |------|---------|
 | `execute_method` | Call any method on any Odoo model |
 | `batch_execute` | Multiple operations with progress tracking |
-| `execute_workflow` | Pre-built multi-step workflows |
 | `read_resource` | Read any `odoo://` resource by URI |
 
 ### Resources (38)
@@ -593,7 +596,7 @@ Full documentation lives in the **[Wiki](https://github.com/AlanOgic/odoo-mcp-19
 **Start here**
 
 - [Getting started](https://github.com/AlanOgic/odoo-mcp-19/wiki/Getting-Started) — install and connect in five minutes
-- [Tools](https://github.com/AlanOgic/odoo-mcp-19/wiki/Tools) — the 4 tools, their parameters, and when to reach for each
+- [Tools](https://github.com/AlanOgic/odoo-mcp-19/wiki/Tools) — the 3 tools, their parameters, and when to reach for each
 - [Resources](https://github.com/AlanOgic/odoo-mcp-19/wiki/Resources) — the 27 `odoo://` discovery URIs
 
 **Reference**

@@ -88,9 +88,8 @@ class TestDeclaredConstraint:
     def test_fastmcp_requirement_declares_tasks_extra(self):
         req = _fastmcp_requirement()
         assert "tasks" in req.extras, (
-            "fastmcp must be requested as fastmcp[tasks]: batch_execute and"
-            " execute_workflow are declared with task=True and will not"
-            " register without the extra."
+            "fastmcp must be requested as fastmcp[tasks]: batch_execute is"
+            " declared with task=True and will not register without the extra."
         )
 
     def test_fastmcp_requirement_excludes_next_major(self):

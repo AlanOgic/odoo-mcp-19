@@ -144,39 +144,3 @@ def test_read_only_allows_batch_of_reads(monkeypatch):
         # FastMCP Progress requires MCP dependency injection outside MCP context.
         # Reaching this point means the read-only guard did not fire (correct).
         assert "read-only" not in str(exc).lower()
-
-
-def test_read_only_blocks_workflow(monkeypatch):
-    """Under read-only, ALL workflows are rejected (they're inherently multi-step)."""
-    monkeypatch.setenv("MCP_READ_ONLY", "true")
-    from odoo_mcp.server import execute_workflow
-
-    response = asyncio.run(
-        execute_workflow(
-            workflow="quote_to_cash",
-            params_json='{"partner_id": 1, "product_id": 1, "quantity": 1}',
-        )
-    )
-
-    assert response.success is False
-    assert "read-only" in (response.error or "").lower()
-
-
-def test_read_only_off_allows_workflow_to_proceed_to_validation(monkeypatch):
-    """When read-only is off, the workflow guard does not fire. (We don't actually
-    expect a successful run — just absence of the read-only error.)"""
-    monkeypatch.delenv("MCP_READ_ONLY", raising=False)
-    # Stub the client: these paths run past the read-only guard, and a real
-    # get_odoo_client() would need ODOO_* config that CI deliberately omits.
-    monkeypatch.setattr("odoo_mcp.server.get_odoo_client", lambda: MagicMock())
-    from odoo_mcp.server import execute_workflow
-
-    response = asyncio.run(
-        execute_workflow(
-            workflow="quote_to_cash",
-            params_json='{"partner_id": 1, "product_id": 1, "quantity": 1}',
-        )
-    )
-
-    # Whatever happens downstream, the error (if any) must not be about read-only.
-    assert "read-only" not in (response.error or "").lower()
