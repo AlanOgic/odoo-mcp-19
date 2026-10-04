@@ -377,6 +377,7 @@ _X2MANY_TYPES: frozenset[str] = frozenset({"one2many", "many2many"})
 # so nothing is harmless there.
 _MANY2MANY_LINK_COMMANDS: frozenset[int] = frozenset({3, 4, 5, 6})
 _NESTED_VALS_COMMANDS: frozenset[int] = frozenset({0, 1})
+_CLEAR_COMMAND: tuple[int, int, int] = (5, 0, 0)
 _CONTEXT_DEFAULT_PREFIX = "default_"
 _IMPORT_ID_COLUMNS: frozenset[str] = frozenset({"id", ".id"})
 _MAX_COMMAND_DEPTH = 5
@@ -399,9 +400,29 @@ def _is_link_only(item: Any) -> bool:
         return False
 
 
+def _as_x2many_commands(value: Any) -> list[Any] | None:
+    """The command list Odoo applies when ``value`` is written to an x2many, or None.
+
+    Odoo reads ``None``/``False`` as ``[Command.clear()]`` (``fields_relational.py``,
+    identity checks, so ``0`` is not one): on a one2many whose inverse is
+    ``ondelete="cascade"`` that deletes every line. A value that is neither a list
+    nor one of those two cannot be an x2many write.
+    """
+    if value is None or value is False:
+        return [list(_CLEAR_COMMAND)]
+    if isinstance(value, list):
+        return value
+    return None
+
+
 def _nested_vals(value: list) -> list[dict]:
-    """Vals dicts carried by the CREATE / UPDATE commands of an x2many value."""
-    nested: list[dict] = []
+    """Vals dicts an x2many value creates or updates records with.
+
+    CREATE / UPDATE commands carry them in third position. A bare dict is a record
+    too: ``convert_to_cache`` reads it as ``comodel.new(vals)``, and ``default_get``
+    sends every ``default_<field>`` context key through that path.
+    """
+    nested: list[dict] = [item for item in value if isinstance(item, dict)]
     for item in value:
         if not isinstance(item, list) or len(item) < 3 or not isinstance(item[2], dict):
             continue
@@ -448,8 +469,9 @@ def _forbidden_write_reason(model: str, field_name: str, comodel: str) -> str:
 
 def _schema_unavailable_reason(model: str, field_name: str) -> str:
     return (
-        f"Could not load the schema of '{model}' to verify the relational write on "
-        f"'{field_name}'. Refusing a relational write that cannot be checked."
+        f"Could not load the schema of '{model}' to check whether '{field_name}' is a "
+        f"relational field (a list, null or false value on an x2many changes linked "
+        f"records). Refusing a write that cannot be checked."
     )
 
 
@@ -465,14 +487,16 @@ def find_blocked_relational_write(
     Blocking a model by name is not enough: ``res.partner.user_ids`` is a One2many
     to ``res.users``, so ``[1, uid, {...}]`` on a partner edits a user. Nested vals
     are followed through allowed comodels. Only attaching or detaching existing
-    records on a many2many is let through. Fail-closed: a list value is refused
-    when the schema needed to tell what it targets is unavailable. The schema is
-    only fetched when a vals dict carries a list.
+    records on a many2many is let through. ``None``/``False`` are judged as the
+    ``[[5, 0, 0]]`` Odoo turns them into. Fail-closed: a value that could be an
+    x2many write is refused when the schema needed to tell what it targets is
+    unavailable. The schema is only fetched when a vals dict carries such a value.
     """
     fields: dict | None = None
     for vals in vals_list:
-        for field_name, value in vals.items():
-            if not isinstance(value, list):
+        for field_name, raw_value in vals.items():
+            value = _as_x2many_commands(raw_value)
+            if value is None:
                 continue
             if fields is None:
                 fields = fields_loader(model)

@@ -7,6 +7,7 @@ FastMCP instance: static URIs via ``@mcp.resource``, parameterized URIs via
 to the worker threadpool — see the decorator's docstring).
 """
 
+import contextvars
 import copy
 import functools
 import inspect
@@ -96,6 +97,29 @@ def _threaded_resource(uri: str, **resource_kwargs: Any) -> Callable[[_F], _F]:
         return fn
 
     return decorator
+
+
+# Parallel fields_get fetches for bundle / session-bootstrap: well within the
+# OdooClient session's 20-connection pool, so a concurrent execute_method keeps headroom.
+_SCHEMA_FETCH_WORKERS = 10
+
+_T = TypeVar("_T")
+_U = TypeVar("_U")
+
+
+def _map_in_caller_context(fn: Callable[[_U], _T], items: Sequence[_U]) -> list[_T]:
+    """``ThreadPoolExecutor.map`` that runs each call in a copy of the caller's context.
+
+    ``concurrent.futures`` does not copy contextvars (``anyio.to_thread`` does), and
+    the caller's access token lives in them: without the copy every worker resolved
+    the env client instead of the caller's own Odoo account. One copy per call,
+    because a Context cannot be entered by two threads at once.
+    """
+    if not items:
+        return []
+    with ThreadPoolExecutor(max_workers=min(len(items), _SCHEMA_FETCH_WORKERS)) as executor:
+        futures = [executor.submit(contextvars.copy_context().run, fn, item) for item in items]
+        return [future.result() for future in futures]
 
 
 # Hint appended to model-resolution errors so agents know where to look next.
@@ -373,12 +397,11 @@ def get_bundle(models_csv: str) -> str:
             return name, {"error": str(exc)}
 
     if model_names:
-        with ThreadPoolExecutor(max_workers=min(len(model_names), 10)) as executor:
-            for name, payload in executor.map(_fetch, model_names):
-                if isinstance(payload, dict) and "error" in payload and "fields" not in payload:
-                    bundle["errors"][name] = payload["error"]
-                else:
-                    bundle["models"][name] = payload
+        for name, payload in _map_in_caller_context(_fetch, model_names):
+            if isinstance(payload, dict) and "error" in payload and "fields" not in payload:
+                bundle["errors"][name] = payload["error"]
+            else:
+                bundle["models"][name] = payload
 
     bundle["total"] = len(bundle["models"])
     return json.dumps(bundle, separators=(",", ":"))
@@ -408,19 +431,19 @@ def get_session_bootstrap() -> str:
             schema = _build_compact_schema(fields)
             schema["field_count"] = len(schema["fields"])
             return name, schema
+        except PermissionError:
+            raise  # no caller identity: refuse the request, not one model
         except Exception as exc:
             return name, exc
 
-    # Schema fetches run in parallel (capped at 10 workers, well within the
-    # OdooClient session's 20-conn pool so a concurrent execute_method still
-    # has headroom). Workflows are read from the in-memory state-machine table.
+    # Schema fetches run in parallel, as the caller; workflows are read from the
+    # in-memory state-machine table.
     if model_names:
-        with ThreadPoolExecutor(max_workers=min(len(model_names), 10)) as executor:
-            for name, payload in executor.map(_fetch, model_names):
-                if isinstance(payload, Exception):
-                    result["errors"][name] = str(payload)
-                else:
-                    result["schemas"][name] = payload
+        for name, payload in _map_in_caller_context(_fetch, model_names):
+            if isinstance(payload, Exception):
+                result["errors"][name] = str(payload)
+            else:
+                result["schemas"][name] = payload
 
     for model_name in model_names:
         if model_name in MODEL_STATE_MACHINES:

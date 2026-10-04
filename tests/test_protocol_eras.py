@@ -34,8 +34,10 @@ def odoo(monkeypatch):
     stub.execute_method.side_effect = lambda model, method, *args, **kwargs: (
         FIELDS if method == "fields_get" else [{"id": 1, "name": "x"}]
     )
-    for module in ("odoo_mcp.server", "odoo_mcp.resources", "odoo_mcp.app"):
+    for module in ("odoo_mcp.server", "odoo_mcp.resources"):
         monkeypatch.setattr(f"{module}.get_odoo_client", lambda: stub)
+    # The lifespan validates the env client at startup, before any caller exists.
+    monkeypatch.setattr("odoo_mcp.app.get_env_client", lambda: stub)
     return stub
 
 

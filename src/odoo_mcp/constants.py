@@ -358,8 +358,10 @@ ERROR_CATEGORIES = {
 
 # ----- /doc-bearer/ Live Documentation Cache -----
 
-# Cache for /doc-bearer/ responses: {model_name: (timestamp, data)}
-_DOC_CACHE: Dict[str, tuple] = {}
+# Cache for /doc-bearer/<model>.json: {(url, username, model): (timestamp, data)}.
+# Odoo builds the document per caller (api_doc group, check_access('read'),
+# user-filtered fields_get), so the caller's identity is part of the key.
+_DOC_CACHE: Dict[tuple[Any, Any, str], tuple[float, dict]] = {}
 _DOC_CACHE_TTL = 300  # 5 minutes
 _DOC_CACHE_MAX_ENTRIES = 100
 _DOC_CACHE_LOCK = threading.Lock()

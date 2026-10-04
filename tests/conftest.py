@@ -18,6 +18,14 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 TEST_ENCRYPTION_KEY = "test-encryption-key"
 
+# Deployment switches the unit suite must never inherit from the developer's shell.
+# USERS_DB_PATH is read when ``odoo_mcp.app`` is first imported, which installs the
+# registry verifier for the whole process, so it is cleared here, before any test
+# module imports the package; ``_no_deployment_env`` repeats it per test.
+_DEPLOYMENT_ENV = ("USERS_DB_PATH", "MCP_TRANSPORT")
+for _name in _DEPLOYMENT_ENV:
+    os.environ.pop(_name, None)
+
 # Exact contract DDL — mirrors clorag core/user_db.py
 _REGISTRY_DDL = """
 CREATE TABLE users (
@@ -125,6 +133,15 @@ def users_db_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RegistrySe
     conn.commit()
     conn.close()
     return seed
+
+
+@pytest.fixture(autouse=True)
+def _no_deployment_env(monkeypatch):
+    """Multi-user mode is switched on by USERS_DB_PATH: a value exported in the developer's
+    shell (or pushed by a .env) must not turn every token-less unit test into a refusal.
+    Tests that need it set it themselves."""
+    for name in _DEPLOYMENT_ENV:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)

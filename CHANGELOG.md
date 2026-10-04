@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **The blocked-model guard now sees every value shape Odoo turns into x2many writes.**
+  - `null`/`false` on an x2many: Odoo reads both as `[Command.clear()]`, and on a
+    one2many whose inverse is `ondelete="cascade"` that deletes every line —
+    `ir.model` write `{"rule_ids": null}` deleted all record rules of a model after one
+    confirmation, while the explicit `[[5, 0, 0]]` was already refused. They are now
+    judged as that command (a many2many clear stays allowed, like any link-only
+    command). Odoo uses identity checks, so `0` and `""` are not a clear.
+  - A bare dict in an x2many list: `convert_to_cache` reads it as a new record and
+    `default_get` sends every `default_<field>` context key through it, so
+    `context={"default_child_ids": [{"user_ids": [[0, 0, {...}]]}]}` on a partner
+    `create` created a user. Bare dicts are now followed like CREATE commands.
+  - Because any `null`/`false` value may target an x2many, a payload carrying one now
+    needs the (cached) compact `fields_get`, and is refused when that schema cannot be
+    loaded — the guard's existing fail-closed rule.
+  - `tests/test_blocked_relational_writes.py` (`TestClearingAnX2manyWithNullOrFalse`,
+    `TestDictShorthandInX2manyLists`).
+- **Multi-user mode no longer falls back to the server's own Odoo account when the
+  caller's identity is missing.**
+  - `odoo://bundle` and `odoo://session-bootstrap` fetched schemas on a
+    `ThreadPoolExecutor`, which does not copy contextvars, so every registry user read
+    them as env-admin. The workers now run in a copy of the caller's context.
+  - With `USERS_DB_PATH`, a call without an access token raises `PermissionError`
+    instead of resolving role `None` (the privileged operator) on the env client. Only
+    a server the entry point started on STDIO — where nobody authenticates — serves
+    token-less calls as the operator. Both facts are recorded once at startup and never
+    re-read from the environment, which `load_config()` reloads from `.env` files:
+    `app._get_auth_provider` records the registry its verifier uses
+    (`user_clients.declare_registry_auth`), and that registry keeps serving credential
+    lookups even if `USERS_DB_PATH` changes later; `__main__.main` calls
+    `user_clients.declare_stdio_transport()` and then `mcp.run(transport="stdio")`
+    explicitly, since a bare `run()` takes `FASTMCP_TRANSPORT` and could serve HTTP.
+    `fastmcp run` and an ASGI server on `mcp.http_app()` stay closed.
+  - The env account is reserved to the static `MCP_API_KEY` identity, recognised by its
+    `auth` claim as well as its `env-admin` id: a registry user whose id reads
+    `env-admin` gets their own client.
+  - `tests/test_identity_fail_closed.py` drives registry keys through the real
+    `DbTokenVerifier` and `main()` through both transports.
+- **The `/doc-bearer` cache is keyed by caller.** Odoo builds `/doc-bearer/<model>.json`
+  per user (group, read access, user-filtered fields); the cache was keyed by model name
+  alone, so one user's document was served to another. A caller whose identity cannot be
+  resolved is now refused there too, instead of being answered from static data.
+  `tests/test_doc_cache.py`.
+
+### Changed
+- `odoo_client.get_env_client()` (was `_get_env_client`) is the env client accessor;
+  `app_lifespan` uses it, since no caller exists at startup.
+- The unit suite clears `USERS_DB_PATH` and `MCP_TRANSPORT` before the package is first
+  imported and again for every test (`tests/conftest.py`), so a value exported in the
+  developer's shell no longer changes the outcome.
+- `/doc-bearer` failures other than an unresolvable identity (a missing `ODOO_*`
+  config, the endpoint down) still fall back to static data.
+
 ## [2.1.0] - 2026-10-02
 
 ### Removed

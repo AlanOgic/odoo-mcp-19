@@ -14,15 +14,27 @@ import threading
 import time
 from dataclasses import dataclass
 
-from .auth_verifier import ENV_ADMIN_CLIENT_ID
+from fastmcp.server.auth import AccessToken
+
+from .auth_verifier import ENV_ADMIN_CLIENT_ID, STATIC_KEY_AUTH
 from .odoo_client import OdooClient
 from .token_crypto import decrypt_secret
-from .users_db import get_users_db
+from .users_db import UsersDb, get_users_db
 
 _TTL_SECONDS = 300.0
 
 _cache: dict[str, _Entry] = {}
 _cache_lock = threading.Lock()
+
+# Set once, by app._get_auth_provider, when it installs the registry verifier: the
+# registry that authenticates callers is the one their Odoo credentials are read from,
+# whatever the environment says later (load_config() reloads .env files at runtime).
+_registry: UsersDb | None = None
+
+# Set once, by the entry point, when it serves MCP over STDIO (``__main__.main``).
+# Every other start (HTTP through __main__, ``fastmcp run``, an ASGI server on
+# ``mcp.http_app()``) leaves it False: the fail-closed side.
+_serving_stdio = False
 
 
 @dataclass
@@ -32,7 +44,7 @@ class _Entry:
     checked_at: float
 
 
-def _safe_get_access_token():
+def _safe_get_access_token() -> AccessToken | None:
     """Current FastMCP access token, or None (stdio / no auth context)."""
     try:
         from fastmcp.server.dependencies import get_access_token
@@ -42,9 +54,66 @@ def _safe_get_access_token():
         return None
 
 
+def declare_registry_auth(users_db: UsersDb) -> None:
+    """Record the registry the installed token verifier authenticates against."""
+    global _registry
+    _registry = users_db
+
+
+def _active_registry() -> UsersDb | None:
+    """The registry installed at startup, else the one USERS_DB_PATH names now."""
+    return _registry if _registry is not None else get_users_db()
+
+
+def declare_stdio_transport() -> None:
+    """Record that this process serves STDIO, where no caller authenticates.
+
+    Called by the entry point right before ``mcp.run()``; never reset. Taken at
+    startup rather than read from ``MCP_TRANSPORT`` so that no environment change
+    (``load_config()`` reloads ``.env`` files) can reopen the check later.
+    """
+    global _serving_stdio
+    _serving_stdio = True
+
+
+def _registry_auth_enforced() -> bool:
+    """True when callers authenticate against the registry: USERS_DB_PATH, not STDIO.
+
+    There a missing access token means the caller's context was lost (a worker
+    thread that did not inherit contextvars, a background task whose snapshot was
+    not restored), never that the operator is calling.
+    """
+    return _active_registry() is not None and not _serving_stdio
+
+
+def _is_static_key_identity(token: AccessToken) -> bool:
+    """The static MCP_API_KEY identity: the only caller that runs on the env account.
+
+    Recognised by its ``auth`` claim too, so a registry user whose id happens to
+    read ``env-admin`` still gets their own client.
+    """
+    return bool(token.client_id == ENV_ADMIN_CLIENT_ID and token.claims.get("auth") == STATIC_KEY_AUTH)
+
+
+def _caller_token() -> AccessToken | None:
+    """Access token of the current caller; None only where no authentication exists.
+
+    Raises:
+        PermissionError: Registry mode without a token. A lost identity must fail
+            closed instead of becoming role None (the privileged operator) on the
+            env-configured Odoo account.
+    """
+    token = _safe_get_access_token()
+    if token is None and _registry_auth_enforced():
+        raise PermissionError(
+            "No authenticated caller for this request: refusing to fall back to the server's own Odoo account."
+        )
+    return token
+
+
 def current_role() -> str | None:
     """Role claim of the current caller, or None outside multi-user HTTP."""
-    token = _safe_get_access_token()
+    token = _caller_token()
     if token is None:
         return None
     return token.claims.get("role")
@@ -58,12 +127,13 @@ def get_client_for_current_user() -> OdooClient | None:
 
     Raises:
         PermissionError: Authenticated registry user without stored Odoo
-            credentials — actionable message for the caller.
+            credentials — actionable message for the caller — or no caller at
+            all in registry mode (see ``_caller_token``).
     """
-    token = _safe_get_access_token()
-    if token is None or token.client_id == ENV_ADMIN_CLIENT_ID:
+    token = _caller_token()
+    if token is None or _is_static_key_identity(token):
         return None
-    db = get_users_db()
+    db = _active_registry()
     if db is None:
         return None
 
