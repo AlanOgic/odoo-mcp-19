@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-10-04
+
 ### Security
 - **The blocked-model guard now sees every value shape Odoo turns into x2many writes.**
   - `null`/`false` on an x2many: Odoo reads both as `[Command.clear()]`, and on a
