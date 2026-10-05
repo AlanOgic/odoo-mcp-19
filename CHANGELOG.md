@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-05
+
 ### Removed
 - **The `execute_workflow` tool** (tools 4 → 3). Its two hard-coded workflows were wrong
   against Odoo 19 JSON-2:
