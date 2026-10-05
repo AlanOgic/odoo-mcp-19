@@ -60,7 +60,6 @@ async def run_tests():
         audit_log,
         classify_batch,
         classify_operation,
-        classify_workflow,
     )
 
     passed = 0
@@ -158,29 +157,15 @@ async def run_tests():
     print(f"  overall_risk={overall.value}")
     check("overall risk is BLOCKED", overall == RiskLevel.BLOCKED)
 
-    # ---- Test 9: Workflow classification ----
-    header("TEST 9: create_and_post_invoice workflow → preview with HIGH risk")
-    preview = classify_workflow("create_and_post_invoice")
-    print(f"  overall_risk={preview.overall_risk.value}, steps={len(preview.steps)}")
-    for step in preview.steps:
-        print(f"    {step.step}: {step.risk_level.value} | {step.cascade_warning or '-'}")
-    check("overall risk is HIGH", preview.overall_risk == RiskLevel.HIGH)
-    check("2 steps", len(preview.steps) == 2)
-
-    # ---- Test 10: Unknown workflow ----
-    header("TEST 10: Unknown workflow → None")
-    preview = classify_workflow("does_not_exist")
-    check("returns None", preview is None)
-
-    # ---- Test 11: Audit log output ----
-    header("TEST 11: Audit log to stderr")
+    # ---- Test 9: Audit log output ----
+    header("TEST 9: Audit log to stderr")
     c = classify_operation("res.partner", "unlink", [[1, 2, 3]])
     audit_log(c, confirmed=True, executed=True)
     print("  (check stderr above for [SAFETY AUDIT] JSON entry)")
     check("audit_log did not raise", True)
 
-    # ---- Test 12: Confirmed unlink actually executes (on non-existent record) ----
-    header("TEST 12: Confirmed unlink on non-existent partner (999999)")
+    # ---- Test 10: Confirmed unlink actually executes (on non-existent record) ----
+    header("TEST 10: Confirmed unlink on non-existent partner (999999)")
     c = classify_operation("res.partner", "unlink", [[999999]])
     check("classified as HIGH", c.risk_level == RiskLevel.HIGH)
     # With confirmed=True, it should attempt the call (which will likely succeed or give MissingError)

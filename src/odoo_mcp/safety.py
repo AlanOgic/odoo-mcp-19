@@ -274,26 +274,6 @@ class SafetyClassification(BaseModel):
     blocked_reason: str | None = Field(default=None, description="Reason when operation is blocked")
 
 
-class WorkflowStepClassification(BaseModel):
-    """Classification for a single workflow step."""
-
-    step: str = Field(description="Step name")
-    model: str = Field(description="Model involved")
-    method: str = Field(description="Method called")
-    risk_level: RiskLevel = Field(description="Risk level for this step")
-    cascade_warning: str | None = Field(default=None)
-
-
-class WorkflowSafetyPreview(BaseModel):
-    """Safety preview for a complete workflow."""
-
-    pending_confirmation: bool = Field(default=True)
-    workflow: str = Field(description="Workflow name")
-    steps: list[WorkflowStepClassification] = Field(description="Classification for each step")
-    overall_risk: RiskLevel = Field(description="Highest risk across all steps")
-    message: str = Field(description="User-facing summary")
-
-
 _RISK_ORDER: dict[RiskLevel, int] = {
     RiskLevel.SAFE: 0,
     RiskLevel.MEDIUM: 1,
@@ -831,91 +811,6 @@ def classify_batch(
             any_needs_confirmation = True
 
     return classifications, overall_risk, any_needs_confirmation
-
-
-# ----- Workflow Classification -----
-
-# Canonical step lists (defined once, aliased below)
-_LEAD_TO_WON_STEPS: list[tuple[str, str, str]] = [
-    ("convert_to_opportunity", "crm.lead", "convert_opportunity"),
-    ("mark_won", "crm.lead", "action_set_won"),
-]
-
-_CREATE_AND_POST_INVOICE_STEPS: list[tuple[str, str, str]] = [
-    ("create_invoice", "account.move", "create"),
-    ("post_invoice", "account.move", "action_post"),
-]
-
-_STOCK_TRANSFER_STEPS: list[tuple[str, str, str]] = [
-    ("confirm_transfer", "stock.picking", "action_confirm"),
-    ("validate_transfer", "stock.picking", "button_validate"),
-]
-
-# Maps workflow name → list of (step_name, model, method)
-_WORKFLOW_STEPS: dict[str, list[tuple[str, str, str]]] = {
-    "lead_to_won": _LEAD_TO_WON_STEPS,
-    "crm_workflow": _LEAD_TO_WON_STEPS,
-    "opportunity_won": _LEAD_TO_WON_STEPS,
-    "create_and_post_invoice": _CREATE_AND_POST_INVOICE_STEPS,
-    "quick_invoice": _CREATE_AND_POST_INVOICE_STEPS,
-    "stock_transfer": _STOCK_TRANSFER_STEPS,
-}
-
-
-def classify_workflow(
-    workflow: str,
-    params: dict | None = None,
-    role: str | None = None,
-) -> WorkflowSafetyPreview | None:
-    """
-    Classify a workflow by its name.
-
-    Returns None for unknown workflows (let the caller handle them).
-    """
-    workflow_lower = workflow.lower().strip()
-    steps_def = _WORKFLOW_STEPS.get(workflow_lower)
-
-    if steps_def is None:
-        return None
-
-    step_classifications = []
-    overall_risk = RiskLevel.SAFE
-
-    for step_name, model, method in steps_def:
-        classification = classify_operation(model, method, role=role)
-        cascade_warning = CASCADE_WARNINGS.get((model, method))
-
-        step_cls = WorkflowStepClassification(
-            step=step_name,
-            model=model,
-            method=method,
-            risk_level=classification.risk_level,
-            cascade_warning=cascade_warning,
-        )
-        step_classifications.append(step_cls)
-
-        if _RISK_ORDER[classification.risk_level] > _RISK_ORDER[overall_risk]:
-            overall_risk = classification.risk_level
-
-    # Build human-readable message
-    high_steps = [s for s in step_classifications if s.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED)]
-    warnings = [s.cascade_warning for s in step_classifications if s.cascade_warning]
-
-    message_parts = [
-        f"Workflow '{workflow}' contains {len(step_classifications)} steps "
-        f"with overall risk level: {overall_risk.value}."
-    ]
-    if high_steps:
-        message_parts.append(f"High-risk steps: {', '.join(s.step for s in high_steps)}.")
-    if warnings:
-        message_parts.append("Side effects: " + " | ".join(warnings))
-
-    return WorkflowSafetyPreview(
-        workflow=workflow,
-        steps=step_classifications,
-        overall_risk=overall_risk,
-        message=" ".join(message_parts),
-    )
 
 
 # ----- Audit Logger -----

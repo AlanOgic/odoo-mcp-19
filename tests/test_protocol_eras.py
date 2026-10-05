@@ -18,7 +18,7 @@ from odoo_mcp.app import mcp
 
 MODERN = "2026-07-28"
 LEGACY = "2025-11-25"
-TOOLS = {"execute_method", "batch_execute", "execute_workflow", "read_resource"}
+TOOLS = {"execute_method", "batch_execute", "read_resource"}
 FIELDS = {"name": {"type": "char", "string": "Name"}}
 
 

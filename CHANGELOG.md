@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-05
+
+### Removed
+- **The `execute_workflow` tool** (tools 4 → 3). Its two hard-coded workflows were wrong
+  against Odoo 19 JSON-2:
+  - `lead_to_won` sent `partner_id` to `crm.lead.convert_opportunity`, whose parameter is
+    `partner`, and still ran `action_set_won` when the conversion failed.
+  - `create_and_post_invoice` read `create`'s `[id]` result as an int, so `action_post`
+    received `[[id]]` and the response failed validation, losing the draft invoice id. Its
+    description also asked for `invoice_lines` while the runner read `lines`.
+
+  Multi-step work is `batch_execute` (each operation classified, one confirmation for the
+  whole list) or successive `execute_method` calls. Gone with it: `safety.classify_workflow`
+  and `_WORKFLOW_STEPS` (including a `stock_transfer` entry that never had a runner), the
+  workflow response models and their tests. `odoo://model/{model}/workflow` and
+  `odoo://workflows`, which describe Odoo's own state machines and business processes, are
+  unchanged; `odoo://tools/{query}` and `odoo://tool-registry` now point at
+  `execute_method` / `batch_execute`. A client still calling `execute_workflow` gets an
+  unknown-tool error. `tests/test_tool_surface.py` pins the three-tool surface.
+
+### Changed
+- The `execute_method` and `batch_execute` descriptions state the whole confirmation
+  protocol: the re-call needs `confirmed=true` **and** the `confirmation_token` from the
+  gate response. `batch_execute` also says that `atomic=True` stops at the first failure
+  without rolling back.
+- `odoo://tools/{query}` and `odoo://tool-registry` say how to use an entry: those with a
+  `method` map to `execute_method`, the others are recipes to compose.
+
+### Tests
+- `tests/test_batch_gate.py` drives `batch_execute`'s confirmation gate through the tool —
+  blocked operations get no token, a token is bound to the exact operations list and is
+  single-use, a role change cannot reuse one, the confirmed re-call runs every operation.
+  The removed workflow tests were the only tool-level tests of that gate.
+
 ## [2.1.1] - 2026-10-04
 
 ### Security

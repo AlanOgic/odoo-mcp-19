@@ -44,9 +44,7 @@ from .models import (
     BatchExecuteResponse,
     BatchOperationResult,
     ExecuteMethodResponse,
-    ExecuteWorkflowResponse,
     IssueAnalysis,
-    WorkflowStepResult,
 )
 from .odoo_client import get_odoo_client
 from .safety import (
@@ -56,7 +54,6 @@ from .safety import (
     audit_log,
     classify_batch,
     classify_operation,
-    classify_workflow,
     is_side_effect_method,
 )
 from .safety_profile import get_profile
@@ -76,7 +73,7 @@ _T = TypeVar("_T")
 async def _run_blocking(fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
     """Run a synchronous OdooClient call in the anyio worker threadpool.
 
-    ``batch_execute`` and ``execute_workflow`` are ``async def`` (they report
+    ``batch_execute`` is ``async def`` (it reports
     progress), but ``OdooClient`` is built on synchronous ``requests``. Calling
     it inline would block the event loop for the whole round-trip — in HTTP
     multi-user mode a 100-op batch would freeze every session for 100 × RTT.
@@ -184,8 +181,8 @@ def _confirmation_gate(
 
     ``payload`` is the exact operation content the token must be bound to —
     post-resolve args/kwargs for ``execute_method``, the operations list for
-    ``batch_execute``, the params dict for ``execute_workflow``. Its digest is
-    what stops a re-call from substituting arguments after the gate was shown.
+    ``batch_execute``. Its digest is what stops a re-call from substituting
+    arguments after the gate was shown.
     """
     digest = _payload_digest(payload)
     if not confirmed:
@@ -530,7 +527,7 @@ def _failure_response(model: str, method: str, error_msg: str, start_time: float
     )
 
 
-# ----- MCP Tools (execute_method, batch_execute, execute_workflow, read_resource) -----
+# ----- MCP Tools (execute_method, batch_execute, read_resource) -----
 
 # Icon list for tools (reusable)
 _tool_icons = [ODOO_ICON] if ODOO_ICON else None
@@ -589,8 +586,10 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
     - odoo://docs/{target} - Documentation URLs
     - odoo://module-knowledge/{name} - Module-specific methods
 
-    SAFETY: Dangerous operations return pending_confirmation=true.
-    Add confirmed=true to proceed after reviewing the classification.
+    SAFETY: Dangerous operations return pending_confirmation=true with a single-use
+    confirmation_token in the hint. After reviewing the classification, re-call with the
+    identical arguments plus confirmed=true and that confirmation_token; confirmed=true
+    alone is refused.
     """,
     annotations={
         "title": "Execute Odoo Method",
@@ -834,8 +833,13 @@ async def _run_batch_operation(odoo: Any, idx: int, op: Dict[str, Any]) -> Batch
 @mcp.tool(
     description="""Execute multiple Odoo operations in a batch with progress tracking.
 
-    SAFETY: Dangerous operations return pending_confirmation=true.
-    Add confirmed=true to proceed after reviewing the safety preview.""",
+    SAFETY: Dangerous operations return pending_confirmation=true with a single-use
+    confirmation_token in the error message, bound to the whole operations list. After
+    reviewing the safety preview, re-call with the identical operations plus
+    confirmed=true and that confirmation_token; confirmed=true alone is refused.
+
+    atomic=True stops at the first failure; it does not roll back. Each operation is a
+    separate request, so operations that completed stay committed.""",
     annotations={
         "title": "Batch Execute",
         "readOnlyHint": False,
@@ -908,284 +912,6 @@ async def batch_execute(
         )
     except Exception as e:
         return _batch_response(operations, results, start_time, success=False, error=str(e))
-
-
-# ----- execute_workflow runners -----
-
-_AVAILABLE_WORKFLOWS = [
-    "lead_to_won - Convert lead and mark as won",
-    "create_and_post_invoice - Create and post a customer invoice",
-]
-
-
-def _workflow_response(
-    workflow: str, steps: List[WorkflowStepResult], start_time: float, **extra: Any
-) -> ExecuteWorkflowResponse:
-    """Build an ``ExecuteWorkflowResponse``; ``success`` defaults to "every step ok or skipped"."""
-    return ExecuteWorkflowResponse(
-        workflow=workflow,
-        success=extra.pop("success", all(s.success or s.skipped for s in steps)),
-        steps=steps,
-        execution_time_ms=_elapsed_ms(start_time),
-        **extra,
-    )
-
-
-def _workflow_safety_gate(
-    workflow: str, params: dict, confirmed: bool, confirmation_token: str | None, start_time: float
-) -> ExecuteWorkflowResponse | None:
-    """Classify the workflow's steps and run the confirmation gate for known workflows."""
-    safety_preview = classify_workflow(workflow, params, role=current_role())
-    if safety_preview is None:
-        return None
-    step_preview = [
-        SafetyClassification(
-            risk_level=step.risk_level,
-            model=step.model,
-            method=step.method,
-            record_count=None,
-            requires_confirmation=step.risk_level in (RiskLevel.HIGH, RiskLevel.BLOCKED),
-            reason=f"Step '{step.step}': {step.risk_level.value} risk",
-            cascade_warning=step.cascade_warning,
-        )
-        for step in safety_preview.steps
-    ]
-    # A BLOCKED step (readonly role, write allowlist, blocked model) is a refusal, not
-    # something to confirm: checked on every call, before a token is issued or consumed.
-    blocked = [c for c in step_preview if c.risk_level == RiskLevel.BLOCKED]
-    if blocked:
-        for c in blocked:
-            audit_log(c, confirmed=confirmed, executed=False)
-        blocked_steps = ", ".join(f"{c.model}.{c.method}" for c in blocked)
-        return _workflow_response(
-            workflow,
-            [],
-            start_time,
-            success=False,
-            safety_preview=step_preview,
-            overall_risk=safety_preview.overall_risk.value,
-            error=f"Workflow '{workflow}' contains blocked steps: {blocked_steps}. It cannot be run.",
-        )
-    # Bind the token to (workflow_name, params). A different order_id or partner_id
-    # on the re-call produces a different digest and is rejected.
-    decision = _confirmation_gate("__workflow__", workflow.lower().strip(), params, confirmed, confirmation_token)
-    if decision.outcome == "issue":
-        return _workflow_response(
-            workflow,
-            [],
-            start_time,
-            success=False,
-            pending_confirmation=True,
-            safety_preview=step_preview,
-            overall_risk=safety_preview.overall_risk.value,
-            error=safety_preview.message,
-            tip=(
-                f"Re-call execute_workflow with confirmed=true and "
-                f"confirmation_token='{decision.token}' to proceed."
-            ),
-        )
-    if decision.outcome == "reject":
-        return _workflow_response(workflow, [], start_time, success=False, error=decision.error)
-    return None
-
-
-async def _attempt_step(step: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> WorkflowStepResult:
-    """Run one blocking Odoo call as a workflow step; failures become a failed step, not an exception."""
-    try:
-        result = await _run_blocking(fn, *args, **kwargs)
-        return WorkflowStepResult(step=step, success=True, result=result)
-    except Exception as e:
-        return WorkflowStepResult(step=step, success=False, error=str(e))
-
-
-async def _convert_lead_step(odoo: Any, lead_id: Any, partner_id: Any) -> WorkflowStepResult:
-    """Convert the lead to an opportunity, or skip when it already is one."""
-    try:
-        lead = await _run_blocking(odoo.search_read, "crm.lead", [["id", "=", lead_id]], fields=["type"], limit=1)
-    except Exception as e:
-        return WorkflowStepResult(step="convert_to_opportunity", success=False, error=str(e))
-    if not (lead and lead[0].get("type") == "lead"):
-        return WorkflowStepResult(
-            step="convert_to_opportunity", success=True, skipped=True, reason="Already an opportunity"
-        )
-    outcome = await _attempt_step(
-        "convert_to_opportunity",
-        odoo.execute_method,
-        "crm.lead",
-        "convert_opportunity",
-        [lead_id],
-        partner_id=partner_id,
-    )
-    return outcome.model_copy(update={"result": None})
-
-
-async def _run_lead_to_won(
-    odoo: Any, workflow: str, params: dict, progress: Progress, start_time: float
-) -> ExecuteWorkflowResponse:
-    lead_id = params.get("lead_id")
-    if not lead_id:
-        return _workflow_response(
-            workflow, [], start_time, success=False, error="lead_id required for lead_to_won workflow"
-        )
-
-    await progress.set_total(2)
-    await progress.set_message("Converting lead to opportunity...")
-    convert = await _convert_lead_step(odoo, lead_id, params.get("partner_id", False))
-    await progress.increment()
-
-    await progress.set_message("Marking opportunity as won...")
-    won = await _attempt_step("mark_won", odoo.execute_method, "crm.lead", "action_set_won", [lead_id])
-    await progress.increment()
-
-    return _workflow_response(workflow, [convert, won.model_copy(update={"result": None})], start_time)
-
-
-def _build_invoice_lines(lines: List[dict]) -> List[tuple]:
-    """Map the workflow's line dicts to One2many ``(0, 0, vals)`` create commands."""
-    return [
-        (
-            0,
-            0,
-            {
-                "product_id": line.get("product_id"),
-                "quantity": line.get("quantity", 1),
-                "price_unit": line.get("price_unit"),
-                "name": line.get("name", "Product"),
-            },
-        )
-        for line in lines
-    ]
-
-
-async def _run_create_and_post_invoice(
-    odoo: Any, workflow: str, params: dict, progress: Progress, start_time: float
-) -> ExecuteWorkflowResponse:
-    partner_id = params.get("partner_id")
-    lines = params.get("lines", [])
-    if not partner_id:
-        return _workflow_response(workflow, [], start_time, success=False, error="partner_id required")
-    if not lines:
-        return _workflow_response(
-            workflow, [], start_time, success=False, error="lines required (list of {product_id, quantity, price_unit})"
-        )
-
-    await progress.set_total(2)
-    await progress.set_message("Creating invoice...")
-    invoice_vals = {
-        "move_type": "out_invoice",
-        "partner_id": partner_id,
-        "invoice_line_ids": _build_invoice_lines(lines),
-    }
-    created = await _attempt_step("create_invoice", odoo.execute_method, "account.move", "create", [invoice_vals])
-    if not created.success:
-        return _workflow_response(workflow, [created], start_time, success=False)
-    invoice_id = created.result
-    steps = [created.model_copy(update={"result": {"invoice_id": invoice_id}})]
-    await progress.increment()
-
-    await progress.set_message("Posting invoice...")
-    if params.get("post", True):
-        posted = await _attempt_step("post_invoice", odoo.execute_method, "account.move", "action_post", [invoice_id])
-        steps = [*steps, posted.model_copy(update={"result": None})]
-    await progress.increment()
-
-    return _workflow_response(workflow, steps, start_time, invoice_id=invoice_id)
-
-
-_WORKFLOW_RUNNERS: Dict[str, Callable[..., Any]] = {
-    "lead_to_won": _run_lead_to_won,
-    "crm_workflow": _run_lead_to_won,
-    "opportunity_won": _run_lead_to_won,
-    "create_and_post_invoice": _run_create_and_post_invoice,
-    "quick_invoice": _run_create_and_post_invoice,
-}
-
-
-@mcp.tool(
-    description="""Execute a multi-step workflow in a single call with progress tracking.
-
-    Combines several operations into one call, which costs far fewer tokens than
-    driving the same steps with individual execute_method calls.
-
-    Supported workflows:
-    - lead_to_won (aliases: crm_workflow, opportunity_won)
-      Convert a lead to an opportunity -> mark it won. Requires lead_id.
-    - create_and_post_invoice (alias: quick_invoice)
-      Create a customer invoice -> post it. Requires partner_id and invoice_lines.
-
-    Any other name returns "Unknown workflow" with the list above — describe the
-    steps you need with execute_method or batch_execute instead.
-
-    SAFETY: Workflows with dangerous steps return pending_confirmation=true with a
-    single-use confirmation_token. Re-call with confirmed=true AND that token.
-    """,
-    annotations={
-        "title": "Execute Workflow",
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": True,
-    },
-    icons=_tool_icons,
-    task=True,  # Enable background task execution with progress
-)
-async def execute_workflow(
-    workflow: str,
-    params_json: str | None = None,
-    confirmed: bool = False,
-    confirmation_token: str | None = None,
-    progress: Progress = Progress(),
-) -> ExecuteWorkflowResponse:
-    """
-    Execute a multi-step workflow with progress tracking.
-
-    Parameters:
-        workflow: Workflow name or description
-        params_json: JSON object with workflow parameters
-        confirmed: Set to true to bypass safety confirmation
-
-    Returns:
-        Results from each step of the workflow
-    """
-    start_time = time.time()
-
-    # Read-only kill-switch — workflows are by definition multi-step actions.
-    if get_profile().read_only:
-        return _workflow_response(
-            workflow,
-            [],
-            start_time,
-            success=False,
-            error=_read_only_error(f"workflow '{workflow}' is a multi-step action"),
-        )
-
-    # Get Odoo client directly (works in both sync and background task modes)
-    odoo = get_odoo_client()
-
-    try:
-        params = json.loads(params_json) if params_json else {}
-    except json.JSONDecodeError as e:
-        return _workflow_response(workflow, [], start_time, success=False, error=f"Invalid params_json: {e}")
-
-    gated = _workflow_safety_gate(workflow, params, confirmed, confirmation_token, start_time)
-    if gated:
-        return gated
-
-    runner = _WORKFLOW_RUNNERS.get(workflow.lower().strip())
-    if runner is None:
-        return _workflow_response(
-            workflow,
-            [],
-            start_time,
-            success=False,
-            error=f"Unknown workflow: {workflow}",
-            available_workflows=_AVAILABLE_WORKFLOWS,
-            tip="Read odoo://tools/{query} to find available operations",
-        )
-    try:
-        return await runner(odoo, workflow, params, progress, start_time)
-    except Exception as e:
-        return _workflow_response(workflow, [], start_time, success=False, error=str(e))
 
 
 # ----- URI Routing for read_resource tool -----

@@ -12,8 +12,8 @@ FastMCP 3.x dispatches handlers three different ways:
   ``OdooClient`` block the loop for the whole call.
 
 The fixes register every parameterized resource as an ``async`` wrapper that
-offloads the sync body, and route the Odoo calls inside ``batch_execute`` /
-``execute_workflow`` through ``anyio.to_thread``. These tests fail loudly if a
+offloads the sync body, and route the Odoo calls inside ``batch_execute``
+through ``anyio.to_thread``. These tests fail loudly if a
 future resource or tool regresses to loop-blocking dispatch.
 
 No live Odoo: ``get_odoo_client`` is patched with a stub that records the
@@ -23,12 +23,10 @@ thread it was called from.
 import asyncio
 import inspect
 import json
-import re
 import threading
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastmcp import Client
 
 import odoo_mcp.app as app
@@ -71,12 +69,6 @@ def _stubbed(stub):
         patch.object(app, "get_env_client", return_value=stub),
     ):
         yield
-
-
-def _token_from(text: str) -> str:
-    match = re.search(r"confirmation_token='([^']+)'", text or "")
-    assert match, f"no confirmation token in: {text!r}"
-    return match.group(1)
 
 
 # ----- template resources -----
@@ -151,40 +143,6 @@ def test_batch_execute_runs_odoo_calls_off_loop_thread(monkeypatch):
     assert all(tid != loop_thread for tid in record["execute_method"])
 
 
-def test_execute_workflow_runs_odoo_calls_off_loop_thread(monkeypatch):
-    monkeypatch.delenv("MCP_READ_ONLY", raising=False)
-    monkeypatch.setenv("MCP_SAFETY_MODE", "strict")
-    record: dict = {}
-    stub = _recording_client(
-        record,
-        search_read=[{"id": 7, "type": "opportunity"}],
-        execute_method=True,
-    )
-
-    async def _run():
-        first = await server.execute_workflow(
-            workflow="lead_to_won", params_json='{"lead_id": 7}', progress=AsyncMock()
-        )
-        if first.pending_confirmation:
-            first = await server.execute_workflow(
-                workflow="lead_to_won",
-                params_json='{"lead_id": 7}',
-                confirmed=True,
-                confirmation_token=_token_from(first.tip),
-                progress=AsyncMock(),
-            )
-        return threading.get_ident(), first
-
-    with patch.object(server, "get_odoo_client", return_value=stub):
-        loop_thread, response = asyncio.run(_run())
-
-    assert response.success is True, response.error
-    called = record.get("search_read", []) + record.get("execute_method", [])
-    assert called, "workflow made no Odoo call"
-    assert all(tid != loop_thread for tid in called)
-
-
-@pytest.mark.parametrize("tool", [server.batch_execute, server.execute_workflow])
-def test_async_tools_stay_async(tool):
-    """Guard against 'fixing' the blocking by turning the task tools sync."""
-    assert inspect.iscoroutinefunction(tool)
+def test_batch_execute_stays_async():
+    """Guard against 'fixing' the blocking by turning the task tool sync."""
+    assert inspect.iscoroutinefunction(server.batch_execute)

@@ -68,38 +68,3 @@ class BatchExecuteResponse(BaseModel):
         default=None, description="Safety classifications for each operation"
     )
     overall_risk: Optional[str] = Field(default=None, description="Overall risk level across all operations")
-
-
-class WorkflowStepResult(BaseModel):
-    """Result of a single workflow step."""
-
-    step: str = Field(description="Name of the workflow step")
-    success: bool = Field(description="Whether this step succeeded")
-    skipped: bool = Field(default=False, description="Whether this step was skipped")
-    reason: Optional[str] = Field(default=None, description="Reason for skipping or failure")
-    error: Optional[str] = Field(default=None, description="Error message if failed")
-    result: Optional[Any] = Field(default=None, description="Step result data")
-
-
-class ExecuteWorkflowResponse(BaseModel):
-    """Response model for execute_workflow tool with structured output."""
-
-    workflow: str = Field(description="Name of the executed workflow")
-    success: bool = Field(description="Whether the workflow completed successfully")
-    steps: List[WorkflowStepResult] = Field(default_factory=list, description="Results for each workflow step")
-    error: Optional[str] = Field(default=None, description="Error message if failed")
-    available_workflows: Optional[List[str]] = Field(
-        default=None, description="Available workflows if unknown workflow requested"
-    )
-    tip: Optional[str] = Field(default=None, description="Helpful tip for using workflows")
-    # Additional result fields for specific workflows
-    invoice_id: Optional[int] = Field(default=None, description="Created invoice ID (for invoice workflows)")
-    invoice_ids: Optional[List[int]] = Field(default=None, description="Created invoice IDs (for order workflows)")
-    execution_time_ms: Optional[float] = Field(default=None, description="Total execution time in milliseconds")
-    pending_confirmation: bool = Field(
-        default=False, description="Whether the workflow requires confirmation before execution"
-    )
-    safety_preview: Optional[List[SafetyClassification]] = Field(
-        default=None, description="Safety classifications for each workflow step"
-    )
-    overall_risk: Optional[str] = Field(default=None, description="Overall risk level across all workflow steps")
