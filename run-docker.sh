@@ -9,6 +9,10 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
   set +a
 fi
 
+# Force STDIO: this wrapper is launched by MCP clients (Claude Desktop / Claude Code)
+# that speak over stdin/stdout. .env may set MCP_TRANSPORT=streamable-http for
+# docker compose; that would start an unreachable HTTP listener and hang the client.
 docker run --rm -i \
   --env-file "$SCRIPT_DIR/.env" \
+  -e MCP_TRANSPORT=stdio \
   odoo-mcp-19:latest
