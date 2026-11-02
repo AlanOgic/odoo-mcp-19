@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **odoo-mcp-19** — Standalone MCP server for Odoo 19+ using the **v2 JSON-2 API** (`POST /json/2/{model}/{method}`, Bearer token auth, named args only). No v1 fallback.
 
-- **Version**: 2.2.0 · **Python**: 3.10+ · **MCP**: 2026-07-28 *and* 2025-11-25, negotiated per connection (FastMCP `>=4.0.10,<5`, MCP SDK v2; `cryptography>=42` is a *direct* dependency of `token_crypto`, not just a transitive Authlib one; `anyio>=4` is a direct dependency of the event-loop offload in `server.py` / `resources.py`)
+- **Version**: 2.2.0 · **Python**: 3.10+ · **MCP**: 2026-07-28 *and* 2025-11-25, negotiated per connection (FastMCP `>=4.1.5,<5`, MCP SDK v2; `cryptography>=42` is a *direct* dependency of `token_crypto`, not just a transitive Authlib one; `anyio>=4` is a direct dependency of the event-loop offload in `server.py` / `resources.py`)
 - **One deployment, two protocol eras.** FastMCP 4 answers the sessionless `2026-07-28` protocol and the session-based `2025-11-25` handshake from the same process; `tests/test_protocol_eras.py` drives the real app in both and must stay green. Nothing may rely on a session: no `ctx.set_state`, no `on_initialize` middleware, no server-initiated request (`ctx.elicit`, sampling, roots — they do not exist on a modern connection). **The `<5` ceiling is deliberate**: a FastMCP major is not a drop-in (3 → 4 removed a tool and moved the wire types and the task engine) — see `docs/mcp-2026-07-28-migration.md` and `tests/test_dependency_pins.py`, which fails the build if the bound is widened or the environment drifts. **`uv.lock` is gitignored** (`.gitignore`: *"project uses pip + pyproject.toml"*) — it pins only your local `.venv`, never the documented `pip install git+…` path, so `pyproject.toml` is the only thing between a fresh install and the next major. Do not relax the ceiling on the strength of the lockfile.
 - **Surface**: 3 tools (`execute_method`, `batch_execute`, `read_resource`), 38 `odoo://` resources, 12 generic prompts. **`execute_workflow` is gone** (since v2.2.0): its two hard-coded workflows were wrong against JSON-2 (`lead_to_won` sent `partner_id` to `convert_opportunity`, whose parameter is `partner`, and marked the lead won anyway; `create_and_post_invoice` treated `create`'s `[id]` result as an int), and multi-step work is `batch_execute` (one gate for the whole operations list) or successive `execute_method` calls. `tests/test_tool_surface.py` pins the tool set and scans the shipped package for the old name; `tests/test_batch_gate.py` drives the batch confirmation gate through the tool. **No Cyanview skill is served here** (since v2.1.0): the `cyanview-*` workflows live exclusively in the private skills repository `~/ddev/cyanview-skills` and are installed client side (plugin / local skills). `tests/test_prompt_surface.py` fails if a `cyanview-*` prompt, a packaged `skills/` dir or the old skill modules come back.
-- **Discovery is via resources, action is via tools** — there is no `list_models` tool, agents read `odoo://models` instead.
+- **Discovery is via resources, action is via tools** — there is no `list_models` tool, agents read `odoo://models` instead. `odoo://templates` lists every resource.
 - **Two deployment shapes**: single-user (STDIO or HTTP with one static `MCP_API_KEY`) and **multi-user HTTP** (per-user `cv_odoo_…` keys from the CLORAG-managed registry, personal Odoo clients — see "Multi-user mode" below).
 
 ## Development commands
@@ -36,9 +36,10 @@ python -m odoo_mcp --setup
 # Tests — unit (no Odoo needed)
 uv run pytest tests/ --ignore=tests/live
 uv run pytest tests/test_safety.py::TestClassifyOperation::test_safe_methods_are_safe   # single test
-# Note: bare `pytest tests/` collects NO live tests (they are __main__-guarded scripts with no test_* functions),
-# but it does *import* them, and their module-level load_dotenv() pushes real .env credentials into os.environ
-# for the whole session. Always --ignore=tests/live.
+# Note: bare `pytest tests/` imports all three live modules, whose module-level load_dotenv() pushes real .env
+# credentials into os.environ for the whole session, and it runs the 5 test_* functions in test_locked_mode_live.py
+# (real reads against the configured Odoo, MCP_* env left mutated; the other two files are __main__-guarded).
+# Always --ignore=tests/live.
 
 # Tests — live (requires .env with real Odoo creds; script-style runners)
 python tests/live/test_safety_live.py
@@ -46,26 +47,25 @@ python tests/live/test_v1110_live.py
 python tests/live/test_locked_mode_live.py
 
 # Format + lint + typecheck
-black . && isort .   # both clean; isort has skip_gitignore=true so it skips venvs like black does
+black . && isort .   # both clean, line length 120 (ruff too); isort has skip_gitignore=true so it skips venvs like black does
 ruff check .         # known baseline: 26 errors (20 E501, 6 E402) — see below
 mypy src/odoo_mcp    # known baseline: 36 errors in 5 files, mostly resources.py + server.py
 
-# If `uv run pytest` reports ModuleNotFoundError: No module named 'odoo_mcp' (17 collection
-# errors), the dev extras are not installed — run `uv sync --extra dev` first. uv also ignores a
+# If `uv run pytest` reports ModuleNotFoundError: No module named 'odoo_mcp' during collection,
+# the dev extras are not installed — run `uv sync --extra dev` first. uv also ignores a
 # VIRTUAL_ENV pointing anywhere other than ./.venv (it warns and uses .venv regardless), so an
 # activated sibling venv silently gives you a system pytest/ruff/mypy or none at all.
 
 # Docker
 docker build -t odoo-mcp-19 .
-docker compose up -d           # uses .env, requires MCP_API_KEY
+docker compose up -d           # uses .env; without MCP_API_KEY the startup preflight exits 1
 # Multi-user overlay (on the clorag host — registry mounted read-only)
 docker compose -f docker-compose.yml -f docker-compose.multiuser.yml up -d
 ```
 
-Note: live tests under `tests/live/` are **script-style runners**, not pytest modules — invoke them directly with `python`. They mutate environment state.
+`tests/live/` holds **script-style runners** that need `.env` and mutate environment state — invoke them with `python <file>`.
 
-- **Unit (no Odoo)**: everything in `tests/` except `tests/live/` — run with `pytest --ignore=tests/live`. Highlights: `test_resources.py` patches `get_odoo_client` with a stub (pins resource-layer validation/error handling); `test_arg_mapping.py` pins the positional → JSON-2 named-arg contract; `test_odoo_client.py` pins bearer auth + no `result`-envelope unwrap; `test_token_gate.py` / `test_safety.py` / `test_safety_role.py` cover the gate and role-based classification; the multi-user tests (`test_auth_verifier.py`, `test_token_crypto.py`, `test_user_clients.py`) use the `users_db_seed` fixture in `tests/conftest.py`, which builds a temp registry with the **exact CLORAG DDL and crypto contract** — keep that fixture contract-true. Locked mode (v1.16.0) is pinned by `test_safety_profile.py` (env → profile resolution), `test_read_only_guard.py`, `test_write_allowlist.py`, `test_payload_validation.py`, `test_side_effect_predicate.py`, `test_fields_cache.py`, `test_main_bind_default.py`, and `test_server_status_resource.py`. `test_event_loop_offload.py` pins that every template resource is registered as a coroutine and that `batch_execute` runs its Odoo calls off the loop thread; `test_tool_execution_paths.py` is the characterization suite for `resolve_json`, the `search_read` fallback, search defaults and non-atomic batches — extend it before touching those phases. v1.17.0: `test_method_catalog.py` pins `odoo://methods` ↔ `V2_ARG_MAPPING` parity and the live enrichment; `test_resource_payloads.py` pins the single selection query behind `/docs`, compact JSON on the large emitters and the cached `odoo://model/{m}`; `test_error_visibility.py` pins the deep-copied runtime-issue snapshot and that no lookup failure is swallowed silently; `configure_odoo` and its test were removed with the FastMCP 4 migration (elicitation needs a server-initiated request; `python -m odoo_mcp --setup` covers the job). v1.18.0: `test_api_reference.py` pins the static `odoo://api/*` facts (403 for private methods, deprecated-not-removed names, x2many triples), the `odoo://api-index` compaction + bounded per-identity cache, and handler ↔ bridge-route parity; `test_orm_guides.py` pins the five ORM guides, the `domain-syntax` additions and `odoo://session`; `test_odoo_client.py::TestRateLimitRetry` pins the read-only 429 retry; `test_resources.py` pins the binary-free `odoo://record`.
-- **Live (need `.env`)**: anything under `tests/live/` — run with `python <file>`, not pytest.
+Everything else in `tests/` runs without Odoo. `test_tool_execution_paths.py` is the characterization suite for `resolve_json`, the `search_read` fallback, search defaults and non-atomic batches — extend it before touching those phases. The multi-user tests use the `users_db_seed` fixture in `tests/conftest.py`, which builds a temp registry with the **exact CLORAG DDL and crypto contract** — keep that fixture contract-true.
 
 **CI**: two workflows in `.github/workflows/`:
 - `tests.yml` — on every PR and push to master: the unit suite (`pytest tests/ --ignore=tests/live`) across Python 3.10–3.13 (matrix mirrors the pyproject classifiers), plus a quality job where `black --check` and `isort --check-only` **block** while `ruff` and `mypy` run `continue-on-error` (pre-existing backlog — flip them blocking once their counts hit zero). CI deliberately provides no `ODOO_*` env and no lockfile (`uv sync` resolves fresh, mirroring what `pip install git+…` gives a user), so unit tests that quietly need a live server or drifting dependencies surface as failures.
@@ -73,7 +73,9 @@ Note: live tests under `tests/live/` are **script-style runners**, not pytest mo
 
 Run `black . && isort .` before pushing — CI enforces formatting.
 
-**Lint and typecheck are not clean gates.** Baseline as of v2.2.0: `pytest --ignore=tests/live` → **954 passed** (unit coverage 81 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency); `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **26 errors** (20 E501, 6 E402); `mypy src/odoo_mcp` → **36 errors** in 5 files (mostly `resources.py` and `server.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.3.1 here). No function is rated worse than radon C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
+**Lint and typecheck are not clean gates.** Baseline as of v2.2.0: `pytest --ignore=tests/live` → **954 passed** with fastmcp 4.1.5 (unit coverage 81 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency); `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **26 errors** (20 E501, 6 E402); `mypy src/odoo_mcp` → **36 errors** in 5 files (mostly `resources.py` and `server.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.3.1 here). No function is rated worse than radon C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
+
+**An upstream fastmcp release alone can turn the suite red.** `test_dependency_pins.py::TestDeclaredConstraint::test_fastmcp_floor_matches_tested_baseline` fails once the resolved version is past `x.y.0` of a minor the floor still admits. CI resolves fresh and `uv run` re-locks a stale `uv.lock`, so this needs no commit here: fastmcp 4.1.5 against the old `>=4.0.10` floor gave 953 passed, 1 failed. The fix is raising the floor in `pyproject.toml`, not loosening the test.
 
 ## High-level architecture
 
@@ -129,16 +131,18 @@ src/odoo_mcp/
 
 ### Cross-cutting flows
 
-**1. Tool call → Odoo round-trip** (`execute_method`):
-1. Validate model (`_validate_model`) and method (`_validate_method`) — regex + length, else 400.
-2. Block `@api.private` methods statically (PRIVATE_METHOD_HINTS) and dynamically (live `/doc-bearer/`).
-3. Dry-run `convert_args_to_v2` (rejects an unmappable or duplicated parameter before any token is spent), then classify via `safety.classify_operation` → SAFE / MEDIUM / HIGH / BLOCKED.
-4. Gated, blocked and directly executed responses carry `safety` (the `SafetyClassification`) so a caller can see why a call was or was not gated; only the `search_read` fallback and generic error paths omit it. If gate triggers → return `pending_confirmation=true` with a single-use, 120s, op-bound `confirmation_token` in `hint`. Caller must re-call with both `confirmed=true` AND that token. **`confirmed=true` alone does not bypass the gate** — this is the v1.14.0 hardening.
-5. Merge `MCP_DEFAULT_CONTEXT` into kwargs (explicit context wins).
-6. Resolve Many2one names via `resolve_json` (uses `name_search`, validates target model against BLOCKED_MODELS).
-7. Convert positional → named args via `arg_mapping`.
-8. Send to Odoo. On 500 from `search_read` → automatically fall back to `search` + `read`, categorize the error (timeout / relational_filter / computed_field / …), record runtime issue, return enriched `issue_analysis`.
-9. On any error: match against ~25 patterns in `utils.get_error_suggestion` (with `{model}` templating). Server tracebacks are logged to stderr, **never** forwarded to clients.
+**1. Tool call → Odoo round-trip** (`execute_method`). The context merge and `resolve_json` run before the gate, so the token digest covers what is actually sent:
+1. Validate model (`_validate_model`) and method (`_validate_method`) — regex + length.
+2. Read-only kill-switch: refuse any side-effect method before the classifier or a round-trip.
+3. `_parse_json_args`: decode `args_json`/`kwargs_json` and merge `MCP_DEFAULT_CONTEXT` (explicit context wins).
+4. Resolve Many2one names via `resolve_json` (uses `name_search`, validates target model against BLOCKED_MODELS).
+5. Block `@api.private` methods statically (PRIVATE_METHOD_HINTS) and dynamically (live `/doc-bearer/`).
+6. Dry-run `convert_args_to_v2` (rejects an unmappable or duplicated parameter before any token is spent), then classify via `safety.classify_operation` → SAFE / MEDIUM / HIGH / BLOCKED.
+7. Gated, blocked and directly executed responses carry `safety` (the `SafetyClassification`) so a caller can see why a call was or was not gated; only the `search_read` fallback and generic error paths omit it. If gate triggers → run the payload pre-flight when the profile asks for it, then return `pending_confirmation=true` with a single-use, 120s, op-bound `confirmation_token` in `hint`. Caller must re-call with both `confirmed=true` AND that token. **`confirmed=true` alone does not bypass the gate** — this is the v1.14.0 hardening.
+8. `_apply_search_defaults` (default/capped `limit`, `[[domain]]` unwrap), then `OdooClient.execute_method` converts positional → named args via `arg_mapping` and sends. On 500 from `search_read` → automatically fall back to `search` + `read`, categorize the error (timeout / relational_filter / computed_field / …), record runtime issue, return enriched `issue_analysis`.
+9. On any error: match against the ~30 `error_patterns` of `module_knowledge.json` in `utils.get_error_suggestion` (with `{model}` templating). Server tracebacks are logged to stderr, **never** forwarded to clients.
+
+`batch_execute` shares only part of this: read-only rejection, `classify_batch` (role, allowlist and relational guards included), one gate over the whole operations list, then per-op validation and `_parse_json_args`. It has no `@api.private` check, dry-run conversion, payload pre-flight, search defaults or `resolve_json`, so a batched `search_read` carries no default or capped `limit`. **`atomic=True` stops at the first failure — it does not roll back**: each op is a separate JSON-2 request, so completed ops stay committed.
 
 **2. Resource bridge** — `read_resource(uri)` exists because some clients (Claude Desktop) don't speak resource templates. The `_RESOURCE_ROUTES` table in `server.py` maps URIs to the same handlers `resources.py` registers, so the same `odoo://...` URI works either way. Two properties: **parity** — 38 routes ↔ 38 `@mcp.resource` handlers, pinned by `tests/test_api_reference.py::test_every_registered_resource_has_exactly_one_bridge_route` (adding a resource without adding a route silently 404s the bridge while the template client keeps working); and **order** — the list is matched top-down, so `odoo://module-knowledge/{name}` must stay above `odoo://module-knowledge`, and the specific `odoo://model/{m}/…` variants above the catch-all `odoo://model/{m}`. `read_resource` also **truncates at 15 000 chars** (`_READ_RESOURCE_MAX_CHARS`), appending a `_truncated` JSON marker — so `odoo://model/{m}/schema` (~300 KB) returns a fragment unless the caller passes `max_chars=0`.
 
@@ -146,7 +150,7 @@ src/odoo_mcp/
 
 **Schema fetch rule.** Compact views (quick-schema, /fields, bundle, session-bootstrap, dynamic /workflow) and the payload pre-flight must request `fields_get(attributes=COMPACT_FIELD_ATTRIBUTES)` through `_fetch_model_fields(..., attributes=…)` / `get_fields_for_model(..., attributes=…)` so they share one cache entry per model; only `/schema` and `odoo://model/{model}` fetch the full definition.
 
-**3. Live doc enrichment** — `odoo://methods/{model}` and `@api.private` detection both consult `/doc-bearer/<model>.json` (provided by Odoo's `api_doc` module, requires `api_doc.group_allow_doc` on the API user). Cached in `_DOC_CACHE`: 5-min TTL, 100-entry LRU, `threading.Lock`. Falls back silently to static data if unavailable.
+**3. Live doc enrichment** — `odoo://methods/{model}` and `@api.private` detection both consult `/doc-bearer/<model>.json` (provided by Odoo's `api_doc` module, requires `api_doc.group_allow_doc` on the API user). Cached in `_DOC_CACHE`: 5-min TTL, 100-entry LRU, `threading.Lock`. Falls back to static data if unavailable, logged as a warning; a `PermissionError` from identity resolution propagates.
 
 **4. Background tasks** — `batch_execute` is a `task=True` tool. Since FastMCP 4 background tasks are an extension (`io.modelcontextprotocol/tasks`, package `fastmcp-tasks`, still on Docket): `app.py` registers it with `mcp.add_extension(TasksExtension())` right after creating the server, and without that line the server refuses to start. A client may call it inline or as a task (`fastmcp_tasks.call_tool_task`); both paths are pinned in `tests/test_protocol_eras.py`. The caller's access token is available inside a task-enabled tool in both eras (verified end to end with a seeded registry: a `readonly` key is refused by `batch_execute`).
 
@@ -221,99 +225,18 @@ Audit log via `logging.getLogger("odoo_mcp.safety")` (configured in `__init__.py
 
 ## Configuration
 
-| Variable | Required | Default | Purpose |
-|----------|----------|---------|---------|
-| `ODOO_URL` / `ODOO_DB` / `ODOO_USERNAME` / `ODOO_API_KEY` | Yes (optional in multi-user mode) | — | Odoo connection (API key preferred over `ODOO_PASSWORD`). With `USERS_DB_PATH`, only the env-admin fallback uses these; per-user clients still need `ODOO_URL`/`ODOO_DB`. |
-| `ODOO_TIMEOUT` | No | `30` | Request timeout (seconds) |
-| `ODOO_VERIFY_SSL` | No | `true` | Set `false` to disable cert check (visible startup warning) |
-| `ODOO_CONFIG_DIR` | No | — | Extra directory searched **first** for a `.env`, ahead of `./.env` then `~/.config/odoo/.env` (`odoo_client.load_config`) |
-| `MCP_TRANSPORT` | No | `stdio` | Or `streamable-http` |
-| `MCP_API_KEY` | HTTP: this **or** `USERS_DB_PATH` | — | Static bearer token (single-user HTTP, or admin fallback in multi-user mode). HTTP `sys.exit(1)` if neither is set. |
-| `USERS_DB_PATH` | No | — | Path to the CLORAG registry (`users.db`) → enables multi-user mode |
-| `TOKEN_ENCRYPTION_KEY` / `TOKEN_ENCRYPTION_KEY_FILE` | With `USERS_DB_PATH` | — | Secret to decrypt registry Odoo credentials — must equal CLORAG's value |
-| `MCP_HOST` / `MCP_PORT` | No | `0.0.0.0` / `8080` | HTTP bind |
-| `MCP_VERBOSE` | No | `true` | Slant-ASCII startup banner (version, transport, masked creds, safety mode, capability counts). Writes to **stderr** only, so STDIO's stdout stays protocol-clean. Set `false` to silence. |
-| `MCP_SAFETY_MODE` | No | `strict` | `permissive`, `strict`, or **`locked`** (new in v1.16.0). `locked` activates `MCP_READ_ONLY=true`, `MCP_WRITE_ALLOWLIST` enforcement, `MCP_HOST=127.0.0.1` default, and `MCP_VALIDATE_PAYLOADS=true`. |
-| `MCP_SAFETY_AUDIT` | No | — | `true` to log audit entries to stderr |
-| `MCP_DEFAULT_CONTEXT` | No | — | JSON merged into all op contexts. Max 4KB. e.g. `{"lang":"fr_FR"}` |
-| `MCP_BOOTSTRAP_MODELS` | No | `res.partner,sale.order,account.move,product.product,stock.picking` | Models for `odoo://session-bootstrap`. Max 20. |
-| `MCP_READ_ONLY` | No | derived from mode | `true` to reject every method that is not a known read. Fail-closed: the gate is `method not in SAFE_METHODS`, so unrecognised methods (`message_post`, `toggle_active`, `convert_opportunity`, `create_from_urls`, …) are blocked rather than assumed safe. The 13 SAFE_METHODS (`search_read`, `read`, `fields_get`, …) pass through. |
-| `MCP_WRITE_ALLOWLIST` | No | empty | Comma-separated `model.method` (or `model.*`) entries permitted as side effects. Enforced under `locked`, or explicitly via this var. |
-| `MCP_VALIDATE_PAYLOADS` | No | derived from mode | `true` to validate write payloads against live `fields_get` before issuing a confirmation token. |
-
-## Tools (3)
-
-| Tool | Purpose |
-|------|---------|
-| `execute_method` | Universal Odoo API access |
-| `batch_execute` | Multiple ops with progress tracking. **`atomic=True` stops at the first failure — it does not roll back.** Each op is a separate JSON-2 request, so completed ops stay committed |
-| `read_resource` | Read any `odoo://` URI — bridge for clients without resource template support |
-
-## Discovery resources (selected — full list at `odoo://templates`)
-
-| Resource | When to use |
-|----------|-------------|
-| `odoo://model/{model}/quick-schema` | **Default for schema introspection.** ~1.5 KB, short keys (`t`/`req`/`ro`/`rel`), no labels |
-| `odoo://model/{model}/fields` | Lightweight (~5–10 KB) with labels |
-| `odoo://model/{model}/schema` | Full schema with relationships (~300 KB) |
-| `odoo://model/{model}/workflow` | State machine transitions, methods, side effects, irreversible flags. 6 main models hardcoded; dynamic fallback for others |
-| `odoo://bundle/{m1,m2,...}` | Batch quick-schema, max 10 models |
-| `odoo://session-bootstrap` | One-call kickoff: schemas + workflows for `MCP_BOOTSTRAP_MODELS` |
-| `odoo://methods/{model}` | Live-enriched (signatures, return types, decorators) via `/doc-bearer/`; static fallback |
-| `odoo://model-limitations` | Known issues + runtime-detected problematic combos |
-| `odoo://domain-syntax` / `odoo://aggregation` / `odoo://pagination` / `odoo://hierarchical` | Reference docs |
-| `odoo://server-status` | Resolved safety profile, transport, host, allowlist, warnings. Non-secret. New in v1.16.0. |
-| `odoo://api/json2-protocol` / `odoo://api/version-drift` / `odoo://api/x2many-commands` | Static API references: the `/json/2` contract (body keys, error shape, status codes, transactions), ORM renames since 15.2, and the x2many command triples. Read them when a call 404s/422s. New in v1.18.0. |
-| `odoo://api/datetime` / `mail-thread` / `security-model` / `web-read` / `xmlids` | Static ORM guides: date formats and dynamic domain values, chatter and its context kill-switches, ACL/rule/field-group composition, the `web_read` specification, XML id resolution. New in v1.18.0. |
-| `odoo://session` | Live: `context_get` + user + companies + `res.lang.get_installed` — the lang/tz/company scope an agent must interpret data in. New in v1.18.0. |
-| `odoo://api-index` | Live `/doc-bearer/index.json` compacted to module list + per-model field/method counts (~70 KB, cached 5 min per identity). Needs `api_doc.group_allow_doc`; falls back to an actionable error. New in v1.18.0. |
-
-When read through the `read_resource` tool (rather than a native resource client), every one of these is capped at 15 000 chars by default — `odoo://model/{model}/schema` needs `max_chars=0` to come back whole.
+Every env var with its default is in the `## Configuration` table of `README.md`.
 
 ## Key conventions
 
-**Schema first, query second.** Never guess field names — read `odoo://model/{model}/quick-schema` first. Guessing wastes API calls; introspection is fast.
-
-**`args_json` / `kwargs_json` are JSON strings, not Python objects.** Pass `args_json='[[15]]'`, not `args_json=[[15]]`. Same for `kwargs_json` and `resolve_json`. The server parses them with `json.loads`; native lists/dicts will fail validation.
-
-**`@api.private` is enforced.** Methods like `check_access` (use `has_access`) and `search_fetch` (use `search_read`) are blocked before the API call with actionable hints. Methods starting with `_` are also checked dynamically against `/doc-bearer/`.
-
-**Match the method to the question.** Counting → `search_count` (returns just an int — no payload, no pagination limit silently capping the result). Grouped counts / sums / averages → `formatted_read_group`. Only use `search_read` when you actually need the records. See `odoo://aggregation`.
-
-**`read_group` only exists on Odoo 19.0.** It is removed in Odoo Online 19.1–19.4 (404) and comes back in 20.0 with a different signature returning tuples. Use `formatted_read_group` (param is `aggregates`, not `fields`) — it works on every version. The same goes for `check_access_rights` / `check_access_rule` (→ `has_access`) and `toggle_active` (→ `action_archive` / `action_unarchive`): deprecated in 19.0, gone since 19.1.
-
-**Static knowledge is version-scoped, and Odoo Online moves.** Production went 19.2 → 19.3 within September 2026 without notice. When a static fact is about method existence, say which versions it holds for, and check it against the live `/doc-bearer/<model>.json` of a current instance rather than the 19.0 source tree. `tests/test_version_drift_knowledge.py` pins the names found dead on 19.3.
-
-**Domain logic is Polish-prefix.** `["&", t1, t2]` AND, `["|", t1, t2]` OR, `["!", t]` NOT. Dot notation works (`["partner_id.country_id.code", "=", "US"]`) but can break on computed fields — check `odoo://model-limitations`. Since 19.0 date values may be dynamic (`"-3d +1H"`, `"=monday -1w"`) and date parts are traversable (`"date.month_number"`); `odoo://domain-syntax` and `odoo://api/datetime` document both.
-
-**One2many / Many2many command tuples**: `(0,0,vals)` create, `(1,id,vals)` update, `(2,id,0)` delete, `(4,id,0)` link, `(6,0,[ids])` replace all.
-
-**Many2one resolution.** Use `resolve_json` to pass names instead of IDs:
-
-```python
-execute_method("res.partner", "write",
-    args_json='[[1], {"user_id": null}]',
-    resolve_json='{"user_id": {"model": "res.users", "search": "Administrator"}}')
-```
-
-Returns options on ambiguous match.
-
-## Known model limitations
-
-`stock.move.line`:
-- `picking_type_id` with `!=` returns `NotImplemented` (computed field) → use `picking_id.picking_type_id`
-- `lots_visible` is non-stored computed → exclude from `fields`, fetch separately
-- `product_category_name` is a 3-level deep related → exclude from `fields`/`domain`
-- Dot notation filters can fail on complex JOINs → query related models separately
-
-Read `odoo://model-limitations` for the full live list (static + runtime-detected).
+**Static knowledge is version-scoped, and Odoo Online moves.** Production went 19.2 → 19.3 within September 2026 without notice. When a static fact is about method existence, say which versions it holds for, and check it against the live `/doc-bearer/<model>.json` of a current instance rather than the 19.0 source tree. `tests/test_version_drift_knowledge.py` pins the names found dead on 19.3. `odoo://api/version-drift` lists the replacements.
 
 ## Security hardening (v1.13.0 — keep this enforced)
 
 - **Input validation**: model `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$` (max 128); method `^[a-zA-Z_][a-zA-Z0-9_]*$` (max 64); URIs must be `odoo://`.
 - **Thread safety**: `OdooClient` is a singleton with double-checked locking. `_DOC_CACHE` (100-entry LRU), `_FIELDS_CACHE` (100-entry LRU), and `RUNTIME_MODEL_ISSUES` each use their own `threading.Lock`.
 - **Error sanitization**: never include Odoo `debug` tracebacks in MCP responses.
-- **Docker**: non-root user (UID 1001); `run-docker.sh` uses `--env-file`; `docker-compose.yml` uses `${MCP_API_KEY:?required}`.
+- **Docker**: non-root user (UID 1001); `run-docker.sh` uses `--env-file`; `docker-compose.yml` passes `${MCP_API_KEY:-}` (the multi-user overlay does not need it), so the HTTP startup preflight is what refuses an unauthenticated server.
 - **The Docker stub step must remove `build/` as well as `src/`.** Otherwise setuptools keeps the stub's empty `__init__.py` (newer than the COPY'd source) and the image ships without `__version__` or the `odoo_mcp` log handler — fixed in v1.19.1, pinned by `TestDockerfileUsesDeclaredDependencies::test_dockerfile_discards_the_stub_build_tree`.
 - **Docker must not restate dependency constraints.** The Dockerfile installs a stub package to resolve `pyproject.toml`'s dependency set into its own cached layer, then installs the real source with `--no-deps`. A hand-copied list drifts silently — it had already lost the `fastmcp<4` ceiling and never listed `cryptography>=42`. `tests/test_dependency_pins.py::TestDockerfileUsesDeclaredDependencies` fails if a restated pin reappears.
 - **HTTP**: `sys.exit(1)` unless `MCP_API_KEY` or `USERS_DB_PATH` is set. Wizard auto-generates keys with `secrets.token_urlsafe(32)`. Multi-user token compare uses `hmac.compare_digest` (static key) / sha256 hash lookup (registry keys — plaintext keys are never stored).
@@ -327,7 +250,7 @@ A release touches four places — keep them in sync:
 1. Version string in **both** `pyproject.toml` and `src/odoo_mcp/__init__.py` (`__version__`).
 2. `CHANGELOG.md` — Keep a Changelog format; move entries from `[Unreleased]` into the new version section with the date.
 3. This file's header (version + surface counts) if they changed.
-4. `wiki/` — a **gitignored local clone of the GitHub wiki** (`AlanOgic/odoo-mcp-19.wiki.git`). Wiki pages (Tools, Resources, Prompts, Deployment, …) are refreshed at each release and need their **own commit and push inside `wiki/`** — committing this repo does not publish them.
+4. `wiki/` — a **gitignored local clone of the GitHub wiki** (`AlanOgic/odoo-mcp-19.wiki.git`). Wiki pages (Tools, Resources, Prompts, Deployment, …) are refreshed at each release and need their **own commit and push inside `wiki/`** — committing this repo does not publish them. A fresh checkout has no `wiki/`: `git clone https://github.com/AlanOgic/odoo-mcp-19.wiki.git wiki`.
 
 Release commit convention: `chore(release): X.Y.Z — <summary>`.
 
@@ -343,5 +266,5 @@ Release commit convention: `chore(release): X.Y.Z — <summary>`.
 - **Every positional parameter a method accepts must appear in its `V2_ARG_MAPPING` entry.** `convert_args_to_v2` iterates the supplied args, not the table, and raises `ValueError` on a positional it has no name for — JSON-2 is named-args-only, so an unmappable positional cannot be forwarded, and dropping it silently sends a *different but still valid* request (a `name_search` minus its domain matched everything; a `search` minus its limit returned the server default). Transcribe entries from the Odoo source, **not the docstrings** — `default_get`'s still says `fields_list` while the parameter has been `fields` (`odoo/orm/models.py` @ 19.0), which made every `default_get` call 422. `read_group` is the one method whose sort parameter really is `orderby`, so it is exempt from the `V2_KWARGS_MAPPING` `orderby`→`order` rename via `_KWARGS_MAPPING_EXEMPT`.
 - `odoo_client.py` always sends `Authorization: Bearer` and returns the JSON-2 response body as-is — **no `{"result": ...}` envelope unwrap** (that was the legacy `/jsonrpc` convention; unwrapping would corrupt methods that legitimately return a dict with a `result` key). `tests/test_odoo_client.py` pins this.
 - The canonical MCP server name in client configs (README, setup wizard, Claude Desktop config) is **`odoo19-mcp`** — keep it consistent when touching docs or the wizard.
-- `live` tests are not pytest-collected; they are direct scripts that mutate env state. Don't reorganize them into pytest fixtures without checking the in-file note.
+- `live` tests are direct scripts that mutate env state; only `--ignore=tests/live` keeps pytest off them (`test_locked_mode_live.py` has collectable `test_*` functions). Don't reorganize them into pytest fixtures without checking the in-file note.
 - AI module (Enterprise): models `ai.agent`, `ai.topic`, `ai.agent.source`, `ai.embedding`. Special methods (checked on Odoo Online 19.3): `ai.agent.open_agent_chat`, `ai.agent.source.create_from_urls`, `ai.agent.source.create_from_binary_files`. Documented in `module_knowledge.json`.

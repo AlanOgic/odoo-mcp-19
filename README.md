@@ -46,7 +46,7 @@ layer blocks every non-safe method.
 | **Multi-user mode** | Per-user bearer keys and personal Odoo clients, so every write is attributed to a real person |
 | **Reference data** | 30 documented ORM methods, 13 modules with special-method knowledge, including the Enterprise AI module |
 
-Built on **FastMCP 4** (`>=4.0.10,<5`): one deployment speaks both **MCP 2026-07-28**
+Built on **FastMCP 4** (`>=4.1.5,<5`): one deployment speaks both **MCP 2026-07-28**
 (sessionless — any replica behind a plain load balancer can answer) and **MCP 2025-11-25**
 (session-based), negotiated per connection, so older clients keep working. Background tasks,
 progress tracking, icons and structured outputs are available in both. See the
@@ -627,7 +627,7 @@ Full documentation lives in the **[Wiki](https://github.com/AlanOgic/odoo-mcp-19
 
 - Python 3.10+
 - Odoo 19+
-- FastMCP >=4.0.10,<5 (with tasks extra)
+- FastMCP >=4.1.5,<5 (with tasks extra)
 - requests 2.32.4+
 
 ## License
