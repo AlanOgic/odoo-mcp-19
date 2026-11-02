@@ -35,7 +35,7 @@ python -m odoo_mcp --setup
 
 # Tests — unit (no Odoo needed)
 uv run pytest tests/ --ignore=tests/live
-uv run pytest tests/test_safety.py::TestClassifyOperation::test_safe_methods_are_safe   # single test
+uv run pytest tests/test_safety.py::TestSafeMethods::test_safe_methods_on_regular_model   # single test
 # Note: bare `pytest tests/` imports all three live modules, whose module-level load_dotenv() pushes real .env
 # credentials into os.environ for the whole session, and it runs the 5 test_* functions in test_locked_mode_live.py
 # (real reads against the configured Odoo, MCP_* env left mutated; the other two files are __main__-guarded).
@@ -73,9 +73,9 @@ Everything else in `tests/` runs without Odoo. `test_tool_execution_paths.py` is
 
 Run `black . && isort .` before pushing — CI enforces formatting.
 
-**Lint and typecheck are not clean gates.** Baseline as of v2.2.0: `pytest --ignore=tests/live` → **954 passed** with fastmcp 4.1.5 (unit coverage 81 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency); `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **26 errors** (20 E501, 6 E402); `mypy src/odoo_mcp` → **36 errors** in 5 files (mostly `resources.py` and `server.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.3.1 here). No function is rated worse than radon C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
+**Lint and typecheck are not clean gates.** Baseline as of v2.2.0: `pytest --ignore=tests/live` → **955 passed** with fastmcp 4.1.5 (unit coverage 81 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency); `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **26 errors** (20 E501, 6 E402); `mypy src/odoo_mcp` → **36 errors** in 5 files (mostly `resources.py` and `server.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.3.1 here). No function is rated worse than radon C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
 
-**An upstream fastmcp release alone can turn the suite red.** `test_dependency_pins.py::TestDeclaredConstraint::test_fastmcp_floor_matches_tested_baseline` fails once the resolved version is past `x.y.0` of a minor the floor still admits. CI resolves fresh and `uv run` re-locks a stale `uv.lock`, so this needs no commit here: fastmcp 4.1.5 against the old `>=4.0.10` floor gave 953 passed, 1 failed. The fix is raising the floor in `pyproject.toml`, not loosening the test.
+**Moving the FastMCP floor.** The floor is the oldest version the full suite was verified on. `tests/test_dependency_pins.py` holds it with the fixed `FASTMCP_LAST_UNVERIFIED`, never the installed version: with no lockfile, CI and a new checkout resolve the latest FastMCP, so a test tied to the installed version fails on upstream releases with nothing changed here. To raise the floor, run the suite on the new version, then move `pyproject.toml`, `FASTMCP_LAST_UNVERIFIED`, this file, the README and the status line of `docs/mcp-2026-07-28-migration.md` together.
 
 ## High-level architecture
 
