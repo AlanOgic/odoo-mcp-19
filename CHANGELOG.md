@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **FastMCP floor raised to `fastmcp[tasks]>=4.1.5,<5`** (was `>=4.0.10`), the version a fresh
+  install resolves to and the suite is run against.
+
 ## [2.2.0] - 2026-10-05
 
 ### Removed
