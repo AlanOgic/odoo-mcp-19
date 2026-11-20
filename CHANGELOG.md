@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FastMCP floor raised to `fastmcp[tasks]>=4.1.5,<5`** (was `>=4.0.10`), the version a fresh
   install resolves to and the suite is run against.
 
+### Fixed
+- **The FastMCP floor test no longer fails on upstream releases.** It compared the floor with
+  the installed FastMCP, which follows upstream because CI has no lockfile, so a new release
+  could fail the build with nothing changed in this repo.
+  `test_fastmcp_floor_not_below_tested_baseline` now checks against a fixed version, and
+  `test_installed_fastmcp_is_within_declared_constraint` catches an environment below the floor.
+
 ## [2.2.0] - 2026-10-05
 
 ### Removed

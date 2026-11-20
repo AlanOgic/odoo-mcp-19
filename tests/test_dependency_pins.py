@@ -44,6 +44,10 @@ MIGRATION_DOC = "docs/mcp-2026-07-28-migration.md"
 FASTMCP_MAJOR = 4
 MCP_SDK_MAJOR = 2
 
+# The release just below the oldest one the full suite was verified on (4.1.5).
+# Fixed on purpose: see test_fastmcp_floor_not_below_tested_baseline.
+FASTMCP_LAST_UNVERIFIED = Version("4.1.4")
+
 
 def _declared_dependencies() -> list[str]:
     with PYPROJECT.open("rb") as fh:
@@ -67,6 +71,16 @@ class TestInstalledVersions:
             f"fastmcp {installed} is installed but this server targets"
             f" {FASTMCP_MAJOR}.x. A FastMCP major changes the protocol engine,"
             f" background tasks and the wire types — see {MIGRATION_DOC}."
+        )
+
+    def test_installed_fastmcp_is_within_declared_constraint(self):
+        """A stale lock or venv below the floor would verify a version users cannot get."""
+        installed = Version(metadata.version("fastmcp"))
+        req = _fastmcp_requirement()
+        assert req.specifier.contains(installed, prereleases=True), (
+            f"fastmcp {installed} is installed but pyproject.toml declares"
+            f" {req.specifier}. Re-sync the environment (`uv sync --extra dev`)"
+            " so the suite runs on a version a fresh install can get."
         )
 
     def test_mcp_sdk_major_is_supported(self):
@@ -102,17 +116,18 @@ class TestDeclaredConstraint:
             f" {MIGRATION_DOC} first."
         )
 
-    def test_fastmcp_floor_matches_tested_baseline(self):
-        """The floor must not fall below the version the suite is run against."""
+    def test_fastmcp_floor_not_below_tested_baseline(self):
+        """The floor must refuse versions older than the one the suite was verified on.
+
+        Measured against a fixed version, never the installed one. CI has no
+        lockfile, so the installed version follows upstream: comparing the floor
+        with it failed on new FastMCP releases with nothing changed in this repo.
+        """
         req = _fastmcp_requirement()
-        installed = Version(metadata.version("fastmcp"))
-        older = Version(f"{installed.major}.{installed.minor}.0")
-        if older >= installed:  # installed is an x.y.0 release
-            older = Version(f"{installed.major}.{max(installed.minor - 1, 0)}.0")
-        assert not req.specifier.contains(older), (
-            f"pyproject.toml allows fastmcp {older}, older than the tested"
-            f" baseline {installed}. Raise the floor so a fresh install gets"
-            " the version this suite actually verified."
+        assert not req.specifier.contains(FASTMCP_LAST_UNVERIFIED), (
+            f"pyproject.toml allows fastmcp {FASTMCP_LAST_UNVERIFIED}, older than"
+            " the tested baseline. Restore the floor: an install must not be able"
+            " to land on a version this suite never verified."
         )
 
 
