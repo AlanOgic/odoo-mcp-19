@@ -70,7 +70,7 @@ jobs:
       - name: isort
         run: uv run isort --check-only .
 
-      # ruff and mypy carry a pre-existing backlog (36 and 75 findings on
+      # ruff and mypy carry a pre-existing backlog (26 and 36 findings on
       # master), so they report without blocking.
       # Flip continue-on-error off once the respective backlog reaches zero.
       - name: ruff

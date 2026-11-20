@@ -33,13 +33,9 @@ MCP_TRANSPORT=streamable-http MCP_API_KEY=<token> python -m odoo_mcp
 # Interactive setup wizard — generates .env, Docker cmd, Claude Desktop config
 python -m odoo_mcp --setup
 
-# Tests — unit (no Odoo needed)
+# Tests — unit (no Odoo needed; always --ignore=tests/live, see below)
 uv run pytest tests/ --ignore=tests/live
 uv run pytest tests/test_safety.py::TestSafeMethods::test_safe_methods_on_regular_model   # single test
-# Note: bare `pytest tests/` imports all three live modules, whose module-level load_dotenv() pushes real .env
-# credentials into os.environ for the whole session, and it runs the 5 test_* functions in test_locked_mode_live.py
-# (real reads against the configured Odoo, MCP_* env left mutated; the other two files are __main__-guarded).
-# Always --ignore=tests/live.
 
 # Tests — live (requires .env with real Odoo creds; script-style runners)
 python tests/live/test_safety_live.py
@@ -51,11 +47,6 @@ black . && isort .   # both clean, line length 120 (ruff too); isort has skip_gi
 ruff check .         # known baseline: 26 errors (20 E501, 6 E402) — see below
 mypy src/odoo_mcp    # known baseline: 36 errors in 5 files, mostly resources.py + server.py
 
-# If `uv run pytest` reports ModuleNotFoundError: No module named 'odoo_mcp' during collection,
-# the dev extras are not installed — run `uv sync --extra dev` first. uv also ignores a
-# VIRTUAL_ENV pointing anywhere other than ./.venv (it warns and uses .venv regardless), so an
-# activated sibling venv silently gives you a system pytest/ruff/mypy or none at all.
-
 # Docker
 docker build -t odoo-mcp-19 .
 docker compose up -d           # uses .env; without MCP_API_KEY the startup preflight exits 1
@@ -63,7 +54,8 @@ docker compose up -d           # uses .env; without MCP_API_KEY the startup pref
 docker compose -f docker-compose.yml -f docker-compose.multiuser.yml up -d
 ```
 
-`tests/live/` holds **script-style runners** that need `.env` and mutate environment state — invoke them with `python <file>`.
+- **Always pass `--ignore=tests/live`.** `tests/live/` holds **script-style runners** that need `.env` and mutate environment state — invoke them with `python <file>`. A bare `pytest tests/` imports all three, whose module-level `load_dotenv()` pushes real `.env` credentials into `os.environ` for the whole session, and runs the 5 `test_*` functions in `test_locked_mode_live.py` (real reads against the configured Odoo, `MCP_*` env left mutated; the other two files are `__main__`-guarded).
+- **`ModuleNotFoundError: No module named 'odoo_mcp'` during collection** means the dev extras are not installed — run `uv sync --extra dev`. uv ignores a `VIRTUAL_ENV` pointing anywhere other than `./.venv` (it warns and uses `.venv` regardless), so an activated sibling venv silently gives you a system pytest/ruff/mypy or none at all.
 
 Everything else in `tests/` runs without Odoo. `test_tool_execution_paths.py` is the characterization suite for `resolve_json`, the `search_read` fallback, search defaults and non-atomic batches — extend it before touching those phases. The multi-user tests use the `users_db_seed` fixture in `tests/conftest.py`, which builds a temp registry with the **exact CLORAG DDL and crypto contract** — keep that fixture contract-true.
 
@@ -73,13 +65,18 @@ Everything else in `tests/` runs without Odoo. `test_tool_execution_paths.py` is
 
 Run `black . && isort .` before pushing — CI enforces formatting.
 
-**Lint and typecheck are not clean gates.** Baseline as of v2.2.0: `pytest --ignore=tests/live` → **955 passed** with fastmcp 4.1.5 (unit coverage 81 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency); `black --check .` and `isort --check-only .` → **clean**; `ruff check .` → **26 errors** (20 E501, 6 E402); `mypy src/odoo_mcp` → **36 errors** in 5 files (mostly `resources.py` and `server.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.3.1 here). No function is rated worse than radon C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22). Judge a change by *no new errors against that baseline*, not by a zero exit code. All 6 remaining E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None of them come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
+**Lint and typecheck are not clean gates.** Judge a change by *no new errors against this baseline* (v2.2.0), not by a zero exit code:
+- `pytest --ignore=tests/live` → **955 passed** with fastmcp 4.1.5 (unit coverage 81 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency).
+- `black --check .` and `isort --check-only .` → **clean**.
+- `ruff check .` → **26 errors** (20 E501, 6 E402). All 6 E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
+- `mypy src/odoo_mcp` → **36 errors** in 5 files (mostly `resources.py` and `server.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.3.1 here).
+- radon: no function worse than C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22).
 
 **Moving the FastMCP floor.** The floor is the oldest version the full suite was verified on. `tests/test_dependency_pins.py` holds it with the fixed `FASTMCP_LAST_UNVERIFIED`, never the installed version: with no lockfile, CI and a new checkout resolve the latest FastMCP, so a test tied to the installed version fails on upstream releases with nothing changed here. To raise the floor, run the suite on the new version, then move `pyproject.toml`, `FASTMCP_LAST_UNVERIFIED`, this file, the README and the status line of `docs/mcp-2026-07-28-migration.md` together.
 
 ## High-level architecture
 
-The package was split in v1.14.0 (commit `ea10d79`) from a 3762-line `server.py` into focused modules; the multi-user layer (commit `4d1b7f8`) added the `auth_verifier`, `users_db`, `user_clients` and `token_crypto` modules (see the tree below; its `skill_prompts` / `skill_visibility` modules were removed in v2.1.0). Import order matters: `app.py` must be imported first so the `mcp` decorator is bound before `server.py`, `resources.py` and `prompts.py` register their handlers. `app.py` also wires auth (`_get_auth_provider`) at import time, based on env.
+Import order matters: `app.py` must be imported first so the `mcp` decorator is bound before `server.py`, `resources.py` and `prompts.py` register their handlers. `app.py` also wires auth (`_get_auth_provider`) at import time, based on env.
 
 ```
 src/odoo_mcp/
@@ -179,7 +176,7 @@ Activated by `USERS_DB_PATH` (HTTP transport). Key invariants:
 
 Classification also takes a `role` (multi-user mode): `readonly` users get BLOCKED for any non-safe method, before model rules are even consulted. `tests/test_safety_role.py` pins this.
 
-- **Every side-effect call is gated in `strict` and `locked`** (fixed after v1.18.0): a MEDIUM method (`create`, `write`, `copy`, `name_create`, `load`) requires a confirmation token whatever the record count. Until v1.18.0 a single-record write on a non-sensitive model ran unconfirmed from one tool call, and `batch_execute` inherited that because `classify_batch` only aggregates the per-op flags; `tests/test_strict_single_write_gate.py` pins the closure. `permissive` still lets MEDIUM calls through. The record count still matters for the audit reason and for permissive-mode reporting — it comes from `_estimate_record_count`, which reads the payload from **either** `args_json` or `kwargs_json` (`_COUNTED_ARG` in `safety.py`: `write`/`unlink`/`copy` → `ids`, `create` → `vals_list`, `load` → `data`; `action_*`/`button_*` → `ids`). v2 is named-args-only, so both spellings must be counted — counting only the positional form lets a bulk `unlink` slip past the gate by moving `ids` into `kwargs_json`.
+- **Every side-effect call is gated in `strict` and `locked`**: a MEDIUM method (`create`, `write`, `copy`, `name_create`, `load`) requires a confirmation token whatever the record count, including a single-record write on a non-sensitive model. `batch_execute` gets the same gate because `classify_batch` aggregates the per-op flags; `tests/test_strict_single_write_gate.py` pins both. `permissive` still lets MEDIUM calls through. The record count still matters for the audit reason and for permissive-mode reporting — it comes from `_estimate_record_count`, which reads the payload from **either** `args_json` or `kwargs_json` (`_COUNTED_ARG` in `safety.py`: `write`/`unlink`/`copy` → `ids`, `create` → `vals_list`, `load` → `data`; `action_*`/`button_*` → `ids`). v2 is named-args-only, so both spellings must be counted — counting only the positional form lets a bulk `unlink` slip past the gate by moving `ids` into `kwargs_json`.
 - **Unknown methods** classify as MEDIUM: confirm in `strict`, allow in `permissive`. `default_get` is one of them on purpose: it is not a read in Odoo (read-write cursor, addon overrides that create records), so it is not in `SAFE_METHODS`.
 - **A parameter may be given once.** `convert_args_to_v2` raises when the same JSON-2 name arrives both positionally and in kwargs, and `execute_method` runs that conversion before the gate, so the gate never classifies a payload different from the one sent.
 
