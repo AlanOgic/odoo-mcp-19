@@ -12,6 +12,7 @@ Environment variables:
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -125,6 +126,11 @@ BLOCKED_MODELS = frozenset(
         "base.module.uninstall",
         "base.module.update",
         "base.module.install.request",
+        # action_install_module() calls button_immediate_install().
+        "base.module.install.review",
+        # import_module() loads a zip's data files, .sql ones through cr.execute
+        # (base_import_module, auto-installed on every database).
+        "base.import.module",
         # Mail redirection (password-reset links) and stored credentials.
         "ir.mail_server",
         "fetchmail.server",
@@ -428,16 +434,47 @@ def _payload_vals(args: list, kwargs: dict) -> list[dict]:
             vals.append(candidate)
         elif isinstance(candidate, list):
             vals.extend(item for item in candidate if isinstance(item, dict))
-    context = kwargs.get("context")
-    if isinstance(context, dict):
-        defaults = {
-            key[len(_CONTEXT_DEFAULT_PREFIX) :]: value
-            for key, value in context.items()
-            if isinstance(key, str) and key.startswith(_CONTEXT_DEFAULT_PREFIX)
-        }
-        if defaults:
-            vals.append(defaults)
+    defaults = _context_defaults(kwargs)
+    if defaults:
+        vals.append(defaults)
     return vals
+
+
+def _context_defaults(kwargs: dict) -> dict:
+    """The ``default_<field>`` context keys of a call, as a vals dict."""
+    context = kwargs.get("context")
+    if not isinstance(context, dict):
+        return {}
+    return {
+        key[len(_CONTEXT_DEFAULT_PREFIX) :]: value
+        for key, value in context.items()
+        if isinstance(key, str) and key.startswith(_CONTEXT_DEFAULT_PREFIX)
+    }
+
+
+def find_unverifiable_context(kwargs: dict) -> str | None:
+    """Return why the context of a call cannot be checked, else None.
+
+    Odoo applies a ``default_<field>`` key to every record the request creates, not
+    only to the called model: ``hr.employee.action_create_users`` creates
+    ``res.users`` with the caller's context, and ``res.company.create`` a partner
+    whose ``user_ids`` is a one2many to ``res.users``. Those models cannot be known
+    from the call, so a command list in a context default is refused whatever the
+    called model has under that name. A context that is not an object is refused
+    too: Odoo builds its own with ``dict(context)``, so a list of pairs carries
+    defaults these checks would not read.
+    """
+    context = kwargs.get("context")
+    if context is not None and not isinstance(context, dict):
+        return "The 'context' of a call must be a JSON object."
+    for field_name, value in _context_defaults(kwargs).items():
+        if isinstance(value, list) and value:
+            return (
+                f"Context key '{_CONTEXT_DEFAULT_PREFIX}{field_name}' carries a list. Odoo applies context "
+                f"defaults to every record the call creates, so the models it would write to cannot be "
+                f"verified. Pass the value in the record values instead."
+            )
+    return None
 
 
 def _forbidden_write_reason(model: str, field_name: str, comodel: str) -> str:
@@ -509,6 +546,17 @@ def _load_columns(args: list, kwargs: dict) -> list[str]:
     return [column for column in columns if isinstance(column, str)]
 
 
+def _import_path(column: str) -> list[str]:
+    """Split a ``load`` column like Odoo's ``fix_import_export_id_paths`` does.
+
+    ``user_ids:id`` is ``user_ids/id`` and ``user_ids.id`` is ``user_ids/.id``
+    (``odoo/orm/models.py``); splitting on ``/`` alone hid the relation behind a
+    name that is no field.
+    """
+    database_id = re.sub(r"([^/])\.id", r"\1/.id", column)
+    return re.sub(r"([^/]):id", r"\1/id", database_id).split("/")
+
+
 def find_blocked_import_column(
     model: str,
     columns: list[str],
@@ -523,7 +571,7 @@ def find_blocked_import_column(
     """
     for column in columns:
         current = model
-        segments = column.split("/")
+        segments = _import_path(column)
         for index, segment in enumerate(segments):
             if segment in _IMPORT_ID_COLUMNS:
                 break
@@ -553,6 +601,9 @@ def _relational_block_reason(
         reason = find_blocked_import_column(model, _load_columns(args, kwargs), fields_loader, forbidden)
         if reason:
             return reason
+    reason = find_unverifiable_context(kwargs)
+    if reason:
+        return reason
     return find_blocked_relational_write(model, _payload_vals(args, kwargs), fields_loader, forbidden)
 
 

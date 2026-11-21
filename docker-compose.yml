@@ -24,6 +24,11 @@ services:
       - MCP_API_KEY=${MCP_API_KEY:-}
       # Safety & DX
       - MCP_SAFETY_MODE=${MCP_SAFETY_MODE:-strict}
+      # Passed through only when set (shell or .env). No `${VAR:-}` default here:
+      # an empty value reads as "false" and would switch off the locked defaults.
+      - MCP_READ_ONLY
+      - MCP_WRITE_ALLOWLIST
+      - MCP_VALIDATE_PAYLOADS
       - MCP_SAFETY_AUDIT=${MCP_SAFETY_AUDIT:-}
       - MCP_DEFAULT_CONTEXT=${MCP_DEFAULT_CONTEXT:-}
       - MCP_BOOTSTRAP_MODELS=${MCP_BOOTSTRAP_MODELS:-}
