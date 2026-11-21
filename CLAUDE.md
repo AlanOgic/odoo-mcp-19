@@ -44,7 +44,7 @@ python tests/live/test_locked_mode_live.py
 
 # Format + lint + typecheck
 black . && isort .   # both clean, line length 120 (ruff too); isort has skip_gitignore=true so it skips venvs like black does
-ruff check .         # known baseline: 26 errors (20 E501, 6 E402) — see below
+ruff check .         # known baseline: 25 errors (20 E501, 5 E402) — see below
 mypy src/odoo_mcp    # known baseline: 36 errors in 5 files, mostly resources.py + server.py
 
 # Docker
@@ -68,7 +68,7 @@ Run `black . && isort .` before pushing — CI enforces formatting.
 **Lint and typecheck are not clean gates.** Judge a change by *no new errors against this baseline* (v2.2.0), not by a zero exit code:
 - `pytest --ignore=tests/live` → **1167 passed** with fastmcp 4.2.3 (unit coverage 84 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency).
 - `black --check .` and `isort --check-only .` → **clean**.
-- `ruff check .` → **26 errors** (20 E501, 6 E402). All 6 E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
+- `ruff check .` → **25 errors** (20 E501, 5 E402). All 5 E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
 - `mypy src/odoo_mcp` → **36 errors** in 5 files (mostly `resources.py` and `server.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.3.1 here).
 - radon: no function worse than C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22).
 
