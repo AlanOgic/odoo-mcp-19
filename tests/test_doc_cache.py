@@ -193,3 +193,10 @@ def test_one_identity_denied_does_not_deny_another(clock):
     _live_doc_as(denied, "hr.payslip")
 
     assert _live_doc_as(admin, "hr.payslip") == {"methods": {"compute_sheet": {}}}
+
+
+def test_the_server_version_of_an_unresolvable_caller_is_refused():
+    """Same identity rule as the documents: a lost identity surfaces, it is not read as 'version unknown'."""
+    with patch.object(utils, "get_odoo_client", side_effect=PermissionError("no credentials")):
+        with pytest.raises(PermissionError, match="no credentials"):
+            utils.get_server_version()

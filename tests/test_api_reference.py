@@ -290,3 +290,11 @@ def test_every_registered_resource_has_exactly_one_bridge_route():
         matches = [p.pattern for p, _, _ in _RESOURCE_ROUTES if p.match(uri)]
         assert len(matches) == 1, f"expected exactly one bridge route for {uri}, got {matches}"
     assert len(uris) == len(_RESOURCE_ROUTES)
+
+
+def test_every_method_refused_by_version_has_a_drift_entry():
+    """arg_mapping refuses these before sending; the drift reference must explain why."""
+    from odoo_mcp.arg_mapping import REMOVED_AFTER_19_0
+
+    olds = {e["old"] for e in api_reference.version_drift_reference()["changes"]}
+    assert set(REMOVED_AFTER_19_0) <= olds

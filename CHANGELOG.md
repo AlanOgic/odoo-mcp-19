@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are retried on the next call.
 
 ### Added
+- **The server reads the connected Odoo version** (`OdooClient.server_version`, from
+  `GET /web/version`, which needs no group or access right; kept an hour so an Odoo Online
+  upgrade is picked up without a restart) and adapts the calls whose shape changed:
+  - `read_group` is sent with the 20.0 signature on Odoo 20 (`groupby`, `aggregates`, `having`,
+    `order`), and refused with its replacement on saas-19.1 to 19.4, where it does not exist.
+  - `check_access_rights`, `check_access_rule` and `toggle_active` are refused after 19.0 with
+    their replacement (`has_access`, `action_archive`), before any request or confirmation token.
+  - `odoo://methods/{model}` lists only the methods the connected server has, with their
+    parameters for that version.
+  The version is read only for those methods; an unreadable version keeps the 19.0 tables.
 - **A hint for `401 Invalid apikey`**: the key is wrong, revoked or expired, or its scope does not
   fit. Up to Odoo 19.3 JSON-2 takes a key without a scope or with scope `rpc`; from 19.4 only `rpc`
   (`res_users._check_apikey_credentials`). It matches Odoo's message, not a bare `401`, which also

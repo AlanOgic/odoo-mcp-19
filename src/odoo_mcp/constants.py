@@ -572,6 +572,11 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
 
 _READ_RESOURCE_MAX_CHARS = 15000  # Safe default for Claude Desktop context window
 
+# ----- Connected Odoo version -----
+# OdooClient.server_version is read again after an hour, so an Odoo Online upgrade
+# (19.3 -> 19.4 happened without notice) reaches a long-running server.
+SERVER_VERSION_TTL = 3600
+
 # ----- HTTP rate-limit retry (Odoo SaaS answers request bursts with 429) -----
 # One retry only: a second 429 is raised so a throttled server can never turn
 # into an unbounded wait. Retry-After is honoured but capped — a hostile or

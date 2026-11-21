@@ -147,3 +147,25 @@ def test_discovered_methods_list_param_names_but_not_param_details():
     send = next(m for m in payload["additional_methods"] if m["name"] == "action_quotation_send")
     assert send["params"] == ["ids"]
     assert "param_details" not in send
+
+
+def test_the_catalog_omits_methods_the_connected_server_removed():
+    payload = method_catalog.build_methods_payload("res.partner", None, version=(19, 3))
+    names = {entry["name"] for entry in _orm_entries(payload)}
+    assert names.isdisjoint({"read_group", "check_access_rights"})
+    assert {"formatted_read_group", "has_access"} <= names
+
+
+def test_on_odoo_20_read_group_lists_its_20_parameters():
+    payload = method_catalog.build_methods_payload("res.partner", None, version=(20, 0))
+    entry = next(e for e in _orm_entries(payload) if e["name"] == "read_group")
+    assert entry["params"] == ["domain", "groupby", "aggregates", "having", "offset", "limit", "order"]
+
+
+def test_the_methods_resource_uses_the_callers_server_version():
+    with (
+        patch.object(resources, "_get_live_doc", return_value=None),
+        patch.object(resources, "get_server_version", return_value=(19, 3)),
+    ):
+        payload = json.loads(resources.get_methods("res.partner"))
+    assert "read_group" not in {entry["name"] for entry in _orm_entries(payload)}

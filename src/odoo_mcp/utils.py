@@ -133,6 +133,21 @@ def _store_doc_answer(
         del cache[min(cache, key=lambda k: cache[k][0])]
 
 
+def get_server_version() -> Optional[tuple[int, int]]:
+    """The caller's Odoo (major, minor), or None when no client can be built or the version is unreadable.
+
+    Same identity rule as ``_get_live_doc``: a ``PermissionError`` propagates.
+    """
+    try:
+        odoo = get_odoo_client()
+    except PermissionError:
+        raise
+    except Exception as e:
+        logger.warning("Odoo server version unavailable: %s", e)
+        return None
+    return odoo.server_version()
+
+
 def _get_live_doc(model_name: str) -> Optional[Dict[str, Any]]:
     """Fetch live model docs from /doc-bearer/ with in-memory caching.
 

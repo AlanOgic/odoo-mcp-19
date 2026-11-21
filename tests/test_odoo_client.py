@@ -267,3 +267,78 @@ class TestDocEndpointsSeparateRefusalFromFailure:
         client.session.post = MagicMock(side_effect=requests.exceptions.ConnectTimeout("slow"))
         with pytest.raises(requests.exceptions.ConnectTimeout):
             fetch(client)
+
+
+def _version_response(*version_info):
+    return _stub_response({"version_info": list(version_info), "version": "x"})
+
+
+class TestServerVersion:
+    """The connected series, from ``GET /web/version`` (rpc addon, auth='none'): ``release.version_info``."""
+
+    @pytest.mark.parametrize(
+        ("version_info", "expected"),
+        [
+            ((19, 0, 0, "final", 0, ""), (19, 0)),
+            (("saas~19", 3, 0, "final", 0, ""), (19, 3)),
+            ((20, 0, 0, "final", 0, ""), (20, 0)),
+            ((20, 1, 0, "alpha", 1, ""), (20, 1)),
+        ],
+    )
+    def test_version_info_gives_the_series(self, version_info, expected):
+        client = _make_client()
+        client.session.get = MagicMock(return_value=_version_response(*version_info))
+        assert client.server_version() == expected
+        assert client.session.get.call_args.args[0] == "https://mycompany.example.com/web/version"
+
+    def test_the_version_is_read_once(self):
+        client = _make_client()
+        client.session.get = MagicMock(return_value=_version_response("saas~19", 3, 0, "final", 0, ""))
+        client.server_version()
+        client.server_version()
+        assert client.session.get.call_count == 1
+
+    def test_an_unreadable_version_is_none_and_retried(self):
+        client = _make_client()
+        client.session.get = MagicMock(side_effect=requests.exceptions.ConnectionError("down"))
+        assert client.server_version() is None
+        client.session.get = MagicMock(return_value=_version_response(19, 0, 0, "final", 0, ""))
+        assert client.server_version() == (19, 0)
+
+    def test_the_version_is_read_again_after_the_ttl(self):
+        """An Odoo Online upgrade (19.3 → 19.4) must reach a long-running server without a restart."""
+        from odoo_mcp.constants import SERVER_VERSION_TTL
+
+        client = _make_client()
+        client.session.get = MagicMock(return_value=_version_response("saas~19", 3, 0, "final", 0, ""))
+        with patch("odoo_mcp.odoo_client.time.time", return_value=1_000.0):
+            client.server_version()
+        client.session.get = MagicMock(return_value=_version_response("saas~19", 4, 0, "final", 0, ""))
+        with patch("odoo_mcp.odoo_client.time.time", return_value=1_000.0 + SERVER_VERSION_TTL + 1):
+            assert client.server_version() == (19, 4)
+
+    def test_a_removed_method_is_refused_before_it_is_sent(self):
+        client = _make_client()
+        client.session.get = MagicMock(return_value=_version_response("saas~19", 3, 0, "final", 0, ""))
+        client.session.post = MagicMock()
+        with pytest.raises(ValueError, match="formatted_read_group"):
+            client.execute_method("sale.order", "read_group", [], ["amount_total"], ["partner_id"])
+        client.session.post.assert_not_called()
+
+    def test_read_group_on_20_is_sent_with_the_20_signature(self):
+        client = _make_client()
+        client.session.get = MagicMock(return_value=_version_response(20, 0, 0, "final", 0, ""))
+        client.session.post = MagicMock(return_value=_stub_response([]))
+        client.execute_method("sale.order", "read_group", [], ["partner_id"], ["amount_total:sum"])
+        assert client.session.post.call_args.kwargs["json"] == {
+            "domain": [],
+            "groupby": ["partner_id"],
+            "aggregates": ["amount_total:sum"],
+        }
+
+    def test_an_unchanged_method_does_not_read_the_version(self):
+        client = _make_client()
+        client.session.get = MagicMock()
+        client.session.post = MagicMock(return_value=_stub_response([]))
+        client.execute_method("res.partner", "search", [])
+        client.session.get.assert_not_called()
