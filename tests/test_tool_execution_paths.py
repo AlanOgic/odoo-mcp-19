@@ -194,6 +194,13 @@ def test_a_full_page_says_more_records_may_exist():
     assert f"{DEFAULT_LIMIT} records" in defaulted.note and "offset" in defaulted.note
     assert "odoo://pagination" in defaulted.note
     assert "5 records" in explicit.note
+    assert '"offset": 100' in defaulted.note and '"offset": 5' in explicit.note
+
+
+def test_the_full_page_note_gives_the_next_offset_as_a_number():
+    client = _client(execute_method=lambda *a, **k: [{"id": i} for i in range(k["limit"])])
+    response = _call(client, model="res.partner", method="search_read", kwargs_json='{"limit": 50, "offset": 200}')
+    assert '"offset": 250' in response.note
 
 
 def test_a_short_page_carries_no_pagination_note():
@@ -201,7 +208,8 @@ def test_a_short_page_carries_no_pagination_note():
     assert _call(client, model="res.partner", method="search_read", kwargs_json="{}").note is None
 
 
-@pytest.mark.parametrize("limit", ['"10"', "10.5", "true", "[5]"])
+# "1500" and 2500.5: the error text contains "500", which used to start the 500 fallback.
+@pytest.mark.parametrize("limit", ['"10"', "10.5", "true", "[5]", '"1500"', "2500.5"])
 def test_a_limit_that_is_not_an_integer_is_an_error(limit):
     """Replacing it by the default would return ten times what '"10"' asked for."""
     client = _client(execute_method=lambda *a, **k: [])

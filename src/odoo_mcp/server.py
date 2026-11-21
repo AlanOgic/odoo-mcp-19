@@ -469,11 +469,13 @@ def _full_page_note(method: str, kwargs: dict, result: Any) -> str | None:
     limit = kwargs.get("limit")
     if len(result) != limit:
         return None
+    offset = kwargs.get("offset")
+    next_offset = limit + (offset if isinstance(offset, int) and not isinstance(offset, bool) else 0)
     return (
         f"Returned {limit} records, which is the limit sent: more may match. A limit of 0, false or null "
         f"is not 'no limit' here (default {DEFAULT_LIMIT}, maximum {MAX_LIMIT}). Fetch the next page with "
-        f'"offset": {kwargs.get("offset") or 0} + {limit} and a stable "order" (e.g. "id"), until a page is '
-        f"shorter than the limit; search_count gives the total. See odoo://pagination."
+        f'"offset": {next_offset} and a stable "order" (e.g. "id"), until a page is shorter than the '
+        f"limit; search_count gives the total. See odoo://pagination."
     )
 
 
@@ -731,7 +733,15 @@ def execute_method(
             return gated
 
         args, kwargs = _apply_search_defaults(method, args, kwargs)
-        result = odoo.execute_method(model, method, *args, **kwargs)
+        try:
+            result = odoo.execute_method(model, method, *args, **kwargs)
+        except Exception as e:
+            # Only an error from the Odoo call itself may start the fallback: a local
+            # validation message can contain "500" too ('limit' ... got '1500').
+            error_msg = str(e)
+            if method == "search_read" and ("500" in error_msg or "Internal Server Error" in error_msg):
+                return _search_read_fallback(odoo, model, kwargs, error_msg, start_time)
+            raise
         return ExecuteMethodResponse(
             success=True,
             result=result,
@@ -741,11 +751,7 @@ def execute_method(
         )
 
     except Exception as e:
-        error_msg = str(e)
-        # `not args`: the call reached _apply_search_defaults, so kwargs is the whole request.
-        if method == "search_read" and not args and ("500" in error_msg or "Internal Server Error" in error_msg):
-            return _search_read_fallback(odoo, model, kwargs, error_msg, start_time)
-        return _failure_response(model, method, error_msg, start_time)
+        return _failure_response(model, method, str(e), start_time)
 
 
 # ----- batch_execute phases -----
