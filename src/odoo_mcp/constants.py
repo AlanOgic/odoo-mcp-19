@@ -365,11 +365,21 @@ _DOC_CACHE: Dict[tuple[Any, Any, str], tuple[float, dict]] = {}
 _DOC_CACHE_TTL = 300  # 5 minutes
 _DOC_CACHE_MAX_ENTRIES = 100
 _DOC_CACHE_LOCK = threading.Lock()
+# Answers without a document that a retry would not change — Odoo's refusals
+# (403: no api_doc.group_allow_doc or no read access; 404: unknown model) and a
+# 200 whose body is not a doc — by the same key -> time, under _DOC_CACHE_LOCK.
+# Kept apart, with their own _DOC_CACHE_MAX_ENTRIES cap, so a run of unknown models
+# cannot evict cached documents. Transient failures (network, 429, 5xx) are never recorded.
+_DOC_REFUSALS: Dict[tuple[Any, Any, str], float] = {}
+_DOC_NEGATIVE_TTL = 60  # a refusal is asked again after a minute
 
 # /doc-bearer/index.json is filtered by the caller's groups, so it is cached per
-# (url, username) — never shared across registry users. Same TTL as the docs.
-_API_INDEX_CACHE: Dict[tuple, tuple] = {}
-_API_INDEX_CACHE_MAX_ENTRIES = 20  # ~2 MB per entry on a full instance
+# (url, username) — never shared across registry users. Same TTLs as the docs.
+# Only the compact form (build_api_index) is kept: the raw index is ~2 MB on a
+# full instance, the compact one ~80 bytes per model.
+_API_INDEX_CACHE: Dict[tuple, tuple[float, dict]] = {}
+_API_INDEX_REFUSALS: Dict[tuple, float] = {}  # under _API_INDEX_CACHE_LOCK, like _DOC_REFUSALS
+_API_INDEX_CACHE_MAX_ENTRIES = 20
 _API_INDEX_CACHE_LOCK = threading.Lock()
 
 

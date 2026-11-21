@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **FastMCP floor raised to `fastmcp[tasks]>=4.1.5,<5`** (was `>=4.0.10`), the version a fresh
   install resolves to and the suite is run against.
+- **Every `odoo://` resource is served as compact JSON** (`utils._dumps`). 48 serializer calls
+  were still indented: 26 % fewer characters across the static guides, 37 % on
+  `odoo://model/{m}/fields`. A 150-field `/fields` (20 204 → 12 829 chars) now fits under the
+  15 000-char `read_resource` cap instead of being truncated. A test reads one URI per bridge
+  route.
+- **The `odoo://api-index` cache keeps only the compact catalogue** (`get_compact_api_index`,
+  formerly `get_live_api_index`). It stored the raw `/doc-bearer/index.json` (~2 MB per
+  identity, up to 20 identities) and recompacted it on every read.
+- **Odoo's refusal of a `/doc-bearer/` document is cached for 60 s** (`_DOC_NEGATIVE_TTL`), for
+  model docs and the API index alike. An API user without `api_doc.group_allow_doc` paid a
+  failing request on each `odoo://methods/{model}` read, private-method check and
+  `odoo://api-index` read. Only answers a retry would not change are cached: a 403, a 404, or a 200 without a document. They are stored apart,
+  so a run of unknown models cannot evict cached documents. `OdooClient.get_model_doc` and
+  `get_api_index` now raise on network errors, 429 and 5xx instead of returning None, and those
+  are retried on the next call.
 
 ### Fixed
 - **The FastMCP floor test no longer fails on upstream releases.** It compared the floor with

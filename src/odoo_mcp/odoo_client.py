@@ -256,36 +256,36 @@ class OdooClient:
         The api_doc module is auto-installed in Odoo 19 (depends: ['web']).
         Requires the user to have the api_doc.group_allow_doc group.
 
-        Returns the full model doc dict or None if unavailable.
+        Returns the full model doc dict, or None when Odoo refuses it (see
+        ``_is_doc_refusal``) — a definitive answer the caller may cache. A failure
+        that can clear on retry (network, timeout, 429, 5xx, non-JSON body) raises.
         """
         url = f"{self.url}/doc-bearer/{model_name}.json"
-        try:
-            response = self.session.post(url, json={}, timeout=self.timeout)
-            response.raise_for_status()
-            data = response.json()
-            # JSON-2 may wrap in {"result": ...} or return directly
-            if isinstance(data, dict) and "result" in data and isinstance(data["result"], dict):
-                return cast(dict[str, Any], data["result"])
-            return cast("dict[str, Any] | None", data)
-        except Exception as e:
-            logger.debug("get_model_doc failed for %s: %s: %s", model_name, type(e).__name__, e)
+        response = self.session.post(url, json={}, timeout=self.timeout)
+        if _is_doc_refusal(response.status_code):
+            logger.debug("/doc-bearer/ refused %s: HTTP %s", model_name, response.status_code)
             return None
+        response.raise_for_status()
+        data = response.json()
+        # JSON-2 may wrap in {"result": ...} or return directly
+        if isinstance(data, dict) and "result" in data and isinstance(data["result"], dict):
+            return cast(dict[str, Any], data["result"])
+        return cast("dict[str, Any] | None", data)
 
     def get_api_index(self) -> dict[str, Any] | None:
         """Fetch /doc-bearer/index.json — every installed module and readable model.
 
-        Same access rule as ``get_model_doc`` (api_doc.group_allow_doc); returns
-        None when the endpoint is unavailable so the caller can fall back.
+        Same access rule and failure contract as ``get_model_doc``: None for a
+        refusal, an exception for anything that can clear on retry.
         """
         url = f"{self.url}/doc-bearer/index.json"
-        try:
-            response = self.session.post(url, json={}, timeout=self.timeout)
-            response.raise_for_status()
-            data = response.json()
-            return cast("dict[str, Any] | None", data if isinstance(data, dict) else None)
-        except Exception as e:
-            logger.warning("/doc-bearer/index.json unavailable: %s: %s", type(e).__name__, e)
+        response = self.session.post(url, json={}, timeout=self.timeout)
+        if _is_doc_refusal(response.status_code):
+            logger.warning("/doc-bearer/index.json refused: HTTP %s", response.status_code)
             return None
+        response.raise_for_status()
+        data = response.json()
+        return cast("dict[str, Any] | None", data if isinstance(data, dict) else None)
 
     def search_read(
         self,
@@ -315,6 +315,16 @@ class OdooClient:
         if fields is not None:
             kwargs["fields"] = fields
         return cast("list[dict[str, Any]]", self._execute(model_name, "read", ids, **kwargs))
+
+
+def _is_doc_refusal(status_code: int) -> bool:
+    """Whether a /doc-bearer/ status is Odoo refusing the document, not a passing failure.
+
+    api_doc answers 403 when the user lacks ``api_doc.group_allow_doc`` or read access
+    and 404 for an unknown model (``api_doc/controllers/api_doc.py`` @ 19.0). A 429 is
+    throttling and clears on retry like a 5xx.
+    """
+    return 400 <= status_code < 500 and status_code != RATE_LIMIT_STATUS
 
 
 def _retry_after_delay(header_value: str | None) -> float:

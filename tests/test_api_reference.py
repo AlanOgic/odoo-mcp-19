@@ -203,6 +203,56 @@ def test_api_index_is_cached_per_client_identity():
     assert other.get_api_index.call_count == 1
 
 
+def test_api_index_cache_holds_only_the_compact_catalogue():
+    """The raw index carries every field label of every model (~2 MB per identity); only its compact form is served."""
+    from odoo_mcp.constants import _API_INDEX_CACHE
+
+    with patch.object(utils, "get_odoo_client", return_value=_client(_RAW_INDEX)):
+        resources.get_api_index()
+    [(_, cached)] = _API_INDEX_CACHE.values()
+    assert cached == api_reference.build_api_index(_RAW_INDEX)
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 1_000_000.0
+
+    def time(self):
+        return self.now
+
+
+def test_an_unavailable_api_index_is_not_refetched_on_every_read():
+    client = _client(None)
+    with patch.object(utils, "get_odoo_client", return_value=client), patch.object(utils, "time", _Clock()):
+        resources.get_api_index()
+        resources.get_api_index()
+    assert client.get_api_index.call_count == 1
+
+
+def test_an_unavailable_api_index_is_retried_once_the_negative_ttl_expires():
+    from odoo_mcp.constants import _DOC_NEGATIVE_TTL
+
+    client, clock = _client(None), _Clock()
+    with patch.object(utils, "get_odoo_client", return_value=client), patch.object(utils, "time", clock):
+        resources.get_api_index()
+        client.get_api_index.return_value = _RAW_INDEX
+        clock.now += _DOC_NEGATIVE_TTL + 1
+        out = json.loads(resources.get_api_index())
+    assert out["model_count"] == 2
+    assert client.get_api_index.call_count == 2
+
+
+def test_a_transient_api_index_failure_is_retried_on_the_next_read():
+    """A network blip must not tell the agent for a minute that the api_doc group is missing."""
+    client = _client(None)
+    client.get_api_index.side_effect = ConnectionError("blip")
+    with patch.object(utils, "get_odoo_client", return_value=client), patch.object(utils, "time", _Clock()):
+        resources.get_api_index()
+        client.get_api_index.side_effect, client.get_api_index.return_value = None, _RAW_INDEX
+        out = json.loads(resources.get_api_index())
+    assert out["model_count"] == 2
+
+
 # ----- bridge routes + parity -----
 
 
