@@ -186,8 +186,48 @@ _KWARGS_MAPPING_EXEMPT: dict[str, set[str]] = {
     "read_group": {"orderby"},
 }
 
+# Methods the 19.0 tables above know but later servers removed, with what to call
+# instead. Absent from odoo/orm/models.py on saas-19.1 to saas-19.4 and on 20.0, and
+# answering 404 on Odoo Online 19.3 (odoo://api/version-drift).
+REMOVED_AFTER_19_0: dict[str, str] = {
+    "read_group": "formatted_read_group(domain, groupby, aggregates, having, offset, limit, order)",
+    "check_access_rights": "has_access(operation)",
+    "check_access_rule": "has_access(operation)",
+    "toggle_active": "action_archive / action_unarchive",
+}
 
-def convert_args_to_v2(method: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+# Odoo 20.0 brings read_group back with formatted_read_group's signature (returning
+# tuples); its sort parameter is "order" again (odoo/orm/models.py @ 20.0).
+_ODOO_20_ARG_MAPPING: dict[str, list[tuple[int, str]]] = {"read_group": V2_ARG_MAPPING["formatted_read_group"]}
+
+# The only methods whose conversion depends on the server: callers read the version for these alone.
+VERSION_SENSITIVE_METHODS = frozenset(REMOVED_AFTER_19_0)
+
+
+def _tables_for(method: str, version: tuple[int, int] | None) -> tuple[list[tuple[int, str]], set[str]]:
+    """Positional mapping and kwargs exemptions for ``method`` on ``version`` (None: the 19.0 tables)."""
+    if version is None or version <= (19, 0) or method not in VERSION_SENSITIVE_METHODS:
+        return V2_ARG_MAPPING.get(method, []), _KWARGS_MAPPING_EXEMPT.get(method, set())
+    if version >= (20, 0) and method in _ODOO_20_ARG_MAPPING:
+        return _ODOO_20_ARG_MAPPING[method], set()
+    raise ValueError(
+        f"{method} does not exist on Odoo {version[0]}.{version[1]} (removed after 19.0). "
+        f"Use {REMOVED_AFTER_19_0[method]} instead; see odoo://api/version-drift."
+    )
+
+
+def positional_params(method: str, version: tuple[int, int] | None = None) -> list[str] | None:
+    """The method's JSON-2 parameter names in positional order, or None if ``version`` lacks it."""
+    try:
+        mapping, _ = _tables_for(method, version)
+    except ValueError:
+        return None
+    return [param for _, param in sorted(mapping)]
+
+
+def convert_args_to_v2(
+    method: str, args: tuple[Any, ...], kwargs: dict[str, Any], version: tuple[int, int] | None = None
+) -> dict[str, Any]:
     """
     Convert positional arguments to named arguments for v2 API.
 
@@ -195,6 +235,8 @@ def convert_args_to_v2(method: str, args: tuple[Any, ...], kwargs: dict[str, Any
         method: The ORM method name (e.g., 'search_read', 'write')
         args: Positional arguments
         kwargs: Keyword arguments
+        version: The server's (major, minor), e.g. (19, 3) for saas~19.3. Only
+            VERSION_SENSITIVE_METHODS use it; None keeps the 19.0 tables.
 
     Returns:
         Dictionary with all arguments as named parameters for v2 API
@@ -205,11 +247,13 @@ def convert_args_to_v2(method: str, args: tuple[Any, ...], kwargs: dict[str, Any
             dropping it silently would send a *different, still-valid* request
             (a name_search minus its domain, a search minus its limit) and
             return plausible but wrong results. Failing loudly is the point.
+            Also raised for a method ``version`` no longer has, naming its
+            replacement, so the call fails before a round-trip.
     """
     result: dict[str, Any] = {}
 
     # Get mapping for this method
-    arg_mapping = V2_ARG_MAPPING.get(method, [])
+    arg_mapping, exempt = _tables_for(method, version)
     mapped_positions = {pos for pos, _ in arg_mapping}
 
     # Convert positional args
@@ -235,7 +279,6 @@ def convert_args_to_v2(method: str, args: tuple[Any, ...], kwargs: dict[str, Any
         raise ValueError(_unmappable_args_message(method, args, arg_mapping, unmappable))
 
     # Convert kwargs (handle any name changes)
-    exempt: set[str] = _KWARGS_MAPPING_EXEMPT.get(method, set())
     for k, v in kwargs.items():
         v2_name = k if k in exempt else V2_KWARGS_MAPPING.get(k, k)
         # The safety gate reads the positional form; letting the named one win

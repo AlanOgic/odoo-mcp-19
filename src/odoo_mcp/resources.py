@@ -59,6 +59,7 @@ from .utils import (
     fields_cache_key,
     fields_cache_put,
     get_compact_api_index,
+    get_server_version,
 )
 
 logger = logging.getLogger(__name__)
@@ -507,7 +508,7 @@ def get_methods(model_name: str) -> str:
     err = _validate_model(model_name)
     if err:
         return _dumps({"error": err, "hint": _MODEL_LOOKUP_HINT})
-    return _dumps(build_methods_payload(model_name, _get_live_doc(model_name)))
+    return _dumps(build_methods_payload(model_name, _get_live_doc(model_name), get_server_version()))
 
 
 def _selection_options(odoo_client: Any, model_name: str, fields_meta: list) -> Dict[str, list]:

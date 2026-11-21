@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
-from .arg_mapping import V2_ARG_MAPPING
+from .arg_mapping import positional_params
 from .constants import MODULE_KNOWLEDGE
 from .utils import _strip_html
 
@@ -42,7 +42,7 @@ _STATIC_TABLE: Dict[str, List[tuple[str, str, Optional[str]]]] = {
         ("search_count", "Count matching records", None),
         (
             "read_group",
-            "Aggregation with grouping (Odoo 19.0 only — use formatted_read_group)",
+            "Aggregation with grouping (19.0 and 20.0 differ; saas-19.x lacks it) — prefer formatted_read_group",
             "Answers on Odoo 19.0 only (deprecated). Removed in Odoo Online 19.1-19.4 (404); Odoo 20.0 has a "
             "different read_group returning tuples. formatted_read_group works on every version.",
         ),
@@ -85,9 +85,16 @@ _STATIC_TABLE: Dict[str, List[tuple[str, str, Optional[str]]]] = {
 _LIVE_SCALAR_KEYS: tuple[tuple[str, str], ...] = (("signature", "signature"), ("api", "api"), ("module", "module"))
 
 
-def _static_entry(name: str, description: str, note: Optional[str]) -> Dict[str, Any]:
-    """One catalog row; ``params`` is the mapping's positional order."""
-    params = [param for _, param in sorted(V2_ARG_MAPPING[name])]
+def _static_entry(
+    name: str, description: str, note: Optional[str], version: Optional[tuple[int, int]]
+) -> Optional[Dict[str, Any]]:
+    """One catalog row; ``params`` is the mapping's positional order on ``version``.
+
+    None when the connected server no longer has the method (arg_mapping.REMOVED_AFTER_19_0).
+    """
+    params = positional_params(name, version)
+    if params is None:
+        return None
     entry: Dict[str, Any] = {"name": name, "description": description, "params": params}
     if note:
         entry["note"] = note
@@ -176,10 +183,16 @@ def _discovered_methods(live_methods: Dict[str, Any], known: Iterable[str]) -> L
     return additional
 
 
-def build_methods_payload(model_name: str, live_doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Assemble the ``odoo://methods/{model}`` document (pure; no I/O)."""
+def build_methods_payload(
+    model_name: str, live_doc: Optional[Dict[str, Any]], version: Optional[tuple[int, int]] = None
+) -> Dict[str, Any]:
+    """Assemble the ``odoo://methods/{model}`` document (pure; no I/O).
+
+    ``version`` is the connected server's (major, minor); None keeps the 19.0 tables.
+    """
     payload: Dict[str, Any] = {
-        category: [_static_entry(*row) for row in rows] for category, rows in _STATIC_TABLE.items()
+        category: [entry for row in rows if (entry := _static_entry(*row, version)) is not None]
+        for category, rows in _STATIC_TABLE.items()
     }
     special, warnings, field_mappings = _special_methods(model_name)
     payload["special_methods"] = special

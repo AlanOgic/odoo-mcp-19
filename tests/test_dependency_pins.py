@@ -22,17 +22,11 @@ See ``docs/mcp-2026-07-28-migration.md`` before raising either bound.
 
 import importlib.metadata as metadata
 import re
-import sys
+import tomllib
 from pathlib import Path
 
-import pytest
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - only exercised on 3.10
-    tomllib = pytest.importorskip("tomli", reason="3.10 needs tomli to read pyproject")
-
 from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
@@ -44,14 +38,23 @@ MIGRATION_DOC = "docs/mcp-2026-07-28-migration.md"
 FASTMCP_MAJOR = 4
 MCP_SDK_MAJOR = 2
 
-# The release just below the oldest one the full suite was verified on (4.1.5).
+# The release just below the oldest one the full suite was verified on (4.2.3).
 # Fixed on purpose: see test_fastmcp_floor_not_below_tested_baseline.
-FASTMCP_LAST_UNVERIFIED = Version("4.1.4")
+FASTMCP_LAST_UNVERIFIED = Version("4.2.2")
+
+# FastMCP 4.2.0 requires Python 3.11: on 3.10 an install silently resolves the 4.1.x line.
+PYTHON_LAST_UNSUPPORTED = Version("3.10")
+
+WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "tests.yml"
+
+
+def _project() -> dict:
+    with PYPROJECT.open("rb") as fh:
+        return tomllib.load(fh)["project"]
 
 
 def _declared_dependencies() -> list[str]:
-    with PYPROJECT.open("rb") as fh:
-        return tomllib.load(fh)["project"]["dependencies"]
+    return _project()["dependencies"]
 
 
 def _fastmcp_requirement() -> Requirement:
@@ -129,6 +132,28 @@ class TestDeclaredConstraint:
             " the tested baseline. Restore the floor: an install must not be able"
             " to land on a version this suite never verified."
         )
+
+    def test_python_floor_excludes_what_the_fastmcp_floor_dropped(self):
+        """A Python that the FastMCP floor refuses would install an unverified FastMCP line."""
+        requires = SpecifierSet(_project()["requires-python"])
+        assert not requires.contains(PYTHON_LAST_UNSUPPORTED), (
+            f"requires-python {requires} admits Python {PYTHON_LAST_UNSUPPORTED}, where"
+            f" fastmcp {_fastmcp_requirement().specifier} cannot be installed."
+        )
+
+    def test_classifiers_and_ci_matrix_follow_the_python_floor(self):
+        requires = SpecifierSet(_project()["requires-python"])
+        classified = {
+            c.rsplit(" :: ", 1)[1]
+            for c in _project()["classifiers"]
+            if re.fullmatch(r"Programming Language :: Python :: 3\.\d+", c)
+        }
+        matrix = re.search(r"python-version:\s*\[([^\]]*)\]", WORKFLOW.read_text(encoding="utf-8"))
+        assert matrix, f"no python-version matrix found in {WORKFLOW.name}"
+        assert set(re.findall(r'"(3\.\d+)"', matrix.group(1))) == classified
+        assert all(
+            requires.contains(Version(v)) for v in classified
+        ), f"a classifier names a Python that requires-python {requires} refuses"
 
 
 def _dockerfile_instructions() -> str:

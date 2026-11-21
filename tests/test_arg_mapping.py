@@ -254,3 +254,45 @@ def test_execute_method_rejects_a_duplicated_parameter_before_issuing_a_token(mo
     assert "both" in response.error
     assert "confirmation_token" not in (response.hint or "")
     odoo.execute_method.assert_not_called()
+
+
+class TestVersionAwareMapping:
+    """The 19.0 tables are wrong on later servers (odoo/orm/models.py per branch, see odoo://api/version-drift).
+
+    read_group is gone from saas-19.1 to 19.4 and comes back in 20.0 with formatted_read_group's
+    signature; check_access_rights / check_access_rule / toggle_active are gone after 19.0.
+    """
+
+    def test_read_group_on_20_takes_the_formatted_read_group_signature(self):
+        body = convert_args_to_v2("read_group", ([], ["partner_id"], ["amount_total:sum"]), {}, version=(20, 0))
+        assert body == {"domain": [], "groupby": ["partner_id"], "aggregates": ["amount_total:sum"]}
+
+    def test_read_group_on_20_sorts_with_order(self):
+        body = convert_args_to_v2("read_group", ([], ["partner_id"]), {"orderby": "partner_id"}, version=(20, 0))
+        assert body["order"] == "partner_id"
+        assert "orderby" not in body
+
+    @pytest.mark.parametrize("version", [(19, 1), (19, 3), (19, 4)])
+    def test_read_group_on_saas_19_is_refused_with_its_replacement(self, version):
+        with pytest.raises(ValueError, match=rf"read_group.*19\.{version[1]}.*formatted_read_group"):
+            convert_args_to_v2("read_group", ([], ["amount_total"], ["partner_id"]), {}, version=version)
+
+    @pytest.mark.parametrize(
+        ("method", "replacement", "version"),
+        [
+            ("check_access_rights", "has_access", (19, 3)),
+            ("check_access_rule", "has_access", (20, 0)),
+            ("toggle_active", "action_archive", (19, 1)),
+        ],
+    )
+    def test_a_method_removed_after_19_0_is_refused_with_its_replacement(self, method, replacement, version):
+        with pytest.raises(ValueError, match=replacement):
+            convert_args_to_v2(method, ([1],), {}, version=version)
+
+    @pytest.mark.parametrize("version", [(19, 0), None])
+    def test_19_0_and_an_unknown_version_keep_the_19_0_tables(self, version):
+        body = convert_args_to_v2("read_group", ([], ["x"], ["y"]), {"orderby": "x"}, version=version)
+        assert body == {"domain": [], "fields": ["x"], "groupby": ["y"], "orderby": "x"}
+
+    def test_methods_that_did_not_change_ignore_the_version(self):
+        assert convert_args_to_v2("search", ([],), {}, version=(20, 0)) == {"domain": []}

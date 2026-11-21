@@ -95,6 +95,7 @@ def test_missing_method_404_is_not_reported_as_a_wrong_model():
 
 def test_missing_method_hint_is_not_a_field_name_error(monkeypatch):
     odoo = MagicMock()
+    odoo.server_version.return_value = None
     odoo.execute_method.side_effect = RuntimeError(MISSING_METHOD_ERROR)
     monkeypatch.setattr("odoo_mcp.server.get_odoo_client", lambda: odoo)
     from odoo_mcp.server import execute_method
@@ -104,3 +105,16 @@ def test_missing_method_hint_is_not_a_field_name_error(monkeypatch):
     assert response.success is False
     assert "Field name error" not in response.hint
     assert "odoo://methods/res.partner" in response.hint
+
+
+def test_a_method_the_server_removed_is_refused_before_it_is_sent(monkeypatch):
+    odoo = MagicMock()
+    odoo.server_version.return_value = (19, 3)
+    monkeypatch.setattr("odoo_mcp.server.get_odoo_client", lambda: odoo)
+    from odoo_mcp.server import execute_method
+
+    response = execute_method(ctx=MagicMock(), model="res.partner", method="check_access_rights", args_json='["read"]')
+
+    assert response.success is False
+    assert "has_access" in response.error
+    odoo.execute_method.assert_not_called()

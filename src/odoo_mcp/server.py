@@ -29,7 +29,7 @@ from fastmcp.dependencies import Progress
 from . import prompts as _prompts  # noqa: F401 -- import triggers prompt registration
 from . import resources as _resources  # noqa: F401 -- import triggers resource registration
 from .app import ODOO_ICON, mcp  # noqa: F401 -- mcp import triggers FastMCP setup
-from .arg_mapping import convert_args_to_v2
+from .arg_mapping import VERSION_SENSITIVE_METHODS, convert_args_to_v2
 from .constants import (
     _READ_RESOURCE_MAX_CHARS,
     COMPACT_FIELD_ATTRIBUTES,
@@ -678,9 +678,11 @@ def execute_method(
             return rejected
 
         # Reject a payload JSON-2 cannot express (unmappable positional, parameter
-        # given twice) before the gate: no token is spent on a call that cannot be sent,
-        # and the gate never classifies a payload that differs from the one sent.
-        convert_args_to_v2(method, tuple(args), kwargs)
+        # given twice, a method the server removed) before the gate: no token is spent on a
+        # call that cannot be sent, and the gate never classifies a payload that differs
+        # from the one sent.
+        version = odoo.server_version() if method in VERSION_SENSITIVE_METHODS else None
+        convert_args_to_v2(method, tuple(args), kwargs, version)
 
         gated, classification = _classify_and_gate(
             odoo, model, method, args, kwargs, confirmed, confirmation_token, start_time

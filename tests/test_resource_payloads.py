@@ -211,6 +211,7 @@ def test_every_resource_emits_compact_json(uri):
     client.read_records.return_value = [{"id": 7, "name": "Thing"}]
     client.get_model_doc.return_value = None
     client.get_api_index.return_value = None
+    client.server_version.return_value = None
     with (
         patch.object(resources, "get_odoo_client", return_value=client),
         patch.object(utils, "get_odoo_client", return_value=client),

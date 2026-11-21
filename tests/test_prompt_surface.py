@@ -8,7 +8,7 @@ keep the per-user filter that only existed for them.
 
 import asyncio
 import importlib.util
-import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -16,11 +16,6 @@ import pytest
 import odoo_mcp
 import odoo_mcp.server  # noqa: F401  registers every prompt the server publishes
 from odoo_mcp.app import mcp
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - Python 3.10
-    tomllib = pytest.importorskip("tomli", reason="3.10 needs tomli to read pyproject")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL_PROMPT_PREFIX = "cyanview-"

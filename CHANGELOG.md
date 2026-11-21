@@ -8,8 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **FastMCP floor raised to `fastmcp[tasks]>=4.1.5,<5`** (was `>=4.0.10`), the version a fresh
-  install resolves to and the suite is run against.
+- **Python 3.11+ and `fastmcp[tasks]>=4.2.3,<5`** (were 3.10+ and `>=4.0.10`). FastMCP 4.2.0
+  requires Python 3.11, so a 3.10 install silently resolved the 4.1.x line while 3.11+ resolved
+  4.2.x: CI was testing two FastMCP lines. 4.2.3 brings the 4.1.7 and 4.2.1 security fixes
+  (Authlib and joserfc floors, `required_scopes` kept with a custom token verifier) and
+  `pydocket>=0.29.1` for the tasks extension. `test_dependency_pins.py` now also fails if
+  `requires-python` admits a Python the FastMCP floor cannot install, or if the CI matrix and
+  the classifiers drift apart.
 - **Every `odoo://` resource is served as compact JSON** (`utils._dumps`). 48 serializer calls
   were still indented: 26 % fewer characters across the static guides, 37 % on
   `odoo://model/{m}/fields`. A 150-field `/fields` (20 204 → 12 829 chars) now fits under the
@@ -25,6 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a run of unknown models cannot evict cached documents. `OdooClient.get_model_doc` and
   `get_api_index` now raise on network errors, 429 and 5xx instead of returning None, and those
   are retried on the next call.
+
+### Added
+- **The server reads the connected Odoo version** (`OdooClient.server_version`, from
+  `GET /web/version`, which needs no group or access right; kept an hour so an Odoo Online
+  upgrade is picked up without a restart) and adapts the calls whose shape changed:
+  - `read_group` is sent with the 20.0 signature on Odoo 20 (`groupby`, `aggregates`, `having`,
+    `order`), and refused with its replacement on saas-19.1 to 19.4, where it does not exist.
+  - `check_access_rights`, `check_access_rule` and `toggle_active` are refused after 19.0 with
+    their replacement (`has_access`, `action_archive`), before any request or confirmation token.
+  - `odoo://methods/{model}` lists only the methods the connected server has, with their
+    parameters for that version.
+  The version is read only for those methods; an unreadable version keeps the 19.0 tables.
+- **A hint for `401 Invalid apikey`**: the key is wrong, revoked or expired, or its scope does not
+  fit. Up to Odoo 19.3 JSON-2 takes a key without a scope or with scope `rpc`; from 19.4 only `rpc`
+  (`res_users._check_apikey_credentials`). It matches Odoo's message, not a bare `401`, which also
+  appears in record ids and URLs.
 
 ### Fixed
 - **The FastMCP floor test no longer fails on upstream releases.** It compared the floor with

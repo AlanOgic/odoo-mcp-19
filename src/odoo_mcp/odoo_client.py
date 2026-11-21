@@ -16,12 +16,13 @@ from typing import Any, Sequence, cast
 import requests
 from dotenv import load_dotenv
 
-from .arg_mapping import convert_args_to_v2
+from .arg_mapping import VERSION_SENSITIVE_METHODS, convert_args_to_v2
 from .constants import (
     RATE_LIMIT_MAX_RETRIES,
     RATE_LIMIT_RETRY_DEFAULT_DELAY,
     RATE_LIMIT_RETRY_MAX_DELAY,
     RATE_LIMIT_STATUS,
+    SERVER_VERSION_TTL,
 )
 from .safety import is_side_effect_method
 
@@ -106,6 +107,8 @@ class OdooClient:
                 "A login password will be rejected by Odoo with HTTP 401."
             )
 
+        self._version_cache: tuple[float, tuple[int, int]] | None = None
+
         self._warn_insecure_ssl()
 
     def _warn_insecure_ssl(self):
@@ -137,8 +140,9 @@ class OdooClient:
         """
         url = f"{self.url}/json/2/{model}/{method}"
 
-        # Convert positional args to named args
-        payload = convert_args_to_v2(method, tuple(args), kwargs)
+        # Convert positional args to named args; a few methods differ by server version
+        version = self.server_version() if method in VERSION_SENSITIVE_METHODS else None
+        payload = convert_args_to_v2(method, tuple(args), kwargs, version)
 
         try:
             response = self._post_with_rate_limit_retry(url, payload, retry_allowed=not is_side_effect_method(method))
@@ -203,6 +207,29 @@ class OdooClient:
     def execute_method(self, model: str, method: str, *args, **kwargs) -> Any:
         """Execute an arbitrary method on a model."""
         return self._execute(model, method, *args, **kwargs)
+
+    def server_version(self) -> tuple[int, int] | None:
+        """(major, minor) of the connected Odoo, e.g. (19, 3) for saas~19.3; None when unreadable.
+
+        Read from ``GET /web/version`` (rpc addon, the one serving ``/json/2``; auth='none',
+        so no group or ACL is needed), which returns ``release.version_info``:
+        ``[19, 0, 0, 'final', 0, '']`` or ``['saas~19', 3, 0, 'final', 0, '']``. Kept for
+        ``SERVER_VERSION_TTL``; a failed read is not kept, and the caller falls back to
+        the 19.0 tables.
+        """
+        now = time.time()
+        if self._version_cache and now - self._version_cache[0] < SERVER_VERSION_TTL:
+            return self._version_cache[1]
+        try:
+            response = self.session.get(f"{self.url}/web/version", timeout=self.timeout)
+            response.raise_for_status()
+            major, minor = response.json()["version_info"][:2]
+            version = (int(str(major).removeprefix("saas~")), int(minor))
+        except Exception as e:
+            logger.warning("Odoo server version unreadable, using the 19.0 argument tables: %s", e)
+            return None
+        self._version_cache = (now, version)
+        return version
 
     def get_models(self) -> dict[str, Any]:
         """Get all available models."""
