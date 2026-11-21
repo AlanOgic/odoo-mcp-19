@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_api_index` now raise on network errors, 429 and 5xx instead of returning None, and those
   are retried on the next call.
 
+### Added
+- **A hint for `401 Invalid apikey`**: the key is wrong, revoked or expired, or its scope does not
+  fit. Up to Odoo 19.3 JSON-2 takes a key without a scope or with scope `rpc`; from 19.4 only `rpc`
+  (`res_users._check_apikey_credentials`). It matches Odoo's message, not a bare `401`, which also
+  appears in record ids and URLs.
+
 ### Fixed
 - **The FastMCP floor test no longer fails on upstream releases.** It compared the floor with
   the installed FastMCP, which follows upstream because CI has no lockfile, so a new release

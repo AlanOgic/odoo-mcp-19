@@ -2741,6 +2741,14 @@
       ],
       "suggestion": "Internal server error on {model}. Check odoo://model-limitations for known issues, or try with simpler parameters."
     },
+    "401": {
+      "patterns": [
+        {
+          "match": "Invalid apikey",
+          "suggestion": "Odoo rejected the API key: it is wrong, revoked or expired, or its scope does not fit this server. Up to Odoo 19.3 JSON-2 takes a key without a scope or with scope 'rpc'; from 19.4 (and on 20.0) it takes scope 'rpc' only (res.users.apikeys.generate(scope='rpc', ...)), so a key left without a scope is refused. A login password is not accepted. In multi-user mode, ask an admin to update your Odoo key in CLORAG /admin/users."
+        }
+      ]
+    },
     "403": {
       "patterns": [
         {
