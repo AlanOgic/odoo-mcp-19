@@ -180,6 +180,9 @@ PRIVILEGED_MODELS = frozenset(
         "ir.model.fields",
         "ir.default",
         "ir.ui.view",
+        # _inherits ir.ui.view: their vals carry the view's arch and inherit_id.
+        "website.page",
+        "website.controller.page",
     }
 )
 

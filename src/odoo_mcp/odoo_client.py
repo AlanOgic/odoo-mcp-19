@@ -384,7 +384,9 @@ def load_config() -> dict[str, str]:
     for env_path in env_paths:
         if os.path.exists(env_path):
             logger.info("Loading config from: %s", env_path)
-            load_dotenv(dotenv_path=env_path, override=True)
+            # The process environment wins: a file must not undo a setting given at
+            # launch (MCP_READ_ONLY=true on the command line or by the container).
+            load_dotenv(dotenv_path=env_path, override=False)
             break
 
     # Check environment variables

@@ -63,6 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`load` column paths are split like Odoo splits them.** `user_ids:id` and `user_ids.id` are
   `user_ids/id` and `user_ids/.id` to Odoo (`fix_import_export_id_paths`); the check split on
   `/` only, so both reached `res.users` as a plain MEDIUM `load`.
+- **`website.page` and `website.controller.page` are privileged models.** Both `_inherits`
+  `ir.ui.view`, so a write on a page writes the view's `arch` and `inherit_id`: they were a way
+  around the `ir.ui.view` rule. Every side-effect call on them now confirms in every mode for
+  `admin` and single-user sessions, and any other registry role is refused.
+- **The process environment wins over a `.env` file.** `load_config()` loaded it with
+  `override=True`, after startup, so `MCP_READ_ONLY=false` in `.env` undid
+  `MCP_READ_ONLY=true` given at launch. A variable set in both places now keeps its
+  environment value; `.env` only fills what the environment leaves unset.
 - **`docker-compose.yml` forwards `MCP_READ_ONLY`, `MCP_WRITE_ALLOWLIST` and
   `MCP_VALIDATE_PAYLOADS`.** Compose reads `.env` for interpolation only, so
   `MCP_READ_ONLY=true` there left writes enabled in the container.

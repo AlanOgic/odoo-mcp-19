@@ -464,6 +464,9 @@ class TestPrivilegedModels:
         "ir.model.fields",
         "ir.default",
         "ir.ui.view",
+        # _inherits ir.ui.view: a write on a page writes the view's arch.
+        "website.page",
+        "website.controller.page",
     ]
 
     @pytest.mark.parametrize("model", MODELS)

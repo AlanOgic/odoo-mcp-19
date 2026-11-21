@@ -357,7 +357,7 @@ Only writes are blocked — reads stay open on every model, the connected Odoo a
 
 ### Privileged models (admin only, always confirm)
 
-`ir.actions.server`, `base.automation`, `ir.cron`, `ir.model`, `ir.model.fields`, `ir.default`, `ir.ui.view`
+`ir.actions.server`, `base.automation`, `ir.cron`, `ir.model`, `ir.model.fields`, `ir.default`, `ir.ui.view`, `website.page`, `website.controller.page`
 
 These run code or reshape the database. STDIO, the static `MCP_API_KEY` and the `admin` role may write to them — automations, scheduled actions, custom models and fields — and every side-effect call confirms, in every safety mode. Any other multi-user role is refused.
 
@@ -573,7 +573,7 @@ env `ODOO_*` credentials become optional (only the `env-admin` fallback uses the
 | `ODOO_PASSWORD` | No | — | Password (fallback if no API key) |
 | `ODOO_TIMEOUT` | No | `30` | Request timeout in seconds |
 | `ODOO_VERIFY_SSL` | No | `true` | SSL certificate verification |
-| `ODOO_CONFIG_DIR` | No | — | Extra directory searched first for a `.env`, ahead of `./.env` then `~/.config/odoo/.env` |
+| `ODOO_CONFIG_DIR` | No | — | Extra directory searched first for a `.env`, ahead of `./.env` then `~/.config/odoo/.env`. A variable already set in the process environment keeps its value: `.env` only fills what is unset. |
 | `MCP_TRANSPORT` | No | `stdio` | Transport: `stdio` or `streamable-http` |
 | `MCP_API_KEY` | HTTP: this **or** `USERS_DB_PATH` | — | Static bearer token (single-user HTTP, or admin fallback in multi-user mode). HTTP server `sys.exit(1)` if neither is set |
 | `USERS_DB_PATH` | No | — | Path to the CLORAG registry (`users.db`) → enables [multi-user mode](#multi-user-mode) |
