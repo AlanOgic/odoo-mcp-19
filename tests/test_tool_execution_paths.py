@@ -166,6 +166,76 @@ def test_search_read_gets_default_limit_and_cap():
     assert limits == [DEFAULT_LIMIT, MAX_LIMIT]
 
 
+def test_positional_limit_is_sent_once_and_capped():
+    """A positional limit used to collide with the default one added by name."""
+    client = _client(execute_method=lambda *a, **k: [])
+    small = _call(client, model="res.partner", method="search", args_json="[[], 0, 5]")
+    large = _call(client, model="res.partner", method="search_read", args_json="[[], [], 0, 5000]")
+    assert small.success is True and large.success is True
+    assert [call[3]["limit"] for call in _sent(client)] == [5, MAX_LIMIT]
+
+
+@pytest.mark.parametrize("limit", ["null", "0", "false", "-1"])
+def test_a_limit_odoo_reads_as_no_limit_gets_the_default(limit):
+    """Odoo adds LIMIT only for a truthy value, so 0 / false / null returned every record."""
+    client = _client(execute_method=lambda *a, **k: [])
+    response = _call(
+        client, model="res.partner", method="search_read", kwargs_json='{"domain": [], "limit": %s}' % limit
+    )
+    assert response.success is True
+    assert _sent(client)[0][3]["limit"] == DEFAULT_LIMIT
+
+
+def test_a_full_page_says_more_records_may_exist():
+    """A result cut at the limit must not look complete."""
+    client = _client(execute_method=lambda *a, **k: [{"id": i} for i in range(k["limit"])])
+    defaulted = _call(client, model="res.partner", method="search_read", kwargs_json='{"limit": 0}')
+    explicit = _call(client, model="res.partner", method="search", args_json="[[], 0, 5]")
+    assert f"{DEFAULT_LIMIT} records" in defaulted.note and "offset" in defaulted.note
+    assert "odoo://pagination" in defaulted.note
+    assert "5 records" in explicit.note
+    assert '"offset": 100' in defaulted.note and '"offset": 5' in explicit.note
+
+
+def test_the_full_page_note_gives_the_next_offset_as_a_number():
+    client = _client(execute_method=lambda *a, **k: [{"id": i} for i in range(k["limit"])])
+    response = _call(client, model="res.partner", method="search_read", kwargs_json='{"limit": 50, "offset": 200}')
+    assert '"offset": 250' in response.note
+
+
+def test_a_short_page_carries_no_pagination_note():
+    client = _client(execute_method=lambda *a, **k: [{"id": 1}])
+    assert _call(client, model="res.partner", method="search_read", kwargs_json="{}").note is None
+
+
+# "1500" and 2500.5: the error text contains "500", which used to start the 500 fallback.
+@pytest.mark.parametrize("limit", ['"10"', "10.5", "true", "[5]", '"1500"', "2500.5"])
+def test_a_limit_that_is_not_an_integer_is_an_error(limit):
+    """Replacing it by the default would return ten times what '"10"' asked for."""
+    client = _client(execute_method=lambda *a, **k: [])
+    response = _call(client, model="res.partner", method="search_read", kwargs_json='{"limit": %s}' % limit)
+    assert response.success is False and "limit" in response.error
+    assert client.execute_method.call_count == 0
+
+
+@pytest.mark.parametrize("default_context", [None, '{"lang": "fr_FR"}'])
+@pytest.mark.parametrize("context", ['[["default_user_ids", [[4, 2]]]]', '"fr"', "5"])
+def test_a_context_that_is_not_an_object_is_refused_before_any_call(monkeypatch, default_context, context):
+    """Odoo reads a list of pairs as a context (dict(context)); the checks read a dict."""
+    if default_context:
+        monkeypatch.setenv("MCP_DEFAULT_CONTEXT", default_context)
+    client = _client(execute_method=lambda *a, **k: [])
+    response = _call(client, model="res.partner", method="search_read", kwargs_json='{"context": %s}' % context)
+    assert response.success is False and "context" in response.error
+    assert client.execute_method.call_count == 0
+
+
+def test_double_wrapped_search_domain_is_unwrapped():
+    client = _client(execute_method=lambda *a, **k: [])
+    _call(client, model="res.partner", method="search_read", args_json='[[[["name", "=", "x"]]]]')
+    assert _sent(client)[0][3]["domain"] == [["name", "=", "x"]]
+
+
 def test_double_wrapped_domain_is_unwrapped():
     client = _client(execute_method=lambda *a, **k: 3)
     _call(client, model="res.partner", method="search_count", args_json='[[[["name", "=", "x"]]]]')
@@ -209,6 +279,22 @@ def test_search_read_500_falls_back_to_search_plus_read():
         {"domain": [["picking_type_id", "!=", False]], "limit": 10, "offset": 0, "order": "id"},
     ) in sent
     assert ("stock.move.line", "read", [[1]], {"fields": ["name"]}) in sent
+
+
+def test_search_read_fallback_keeps_a_positional_domain_and_fields():
+    """The fallback read only kwargs: a positional domain became [] and matched everything."""
+    client = _failing_search_read([{"id": 1, "name": "A"}])
+    response = _call(
+        client,
+        model="res.partner",
+        method="search_read",
+        args_json='[[["is_company", "=", true]], ["name"]]',
+        kwargs_json='{"limit": 10}',
+    )
+    assert response.success is True and response.fallback_used is True
+    sent = _sent(client)
+    assert ("res.partner", "search", [], {"domain": [["is_company", "=", True]], "limit": 10, "offset": 0}) in sent
+    assert ("res.partner", "read", [[1]], {"fields": ["name"]}) in sent
 
 
 def test_search_read_fallback_with_no_ids_skips_read():

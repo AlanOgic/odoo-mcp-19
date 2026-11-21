@@ -594,7 +594,7 @@
         "type": "integer",
         "default": 100,
         "max": 1000,
-        "description": "Maximum records to return"
+        "description": "Maximum records to return. 0, false, null, a negative value or no limit at all gets the default; values above max are capped; any other non-integer is an error. There is no 'no limit'."
       },
       "offset": {
         "type": "integer",
@@ -616,7 +616,9 @@
     },
     "iterate_all": {
       "description": "Pattern to fetch all records in batches",
-      "pattern": "Loop: offset=0, limit=100, then offset+=limit until result count < limit"
+      "pattern": "Loop: offset=0, limit=100, then offset+=limit until result count < limit",
+      "stable_order": "Always pass an order that ends on a unique field (e.g. \"create_date desc, id\"). Without one, rows with equal sort values can move between pages and be skipped or returned twice.",
+      "full_page_note": "execute_method sets `note` when a search or search_read returns exactly its limit: more records may match."
     }
   },
   "hierarchical_models": {

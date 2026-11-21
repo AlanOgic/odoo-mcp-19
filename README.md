@@ -353,11 +353,11 @@ Pre-execution safety classification gates dangerous operations behind confirmati
 
 `ir.rule`, `ir.model.access`, `ir.access`, `ir.module.module`, `ir.config_parameter`, `res.users`, `res.groups`, `res.users.apikeys`, plus the models that act on one of those without naming it: password wizards (`change.password.*`), `res.config.settings`, `res.groups.privilege`, `ir.model.data`, `base_import.import`, the `base.module.*` wizards, mail servers, auth providers, portal wizards, and the credential / 2FA / session satellites of `res.users`.
 
-Only writes are blocked — reads stay open on every model, the connected Odoo account's rights decide what is readable. A blocked model is also protected against indirect writes: x2many commands, `default_<field>` context keys and `load` column paths that would create, change or delete its records through an allowed model (`res.partner.user_ids` → `res.users`) are refused. Every value shape Odoo turns into such a write is judged the same way: `null`/`false` on an x2many is Odoo's *clear* (which deletes the lines of a one2many whose inverse cascades), and a bare dict in an x2many list is a new record.
+Only writes are blocked — reads stay open on every model, the connected Odoo account's rights decide what is readable. A blocked model is also protected against indirect writes: x2many commands, `default_<field>` context keys and `load` column paths that would create, change or delete its records through an allowed model (`res.partner.user_ids` → `res.users`) are refused. A command list in a `default_<field>` context key is refused whatever the called model: Odoo applies context defaults to every record the call creates. Pass the value in the record values instead. Every value shape Odoo turns into such a write is judged the same way: `null`/`false` on an x2many is Odoo's *clear* (which deletes the lines of a one2many whose inverse cascades), and a bare dict in an x2many list is a new record.
 
 ### Privileged models (admin only, always confirm)
 
-`ir.actions.server`, `base.automation`, `ir.cron`, `ir.model`, `ir.model.fields`, `ir.default`, `ir.ui.view`
+`ir.actions.server`, `base.automation`, `ir.cron`, `ir.model`, `ir.model.fields`, `ir.default`, `ir.ui.view`, `website.page`, `website.controller.page`
 
 These run code or reshape the database. STDIO, the static `MCP_API_KEY` and the `admin` role may write to them — automations, scheduled actions, custom models and fields — and every side-effect call confirms, in every safety mode. Any other multi-user role is refused.
 
@@ -573,7 +573,7 @@ env `ODOO_*` credentials become optional (only the `env-admin` fallback uses the
 | `ODOO_PASSWORD` | No | — | Password (fallback if no API key) |
 | `ODOO_TIMEOUT` | No | `30` | Request timeout in seconds |
 | `ODOO_VERIFY_SSL` | No | `true` | SSL certificate verification |
-| `ODOO_CONFIG_DIR` | No | — | Extra directory searched first for a `.env`, ahead of `./.env` then `~/.config/odoo/.env` |
+| `ODOO_CONFIG_DIR` | No | — | Extra directory searched first for a `.env`, ahead of `./.env` then `~/.config/odoo/.env`. A variable already set in the process environment keeps its value: `.env` only fills what is unset. |
 | `MCP_TRANSPORT` | No | `stdio` | Transport: `stdio` or `streamable-http` |
 | `MCP_API_KEY` | HTTP: this **or** `USERS_DB_PATH` | — | Static bearer token (single-user HTTP, or admin fallback in multi-user mode). HTTP server `sys.exit(1)` if neither is set |
 | `USERS_DB_PATH` | No | — | Path to the CLORAG registry (`users.db`) → enables [multi-user mode](#multi-user-mode) |

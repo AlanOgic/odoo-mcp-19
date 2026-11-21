@@ -218,6 +218,10 @@ def _parse_json_args(args_json: str | None, kwargs_json: str | None) -> tuple[li
             return [], {}, f"Invalid kwargs_json: {e}"
         if not isinstance(kwargs, dict):
             return [], {}, "kwargs_json must be a JSON object"
+        # Odoo builds its context with dict(context), so a list of pairs would be one
+        # there while every check here reads a dict.
+        if kwargs.get("context") is not None and not isinstance(kwargs["context"], dict):
+            return [], {}, "kwargs_json 'context' must be a JSON object"
     merged_ctx = _merge_context(kwargs.get("context"))
     if merged_ctx is not None:
         kwargs = {**kwargs, "context": merged_ctx}
@@ -425,26 +429,64 @@ def _classify_and_gate(
 
 
 def _apply_search_defaults(method: str, args: list, kwargs: dict) -> tuple[list, dict]:
-    """Default/cap the search limit and unwrap a double-wrapped ``[[domain]]``."""
-    if method in ("search", "search_read"):
-        if "limit" not in kwargs:
-            kwargs = {**kwargs, "limit": DEFAULT_LIMIT}
-            logger.debug("Applied default limit=%d", DEFAULT_LIMIT)
-        elif kwargs.get("limit", 0) > MAX_LIMIT:
-            kwargs = {**kwargs, "limit": MAX_LIMIT}
-            logger.debug("Capped limit to %d", MAX_LIMIT)
+    """Default/cap the search limit and unwrap a double-wrapped ``[[domain]]``.
+
+    ``search`` / ``search_read`` come back as named arguments only, so a limit given
+    positionally is seen (and capped) like one given by name.
+    """
     if method in ("search", "search_read", "search_count") and args:
         domain = args[0]
         if isinstance(domain, list) and len(domain) == 1 and isinstance(domain[0], list):
             if domain[0] and isinstance(domain[0][0], list):
                 args = [domain[0], *args[1:]]
+    if method in ("search", "search_read"):
+        kwargs = convert_args_to_v2(method, tuple(args), kwargs)
+        kwargs["limit"] = _bounded_limit(kwargs.get("limit"))
+        args = []
     return args, kwargs
+
+
+def _bounded_limit(limit: Any) -> int:
+    """The limit to send: the default unless ``limit`` is a positive int, capped at MAX_LIMIT.
+
+    Odoo adds LIMIT only for a truthy value, so 0, false and null mean "every record".
+    Any other non-integer is an error: sending the default instead would return more
+    than a limit of "10" asked for.
+    """
+    if limit is None or limit is False:
+        return DEFAULT_LIMIT
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        raise ValueError(f"'limit' must be an integer, got {limit!r}.")
+    if limit <= 0:
+        return DEFAULT_LIMIT
+    return min(limit, MAX_LIMIT)
+
+
+def _full_page_note(method: str, kwargs: dict, result: Any) -> str | None:
+    """Say that more records may exist when a search returned exactly its limit."""
+    if method not in ("search", "search_read") or not isinstance(result, list):
+        return None
+    limit = kwargs.get("limit")
+    if len(result) != limit:
+        return None
+    offset = kwargs.get("offset")
+    next_offset = limit + (offset if isinstance(offset, int) and not isinstance(offset, bool) else 0)
+    return (
+        f"Returned {limit} records, which is the limit sent: more may match. A limit of 0, false or null "
+        f"is not 'no limit' here (default {DEFAULT_LIMIT}, maximum {MAX_LIMIT}). Fetch the next page with "
+        f'"offset": {next_offset} and a stable "order" (e.g. "id"), until a page is shorter than the '
+        f"limit; search_count gives the total. See odoo://pagination."
+    )
 
 
 def _search_read_fallback(
     odoo: Any, model: str, kwargs: dict, error_msg: str, start_time: float
 ) -> ExecuteMethodResponse:
-    """Retry a failed ``search_read`` as ``search`` + ``read`` and record the runtime issue."""
+    """Retry a failed ``search_read`` as ``search`` + ``read`` and record the runtime issue.
+
+    ``kwargs`` is the named form ``_apply_search_defaults`` built: reading the raw
+    kwargs turned a positional domain into [] and returned unfiltered records.
+    """
     domain = kwargs.get("domain", [])
     fields = kwargs.get("fields", [])
     context = kwargs.get("context")
@@ -691,16 +733,25 @@ def execute_method(
             return gated
 
         args, kwargs = _apply_search_defaults(method, args, kwargs)
-        result = odoo.execute_method(model, method, *args, **kwargs)
+        try:
+            result = odoo.execute_method(model, method, *args, **kwargs)
+        except Exception as e:
+            # Only an error from the Odoo call itself may start the fallback: a local
+            # validation message can contain "500" too ('limit' ... got '1500').
+            error_msg = str(e)
+            if method == "search_read" and ("500" in error_msg or "Internal Server Error" in error_msg):
+                return _search_read_fallback(odoo, model, kwargs, error_msg, start_time)
+            raise
         return ExecuteMethodResponse(
-            success=True, result=result, safety=classification, execution_time_ms=_elapsed_ms(start_time)
+            success=True,
+            result=result,
+            note=_full_page_note(method, kwargs, result),
+            safety=classification,
+            execution_time_ms=_elapsed_ms(start_time),
         )
 
     except Exception as e:
-        error_msg = str(e)
-        if method == "search_read" and ("500" in error_msg or "Internal Server Error" in error_msg):
-            return _search_read_fallback(odoo, model, kwargs, error_msg, start_time)
-        return _failure_response(model, method, error_msg, start_time)
+        return _failure_response(model, method, str(e), start_time)
 
 
 # ----- batch_execute phases -----

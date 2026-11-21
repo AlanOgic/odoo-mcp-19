@@ -8,7 +8,7 @@ wizards, server actions, settings wizards).
 
 import pytest
 
-from odoo_mcp.safety import BLOCKED_MODELS, SAFE_METHODS, RiskLevel, classify_operation
+from odoo_mcp.safety import BLOCKED_MODELS, SAFE_METHODS, RiskLevel, classify_batch, classify_operation
 
 SCHEMAS = {
     "res.partner": {
@@ -21,6 +21,11 @@ SCHEMAS = {
     "res.company": {"user_ids": {"type": "many2many", "relation": "res.users"}},
     "sale.order": {"order_line": {"type": "one2many", "relation": "sale.order.line"}},
     "sale.order.line": {"name": {"type": "char"}},
+    "hr.employee": {
+        "name": {"type": "char"},
+        "category_ids": {"type": "many2many", "relation": "hr.employee.category"},
+    },
+    "hr.employee.category": {"name": {"type": "char"}},
     "res.partner.category": {"name": {"type": "char"}},
     "ir.model": {
         "name": {"type": "char"},
@@ -87,7 +92,16 @@ class TestX2manyCommandsOnBlockedComodel:
 
     @pytest.mark.parametrize(
         "columns",
-        [["name", "user_ids/login"], ["name", "user_ids"], ["child_ids/user_ids/login"], ["user_ids/id"]],
+        [
+            ["name", "user_ids/login"],
+            ["name", "user_ids"],
+            ["child_ids/user_ids/login"],
+            ["user_ids/id"],
+            # Odoo rewrites both spellings into paths (fix_import_export_id_paths).
+            ["id", "user_ids:id"],
+            ["id", "user_ids.id"],
+            ["child_ids/user_ids:id"],
+        ],
     )
     def test_load_columns_reaching_a_blocked_comodel_are_blocked(self, columns):
         rows = [["x"] * len(columns)]
@@ -99,6 +113,11 @@ class TestX2manyCommandsOnBlockedComodel:
 
     def test_load_columns_on_allowed_comodels_pass(self):
         columns = ["name", "user_id/id", "category_id/id", "child_ids/name"]
+
+        assert _classify("res.partner", "load", [columns, [["a", "b", "c", "d"]]]).risk_level == RiskLevel.MEDIUM
+
+    def test_load_id_suffix_columns_on_allowed_comodels_pass(self):
+        columns = ["user_id:id", "category_id:id", "category_id.id", "user_ids_count"]
 
         assert _classify("res.partner", "load", [columns, [["a", "b", "c", "d"]]]).risk_level == RiskLevel.MEDIUM
 
@@ -207,13 +226,13 @@ class TestDictShorthandInX2manyLists:
     (``comodel.new(vals)``), and ``default_get`` sends every ``default_<field>``
     context key through it, so the dict is created on ``create``."""
 
-    def test_a_dict_in_a_context_default_is_followed_to_a_blocked_comodel(self):
+    def test_a_dict_in_a_context_default_is_blocked(self):
         context = {"default_child_ids": [{"name": "kid", "user_ids": [[0, 0, {"login": "x"}]]}]}
 
         result = _classify("res.partner", "create", [[{"name": "x"}]], {"context": context})
 
         assert result.risk_level == RiskLevel.BLOCKED
-        assert "res.users" in result.blocked_reason
+        assert "default_child_ids" in result.blocked_reason
 
     def test_a_dict_in_vals_is_followed_to_a_blocked_comodel(self):
         vals = {"child_ids": [{"name": "kid", "user_ids": [[0, 0, {"login": "x"}]]}]}
@@ -221,11 +240,81 @@ class TestDictShorthandInX2manyLists:
         assert _classify("res.partner", "write", [[7], vals]).risk_level == RiskLevel.BLOCKED
 
     def test_a_dict_on_an_allowed_comodel_passes(self):
-        context = {"default_child_ids": [{"name": "kid"}]}
-
-        result = _classify("res.partner", "create", [[{"name": "x"}]], {"context": context})
+        result = _classify("res.partner", "write", [[7], {"child_ids": [{"name": "kid"}]}])
 
         assert result.risk_level == RiskLevel.MEDIUM
+
+
+class TestContextDefaultsForOtherModels:
+    """Odoo applies a ``default_<field>`` key to every record the call creates.
+
+    ``hr.employee.action_create_users`` creates ``res.users`` with the caller's
+    context, so ``default_group_ids`` lands on the new user although ``hr.employee``
+    has no such field. The models a call creates cannot be known, so a command list
+    in a context default is refused whatever the called model.
+    """
+
+    def test_a_command_list_default_unknown_to_the_called_model_is_blocked(self):
+        context = {"default_group_ids": [[4, 1]]}
+
+        result = _classify("hr.employee", "action_create_users", [[7]], {"context": context})
+
+        assert result.risk_level == RiskLevel.BLOCKED
+        assert "default_group_ids" in result.blocked_reason
+
+    @pytest.mark.parametrize("value", [[[4, 2]], [2], [[6, 0, [2]]]])
+    def test_a_link_only_default_on_a_field_of_the_called_model_is_blocked(self, value):
+        """``res.company.user_ids`` is a many2many, where linking is allowed in vals. As a
+        default it also lands on the partner the company creates, whose ``user_ids`` is a
+        one2many to ``res.users``: the link repoints that user's partner."""
+        context = {"default_user_ids": value}
+
+        result = _classify("res.company", "create", [[{"name": "x"}]], {"context": context})
+
+        assert result.risk_level == RiskLevel.BLOCKED
+
+    def test_a_list_default_on_an_allowed_comodel_is_blocked_too(self):
+        context = {"default_category_ids": [[4, 1]]}
+
+        assert _classify("hr.employee", "create", [[{"name": "x"}]], {"context": context}).risk_level == (
+            RiskLevel.BLOCKED
+        )
+
+    @pytest.mark.parametrize("value", ["out_invoice", 5, True, []])
+    def test_a_default_that_is_not_a_command_list_passes(self, value):
+        loader = Loader()
+
+        result = _classify("sale.order", "action_confirm", [[7]], {"context": {"default_move_type": value}}, loader)
+
+        assert result.risk_level != RiskLevel.BLOCKED
+
+    @pytest.mark.parametrize(
+        "context",
+        [[["default_user_ids", [[0, 0, {"login": "x"}]]]], [["default_group_ids", [[4, 1]]]], "lang", 5, [], True],
+    )
+    def test_a_context_that_is_not_an_object_is_blocked(self, context):
+        """Odoo builds its context with ``dict(context)``: a list of pairs is a context too."""
+        result = _classify("res.partner", "create", [[{"name": "x"}]], {"context": context})
+
+        assert result.risk_level == RiskLevel.BLOCKED
+        assert "context" in result.blocked_reason
+
+    def test_a_null_context_passes(self):
+        assert _classify("res.partner", "create", [[{"name": "x"}]], {"context": None}).risk_level == RiskLevel.MEDIUM
+
+    def test_batch_classification_blocks_a_pair_list_context(self):
+        ops = [
+            {
+                "model": "res.partner",
+                "method": "create",
+                "args_json": '[[{"name": "x"}]]',
+                "kwargs_json": '{"context": [["default_user_ids", [[0, 0, {"login": "x"}]]]]}',
+            }
+        ]
+
+        classifications, overall, _ = classify_batch(ops, fields_loader=Loader())
+
+        assert classifications[0].risk_level == RiskLevel.BLOCKED
 
 
 class TestLegitimateWritesStillPass:
@@ -298,6 +387,8 @@ class TestProxyModelsAreBlocked:
             "base.module.uninstall",
             "base.module.update",
             "base.module.install.request",
+            "base.module.install.review",
+            "base.import.module",
             "ir.mail_server",
             "fetchmail.server",
             "auth.oauth.provider",
@@ -373,6 +464,9 @@ class TestPrivilegedModels:
         "ir.model.fields",
         "ir.default",
         "ir.ui.view",
+        # _inherits ir.ui.view: a write on a page writes the view's arch.
+        "website.page",
+        "website.controller.page",
     ]
 
     @pytest.mark.parametrize("model", MODELS)

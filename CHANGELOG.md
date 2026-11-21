@@ -47,7 +47,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`res_users._check_apikey_credentials`). It matches Odoo's message, not a bare `401`, which also
   appears in record ids and URLs.
 
+### Security
+- **`base.import.module` and `base.module.install.review` are blocked.** Both install modules
+  without naming `ir.module.module`: the first loads a zip's data files, `.sql` ones through
+  `cr.execute` (`base_import_module` is auto-installed on every database), the second calls
+  `button_immediate_install()`. They classified as MEDIUM, for every role.
+- **A command list in a `default_<field>` context key is refused**, whatever the called model.
+  Odoo applies context defaults to every record the request creates:
+  `hr.employee.action_create_users` with `default_group_ids` created a `res.users` carrying the
+  injected groups, and `res.company.create` with `default_user_ids` repointed a user's partner
+  through the partner it creates, while the classifier only checked the key against the called
+  model. Pass the value in the record values instead.
+- **A `context` that is not a JSON object is refused**, by both tools. Odoo builds its context
+  with `dict(context)`, so a list of pairs carried `default_*` keys no check read.
+- **`load` column paths are split like Odoo splits them.** `user_ids:id` and `user_ids.id` are
+  `user_ids/id` and `user_ids/.id` to Odoo (`fix_import_export_id_paths`); the check split on
+  `/` only, so both reached `res.users` as a plain MEDIUM `load`.
+- **`website.page` and `website.controller.page` are privileged models.** Both `_inherits`
+  `ir.ui.view`, so a write on a page writes the view's `arch` and `inherit_id`: they were a way
+  around the `ir.ui.view` rule. Every side-effect call on them now confirms in every mode for
+  `admin` and single-user sessions, and any other registry role is refused.
+- **The process environment wins over a `.env` file.** `load_config()` loaded it with
+  `override=True`, after startup, so `MCP_READ_ONLY=false` in `.env` undid
+  `MCP_READ_ONLY=true` given at launch. A variable set in both places now keeps its
+  environment value; `.env` only fills what the environment leaves unset.
+- **`docker-compose.yml` forwards `MCP_READ_ONLY`, `MCP_WRITE_ALLOWLIST` and
+  `MCP_VALIDATE_PAYLOADS`.** Compose reads `.env` for interpolation only, so
+  `MCP_READ_ONLY=true` there left writes enabled in the container.
+
 ### Fixed
+- **The `search_read` fallback keeps a positional domain and field list.** It read `kwargs`
+  only: after a 500, a call with the domain in `args_json` ran `search(domain=[])` and returned
+  up to 100 unfiltered records, every field, as a success.
+- **`search` / `search_read` limits.** A positional limit failed with "received 'limit' both
+  positionally and by name" (the default was added by name next to it), `"limit": null` raised
+  a `TypeError`, and `0` / `false` skipped the `MAX_LIMIT` cap and returned every record. The
+  limit is now read after positional and named arguments are merged: `0`, `false`, `null` and
+  negative values get the default, any other non-integer is an error, and the cap applies to
+  both spellings. `execute_method` only: `batch_execute` still applies no search defaults.
+- **A search that returns exactly its limit says so.** `execute_method` sets `note` on a full
+  `search` / `search_read` page (more records may match, next offset, stable `order`), so a
+  result cut at the default or the cap no longer looks complete. `odoo://pagination` states
+  that there is no "no limit" and asks for an order ending on a unique field.
 - **The FastMCP floor test no longer fails on upstream releases.** It compared the floor with
   the installed FastMCP, which follows upstream because CI has no lockfile, so a new release
   could fail the build with nothing changed in this repo.
