@@ -10,6 +10,7 @@ Run as a script:
 """
 
 import json
+import os
 import sys
 import time
 
@@ -18,7 +19,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from odoo_mcp import constants as _constants
 from odoo_mcp.constants import MODEL_STATE_MACHINES, _merge_context
 from odoo_mcp.odoo_client import get_odoo_client
 from odoo_mcp.resources import (
@@ -87,24 +87,23 @@ def run_tests():
     # TEST 2: _merge_context (unit test)
     # ================================================================
     header("TEST 2: _merge_context — unit test")
-    # Save original state
-    original_default = _constants._DEFAULT_CONTEXT
+    # MCP_DEFAULT_CONTEXT is read from the environment on each call (there is no
+    # module-level value to patch any more), so the test sets and restores the variable.
+    original_default = os.environ.pop("MCP_DEFAULT_CONTEXT", None)
+    try:
+        check("no defaults + no explicit = None", _merge_context(None) is None)
+        check("no defaults + explicit = explicit", _merge_context({"lang": "fr_FR"}) == {"lang": "fr_FR"})
 
-    # Test with no defaults — patch the constants module where _merge_context reads it from
-    _constants._DEFAULT_CONTEXT = None
-    check("no defaults + no explicit = None", _merge_context(None) is None)
-    check("no defaults + explicit = explicit", _merge_context({"lang": "fr_FR"}) == {"lang": "fr_FR"})
-
-    # Test with defaults
-    _constants._DEFAULT_CONTEXT = {"lang": "en_US", "tz": "UTC"}
-    check("defaults + no explicit = copy of defaults", _merge_context(None) == {"lang": "en_US", "tz": "UTC"})
-    check(
-        "defaults + explicit = merged (explicit wins)",
-        _merge_context({"lang": "fr_FR"}) == {"lang": "fr_FR", "tz": "UTC"},
-    )
-
-    # Restore
-    _constants._DEFAULT_CONTEXT = original_default
+        os.environ["MCP_DEFAULT_CONTEXT"] = '{"lang": "en_US", "tz": "UTC"}'
+        check("defaults + no explicit = copy of defaults", _merge_context(None) == {"lang": "en_US", "tz": "UTC"})
+        check(
+            "defaults + explicit = merged (explicit wins)",
+            _merge_context({"lang": "fr_FR"}) == {"lang": "fr_FR", "tz": "UTC"},
+        )
+    finally:
+        os.environ.pop("MCP_DEFAULT_CONTEXT", None)
+        if original_default is not None:
+            os.environ["MCP_DEFAULT_CONTEXT"] = original_default
 
     # ================================================================
     # TEST 3: get_error_suggestion with {model} template
