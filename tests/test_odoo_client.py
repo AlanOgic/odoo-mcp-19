@@ -15,6 +15,7 @@ These pin two corrections derived from Odoo 19's External JSON-2 API
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from odoo_mcp.constants import RATE_LIMIT_RETRY_DEFAULT_DELAY, RATE_LIMIT_RETRY_MAX_DELAY
 from odoo_mcp.odoo_client import OdooClient
@@ -225,3 +226,44 @@ class TestRateLimitRetry:
         )
         with patch("odoo_mcp.odoo_client.time.sleep"), pytest.raises(ConnectionError):
             client.execute_method("res.partner", "read", [1])
+
+
+def _http_response(status_code, body=b"{}"):
+    resp = requests.Response()
+    resp.status_code = status_code
+    resp._content = body
+    resp.url = "https://mycompany.example.com/doc-bearer/sale.order.json"
+    return resp
+
+
+_DOC_FETCHES = pytest.mark.parametrize(
+    "fetch", [lambda c: c.get_model_doc("sale.order"), lambda c: c.get_api_index()], ids=["model-doc", "index"]
+)
+
+
+class TestDocEndpointsSeparateRefusalFromFailure:
+    """/doc-bearer/ refuses with 403 (no api_doc group, no read access) or 404 (unknown model):
+    a definitive answer the caller may cache (api_doc/controllers/api_doc.py @ 19.0). Anything
+    else can succeed on the next try, so it raises instead of looking like a refusal."""
+
+    @_DOC_FETCHES
+    @pytest.mark.parametrize("status", [403, 404])
+    def test_a_refusal_returns_none(self, fetch, status):
+        client = _make_client()
+        client.session.post = MagicMock(return_value=_http_response(status))
+        assert fetch(client) is None
+
+    @_DOC_FETCHES
+    @pytest.mark.parametrize("status", [429, 500, 503])
+    def test_a_transient_http_error_raises(self, fetch, status):
+        client = _make_client()
+        client.session.post = MagicMock(return_value=_http_response(status))
+        with pytest.raises(requests.HTTPError):
+            fetch(client)
+
+    @_DOC_FETCHES
+    def test_a_network_error_raises(self, fetch):
+        client = _make_client()
+        client.session.post = MagicMock(side_effect=requests.exceptions.ConnectTimeout("slow"))
+        with pytest.raises(requests.exceptions.ConnectTimeout):
+            fetch(client)

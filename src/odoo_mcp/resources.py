@@ -21,7 +21,6 @@ from typing import Any, Callable, Dict, Sequence, TypeVar
 import anyio
 
 from .api_reference import (
-    build_api_index,
     json2_protocol_reference,
     version_drift_reference,
     x2many_commands_reference,
@@ -50,6 +49,7 @@ from .orm_guides import (
 )
 from .utils import (
     _build_compact_schema,
+    _dumps,
     _get_documentation_urls,
     _get_live_doc,
     _get_module_knowledge,
@@ -58,7 +58,7 @@ from .utils import (
     fields_cache_get,
     fields_cache_key,
     fields_cache_put,
-    get_live_api_index,
+    get_compact_api_index,
 )
 
 logger = logging.getLogger(__name__)
@@ -185,7 +185,7 @@ def get_models() -> str:
     """Lists all available models"""
     odoo_client = get_odoo_client()
     models = odoo_client.get_models()
-    return json.dumps(models, separators=(",", ":"))
+    return _dumps(models)
 
 
 @_threaded_resource(
@@ -196,12 +196,12 @@ def get_model_info(model_name: str) -> str:
     """Model metadata plus its full field definition (the latter via the shared fields cache)."""
     fields, error = _fetch_model_fields(model_name)
     if fields is None:
-        return json.dumps(error, separators=(",", ":"))
+        return _dumps(error)
     try:
         model_info = get_odoo_client().get_model_info(model_name)
-        return json.dumps({**model_info, "fields": fields}, separators=(",", ":"))
+        return _dumps({**model_info, "fields": fields})
     except Exception as e:
-        return json.dumps({"error": str(e)}, separators=(",", ":"))
+        return _dumps({"error": str(e)})
 
 
 @_threaded_resource(
@@ -212,7 +212,7 @@ def get_model_schema(model_name: str) -> str:
     """Get comprehensive schema information for a model"""
     fields, error = _fetch_model_fields(model_name)
     if fields is None:
-        return json.dumps(error, indent=2)
+        return _dumps(error)
     try:
         schema = {
             "model": model_name,
@@ -241,9 +241,9 @@ def get_model_schema(model_name: str) -> str:
                     "values": field_def.get("selection"),
                 }
 
-        return json.dumps(schema, separators=(",", ":"))
+        return _dumps(schema)
     except Exception as e:
-        return json.dumps({"error": str(e)}, separators=(",", ":"))
+        return _dumps({"error": str(e)})
 
 
 @_threaded_resource(
@@ -259,7 +259,7 @@ def get_model_fields_light(model_name: str) -> str:
     """
     fields, error = _fetch_model_fields(model_name, attributes=COMPACT_FIELD_ATTRIBUTES)
     if fields is None:
-        return json.dumps(error, indent=2)
+        return _dumps(error)
     try:
         light = {}
         for name, meta in fields.items():
@@ -273,9 +273,9 @@ def get_model_fields_light(model_name: str) -> str:
             if meta.get("type") == "selection" and meta.get("selection"):
                 entry["selection"] = meta.get("selection")
             light[name] = entry
-        return json.dumps({"model": model_name, "field_count": len(light), "fields": light}, indent=2)
+        return _dumps({"model": model_name, "field_count": len(light), "fields": light})
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return _dumps({"error": str(e)})
 
 
 @_threaded_resource(
@@ -290,14 +290,14 @@ def get_model_quick_schema(model_name: str) -> str:
     """
     fields, error = _fetch_model_fields(model_name, attributes=COMPACT_FIELD_ATTRIBUTES)
     if fields is None:
-        return json.dumps(error)
+        return _dumps(error)
     try:
         schema = _build_compact_schema(fields)
         schema["model"] = model_name
         schema["field_count"] = len(schema["fields"])
-        return json.dumps(schema, separators=(",", ":"))
+        return _dumps(schema)
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return _dumps({"error": str(e)})
 
 
 @_threaded_resource(
@@ -317,13 +317,13 @@ def get_model_workflow(model_name: str) -> str:
             "source": "static",
             **MODEL_STATE_MACHINES[model_name],
         }
-        return json.dumps(result, indent=2)
+        return _dumps(result)
 
     # Dynamic fallback: try to infer workflow from model metadata
     try:
         fields, error = _fetch_model_fields(model_name, attributes=COMPACT_FIELD_ATTRIBUTES)
         if fields is None:
-            return json.dumps(error, indent=2)
+            return _dumps(error)
         result = {
             "model": model_name,
             "source": "dynamic",
@@ -367,9 +367,9 @@ def get_model_workflow(model_name: str) -> str:
         if not result["state_field"] and not result["available_methods"]:
             result["note"] = f"No state machine detected for {model_name}. It may not have workflow transitions."
 
-        return json.dumps(result, indent=2)
+        return _dumps(result)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return _dumps({"error": str(e)})
 
 
 @_threaded_resource(
@@ -387,7 +387,7 @@ def get_bundle(models_csv: str) -> str:
     """
     model_names = [m.strip() for m in models_csv.split(",") if m.strip()]
     if len(model_names) > 10:
-        return json.dumps({"error": "Maximum 10 models per bundle request", "requested": len(model_names)})
+        return _dumps({"error": "Maximum 10 models per bundle request", "requested": len(model_names)})
 
     bundle: Dict[str, Any] = {"models": {}, "errors": {}}
 
@@ -410,7 +410,7 @@ def get_bundle(models_csv: str) -> str:
                 bundle["models"][name] = payload
 
     bundle["total"] = len(bundle["models"])
-    return json.dumps(bundle, separators=(",", ":"))
+    return _dumps(bundle)
 
 
 @mcp.resource(
@@ -457,7 +457,7 @@ def get_session_bootstrap() -> str:
 
     result["models_loaded"] = len(result["schemas"])
     result["workflows_loaded"] = len(result["workflows"])
-    return json.dumps(result, separators=(",", ":"))
+    return _dumps(result)
 
 
 @_threaded_resource(
@@ -475,27 +475,27 @@ def get_record(model_name: str, record_id: str) -> str:
     """
     err = _validate_model(model_name)
     if err:
-        return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
+        return _dumps({"error": err, "hint": _MODEL_LOOKUP_HINT})
     if not record_id or not record_id.isdigit():
-        return json.dumps({"error": f"Record ID must be a positive integer, got {record_id!r}"}, indent=2)
+        return _dumps({"error": f"Record ID must be a positive integer, got {record_id!r}"})
     fields, error = _fetch_model_fields(model_name, attributes=COMPACT_FIELD_ATTRIBUTES)
     if fields is None:
-        return json.dumps(error, separators=(",", ":"))
+        return _dumps(error)
 
     readable = sorted(name for name, meta in fields.items() if meta.get("type") != "binary")
     omitted = sorted(name for name, meta in fields.items() if meta.get("type") == "binary")
     if not readable:
         # Odoo's read() treats an empty field list as "every field" — which
         # would bring the blobs straight back. Refuse instead of failing open.
-        return json.dumps({"error": f"{model_name} exposes no non-binary field to read"}, indent=2)
+        return _dumps({"error": f"{model_name} exposes no non-binary field to read"})
     try:
         record = get_odoo_client().read_records(model_name, [int(record_id)], fields=readable)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return _dumps({"error": str(e)})
     if not record:
-        return json.dumps({"error": f"Record not found: {model_name} ID {record_id}"}, indent=2)
+        return _dumps({"error": f"Record not found: {model_name} ID {record_id}"})
     payload = {**record[0], "_omitted_binary_fields": omitted} if omitted else record[0]
-    return json.dumps(payload, indent=2)
+    return _dumps(payload)
 
 
 @_threaded_resource(
@@ -506,8 +506,8 @@ def get_methods(model_name: str) -> str:
     """Get available methods for a model: static catalog + module knowledge + live /doc-bearer/ enrichment."""
     err = _validate_model(model_name)
     if err:
-        return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
-    return json.dumps(build_methods_payload(model_name, _get_live_doc(model_name)), separators=(",", ":"))
+        return _dumps({"error": err, "hint": _MODEL_LOOKUP_HINT})
+    return _dumps(build_methods_payload(model_name, _get_live_doc(model_name)))
 
 
 def _selection_options(odoo_client: Any, model_name: str, fields_meta: list) -> Dict[str, list]:
@@ -543,7 +543,7 @@ def get_model_docs(model_name: str) -> str:
     """Get comprehensive documentation for a model from Odoo's internal metadata."""
     err = _validate_model(model_name)
     if err:
-        return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
+        return _dumps({"error": err, "hint": _MODEL_LOOKUP_HINT})
     odoo_client = get_odoo_client()
 
     try:
@@ -596,10 +596,10 @@ def get_model_docs(model_name: str) -> str:
                 help_text = " ".join(help_text.split())  # Normalize whitespace
                 result["actions_help"].append({"action_name": action.get("name"), "help": help_text})
 
-        return json.dumps(result, separators=(",", ":"))
+        return _dumps(result)
 
     except Exception as e:
-        return json.dumps({"error": str(e)}, separators=(",", ":"))
+        return _dumps({"error": str(e)})
 
 
 @mcp.resource(
@@ -608,7 +608,7 @@ def get_model_docs(model_name: str) -> str:
 )
 def get_json2_protocol() -> str:
     """Static reference transcribed from odoo/addons/rpc/controllers/json2.py and odoo/http.py."""
-    return json.dumps(json2_protocol_reference(), indent=2)
+    return _dumps(json2_protocol_reference())
 
 
 @mcp.resource(
@@ -618,7 +618,7 @@ def get_json2_protocol() -> str:
 )
 def get_version_drift() -> str:
     """Static reference transcribed from the ORM changelog."""
-    return json.dumps(version_drift_reference(), indent=2)
+    return _dumps(version_drift_reference())
 
 
 @mcp.resource(
@@ -627,7 +627,7 @@ def get_version_drift() -> str:
 )
 def get_x2many_commands() -> str:
     """Static reference transcribed from odoo/orm/commands.py."""
-    return json.dumps(x2many_commands_reference(), indent=2)
+    return _dumps(x2many_commands_reference())
 
 
 @mcp.resource(
@@ -637,17 +637,16 @@ def get_x2many_commands() -> str:
 )
 def get_api_index() -> str:
     """Compact, per-identity-cached view of the api_doc index (falls back to an actionable error)."""
-    raw = get_live_api_index()
-    if raw is None:
-        return json.dumps(
+    index = get_compact_api_index()
+    if index is None:
+        return _dumps(
             {
                 "error": "/doc-bearer/index.json is unavailable",
                 "hint": "The API user needs the api_doc.group_allow_doc group (implied by Settings admin). "
                 "Until then use odoo://models for the model list.",
-            },
-            indent=2,
+            }
         )
-    return json.dumps(build_api_index(raw), separators=(",", ":"))
+    return _dumps(index)
 
 
 @mcp.resource(
@@ -656,7 +655,7 @@ def get_api_index() -> str:
     "date parts",
 )
 def get_datetime_guide() -> str:
-    return json.dumps(datetime_reference(), indent=2)
+    return _dumps(datetime_reference())
 
 
 @mcp.resource(
@@ -665,7 +664,7 @@ def get_datetime_guide() -> str:
     "activities",
 )
 def get_mail_thread_guide() -> str:
-    return json.dumps(mail_thread_reference(), indent=2)
+    return _dumps(mail_thread_reference())
 
 
 @mcp.resource(
@@ -673,7 +672,7 @@ def get_mail_thread_guide() -> str:
     description="How ACLs, record rules and field groups compose, and how to test access with has_access/has_group",
 )
 def get_security_model_guide() -> str:
-    return json.dumps(security_model_reference(), indent=2)
+    return _dumps(security_model_reference())
 
 
 @mcp.resource(
@@ -681,7 +680,7 @@ def get_security_model_guide() -> str:
     description="web_read / web_search_read / web_save: the nested specification that reads relations in one call",
 )
 def get_web_read_guide() -> str:
-    return json.dumps(web_read_reference(), indent=2)
+    return _dumps(web_read_reference())
 
 
 @mcp.resource(
@@ -689,7 +688,7 @@ def get_web_read_guide() -> str:
     description="External ids over JSON-2 (check_object_reference) and the constraints on custom models/fields",
 )
 def get_xmlids_guide() -> str:
-    return json.dumps(xmlids_reference(), indent=2)
+    return _dumps(xmlids_reference())
 
 
 @mcp.resource(
@@ -713,11 +712,9 @@ def get_session() -> str:
         )
         langs = client.execute_method("res.lang", "get_installed")
     except Exception as e:
-        return json.dumps(
-            {"error": str(e), "hint": "context_get needs a valid bearer key; see odoo://api/json2-protocol"}, indent=2
-        )
+        return _dumps({"error": str(e), "hint": "context_get needs a valid bearer key; see odoo://api/json2-protocol"})
     company = user.get("company_id") or [None, None]
-    return json.dumps(
+    return _dumps(
         {
             "uid": uid,
             "name": user.get("name"),
@@ -729,8 +726,7 @@ def get_session() -> str:
             "installed_languages": [{"code": code, "name": name} for code, name in langs],
             "context_hint": "Datetimes are UTC (convert with tz); pass {'allowed_company_ids': [...]} in context to "
             "switch company scope and {'lang': ...} to read translations. See odoo://api/datetime.",
-        },
-        indent=2,
+        }
     )
 
 
@@ -740,13 +736,12 @@ def get_session() -> str:
 )
 def get_concept_mappings() -> str:
     """Get all known concept-to-model mappings for natural language model discovery."""
-    return json.dumps(
+    return _dumps(
         {
             "description": "Business concept to Odoo model mappings",
             "usage": "Use odoo://find-model/{concept} resource to search, or look up concepts here",
             "mappings": CONCEPT_ALIASES,
-        },
-        indent=2,
+        }
     )
 
 
@@ -867,7 +862,7 @@ def get_resource_templates() -> str:
         },
         "usage": "Read any template by replacing {param} with your value using ReadMcpResourceTool",
     }
-    return json.dumps(templates, indent=2)
+    return _dumps(templates)
 
 
 @mcp.resource(
@@ -981,18 +976,17 @@ def get_workflows() -> str:
         except Exception as exc:
             logger.debug("ir.actions.server lookup skipped for odoo://workflows: %s", exc)
 
-        return json.dumps(
+        return _dumps(
             {
                 "installed_modules": list(module_names.keys()),
                 "available_workflows": workflows,
                 "custom_automations": custom_automations,
                 "note": "Use execute_method to call workflow methods",
-            },
-            indent=2,
+            }
         )
 
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return _dumps({"error": str(e)})
 
 
 @mcp.resource(
@@ -1011,17 +1005,16 @@ def get_server_info() -> str:
             "ir.module.module", [["state", "=", "installed"]], fields=["name", "shortdesc", "application"], limit=500
         )
 
-        return json.dumps(
+        return _dumps(
             {
                 "database": odoo_client.db,
                 "odoo_version": base_module[0].get("latest_version", "unknown") if base_module else "unknown",
                 "installed_modules_count": len(modules),
                 "applications": [m["name"] for m in modules if m.get("application")],
-            },
-            indent=2,
+            }
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        return _dumps({"error": str(e)})
 
 
 @mcp.resource(
@@ -1031,13 +1024,12 @@ def get_server_info() -> str:
 def get_domain_syntax() -> str:
     """Get comprehensive domain syntax documentation."""
     domain_syntax = MODULE_KNOWLEDGE.get("domain_syntax", {})
-    return json.dumps(
+    return _dumps(
         {
             "title": "Odoo Domain Syntax Reference",
             "usage": "Use with execute_method search/search_read/search_count in the domain parameter",
             **domain_syntax,
-        },
-        indent=2,
+        }
     )
 
 
@@ -1158,7 +1150,7 @@ def get_model_limitations() -> str:
         "total_runtime_occurrences": sum(m.get("total_occurrences", 0) for m in result["runtime_detected"].values()),
     }
 
-    return json.dumps(result, indent=2)
+    return _dumps(result)
 
 
 @mcp.resource(
@@ -1168,7 +1160,7 @@ def get_model_limitations() -> str:
 def get_pagination_guide() -> str:
     """Get pagination patterns for execute_method."""
     pagination = MODULE_KNOWLEDGE.get("pagination", {})
-    return json.dumps(
+    return _dumps(
         {
             "title": "Pagination Guide for execute_method",
             **pagination,
@@ -1180,8 +1172,7 @@ def get_pagination_guide() -> str:
                     "kwargs_json": '{"domain": [["is_company", "=", true]], "fields": ["name"], "limit": 50, "offset": 50, "order": "name asc"}',
                 },
             },
-        },
-        indent=2,
+        }
     )
 
 
@@ -1192,7 +1183,7 @@ def get_pagination_guide() -> str:
 def get_hierarchical_guide() -> str:
     """Get hierarchical query patterns."""
     hierarchical = MODULE_KNOWLEDGE.get("hierarchical_models", {})
-    return json.dumps(
+    return _dumps(
         {
             "title": "Hierarchical Query Guide",
             "description": "Patterns for working with parent/child tree structures in Odoo",
@@ -1215,8 +1206,7 @@ def get_hierarchical_guide() -> str:
                     "call": 'execute_method(\'hr.department\', \'search_read\', kwargs_json=\'{"domain": [["parent_id", "=", 5]], "fields": ["name", "manager_id"]}\')',
                 },
             },
-        },
-        indent=2,
+        }
     )
 
 
@@ -1227,7 +1217,7 @@ def get_hierarchical_guide() -> str:
 def get_aggregation_guide() -> str:
     """Get aggregation reference for both formatted_read_group and read_group."""
     aggregation = MODULE_KNOWLEDGE.get("aggregation", {})
-    return json.dumps(
+    return _dumps(
         {
             "title": "Aggregation Guide",
             "recommendation": "Use formatted_read_group for new code (v19+). read_group still works but is deprecated.",
@@ -1276,8 +1266,7 @@ def get_aggregation_guide() -> str:
                 "lazy_false": "All groupings in single query - more efficient for multi-level reports",
                 "recommendation": "Use lazy=False when grouping by 2+ fields, or switch to formatted_read_group",
             },
-        },
-        indent=2,
+        }
     )
 
 
@@ -1303,7 +1292,7 @@ def find_model_resource(concept: str) -> str:
         result["best_match"] = models[0]
         result["all_matches"] = [{"model": m, "score": 100, "source": "alias"} for m in models]
         result["source"] = "alias"
-        return json.dumps(result, indent=2)
+        return _dumps(result)
 
     # 1b. Token-based alias match for multi-word concepts ("customer invoice").
     #     Each word is looked up independently so natural-language phrases still
@@ -1321,7 +1310,7 @@ def find_model_resource(concept: str) -> str:
         if result["all_matches"]:
             result["best_match"] = result["all_matches"][0]["model"]
             result["source"] = "alias-token"
-            return json.dumps(result, indent=2)
+            return _dumps(result)
 
     # 2. Search ir.model by display name
     try:
@@ -1338,7 +1327,7 @@ def find_model_resource(concept: str) -> str:
             result["all_matches"].sort(key=lambda x: x["score"], reverse=True)
             result["best_match"] = result["all_matches"][0]["model"]
             result["source"] = "ir.model"
-            return json.dumps(result, indent=2)
+            return _dumps(result)
     except Exception as exc:
         logger.warning("ir.model search failed for concept %r, falling back to fuzzy match: %s", concept, exc)
 
@@ -1364,7 +1353,7 @@ def find_model_resource(concept: str) -> str:
     if not result["best_match"]:
         result["suggestion"] = "Check odoo://models for available models"
 
-    return json.dumps(result, indent=2)
+    return _dumps(result)
 
 
 @_threaded_resource(
@@ -1398,15 +1387,14 @@ def search_tools_resource(query: str) -> str:
                     }
                 )
 
-    return json.dumps(
+    return _dumps(
         {
             "query": query,
             "tools_found": len(matches) + len(special_matches),
             "workflows": matches,
             "special_methods": special_matches,
             "usage": _REGISTRY_USAGE,
-        },
-        indent=2,
+        }
     )
 
 
@@ -1418,7 +1406,7 @@ def discover_actions_resource(model: str) -> str:
     """Discover all actions available for a model."""
     err = _validate_model(model)
     if err:
-        return json.dumps({"error": err, "hint": _MODEL_LOOKUP_HINT}, separators=(",", ":"))
+        return _dumps({"error": err, "hint": _MODEL_LOOKUP_HINT})
     odoo_client = get_odoo_client()
 
     result = {
@@ -1497,7 +1485,7 @@ def discover_actions_resource(model: str) -> str:
             },
         )
 
-    return json.dumps(result, indent=2)
+    return _dumps(result)
 
 
 @mcp.resource(
@@ -1506,7 +1494,7 @@ def discover_actions_resource(model: str) -> str:
 )
 def get_tool_registry() -> str:
     """Get the complete tool registry for code-first pattern."""
-    return json.dumps(
+    return _dumps(
         {
             "description": "Pre-built tools and workflows for common Odoo operations",
             "usage": f"Read odoo://tools/{{query}} to find an operation. {_REGISTRY_USAGE}",
@@ -1518,8 +1506,7 @@ def get_tool_registry() -> str:
                 "stock": [k for k, v in TOOL_REGISTRY.items() if "stock" in v.get("model", "")],
                 "hr": [k for k, v in TOOL_REGISTRY.items() if "hr" in v.get("model", "")],
             },
-        },
-        indent=2,
+        }
     )
 
 
@@ -1588,4 +1575,4 @@ def _server_status_payload() -> str:
         "posture_open": profile.posture_open,
         "warnings": list(profile.warnings),
     }
-    return json.dumps(payload, indent=2)
+    return _dumps(payload)

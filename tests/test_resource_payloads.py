@@ -137,6 +137,105 @@ def test_large_dynamic_resources_emit_compact_json(call):
     assert "\n" not in output, "pretty-printed output inflates token cost by ~25 %"
 
 
+# One URI per bridge route, so a new route cannot skip the compact check below.
+_ONE_URI_PER_ROUTE = [
+    "odoo://models",
+    "odoo://session-bootstrap",
+    "odoo://server-status",
+    "odoo://bundle/x.y,res.partner",
+    "odoo://model/x.y/quick-schema",
+    "odoo://model/x.y/workflow",
+    "odoo://model/x.y/schema",
+    "odoo://model/x.y/fields",
+    "odoo://model/x.y/docs",
+    "odoo://model/x.y",
+    "odoo://record/x.y/7",
+    "odoo://methods/x.y",
+    "odoo://find-model/invoice",
+    "odoo://actions/x.y",
+    "odoo://tools/partner",
+    "odoo://docs/sale",
+    "odoo://module-knowledge/sale",
+    "odoo://module-knowledge",
+    "odoo://concepts",
+    "odoo://templates",
+    "odoo://workflows",
+    "odoo://server/info",
+    "odoo://domain-syntax",
+    "odoo://model-limitations",
+    "odoo://pagination",
+    "odoo://hierarchical",
+    "odoo://aggregation",
+    "odoo://tool-registry",
+    "odoo://api/json2-protocol",
+    "odoo://api/version-drift",
+    "odoo://api/x2many-commands",
+    "odoo://api-index",
+    "odoo://api/datetime",
+    "odoo://api/mail-thread",
+    "odoo://api/security-model",
+    "odoo://api/web-read",
+    "odoo://api/xmlids",
+    "odoo://session",
+    "odoo://no-such-resource",  # the bridge's own unknown-URI answer
+    "https://not-odoo",  # and its invalid-scheme answer
+]
+
+_DOCS_MODELS = ("ir.model", "ir.model.fields", "ir.model.fields.selection", "ir.actions.act_window")
+
+
+def _compact(output: str) -> str:
+    return json.dumps(json.loads(output), separators=(",", ":"))
+
+
+def test_compact_check_covers_every_bridge_route():
+    from odoo_mcp.server import _RESOURCE_ROUTES
+
+    first_match = {
+        uri: next((p.pattern for p, _, _ in _RESOURCE_ROUTES if p.match(uri)), None) for uri in _ONE_URI_PER_ROUTE
+    }
+    assert set(first_match.values()) - {None} == {p.pattern for p, _, _ in _RESOURCE_ROUTES}
+
+
+@pytest.mark.parametrize("uri", _ONE_URI_PER_ROUTE)
+def test_every_resource_emits_compact_json(uri):
+    """Indentation is paid for in tokens and in the 15 000-char read_resource budget."""
+    from odoo_mcp import utils
+    from odoo_mcp.server import read_resource
+
+    client = _schema_client()
+    client.search_read.side_effect = lambda model, *a, **k: (
+        _docs_client().search_read(model) if model in _DOCS_MODELS else []
+    )
+    client.execute_method.return_value = []
+    client.read_records.return_value = [{"id": 7, "name": "Thing"}]
+    client.get_model_doc.return_value = None
+    client.get_api_index.return_value = None
+    with (
+        patch.object(resources, "get_odoo_client", return_value=client),
+        patch.object(utils, "get_odoo_client", return_value=client),
+        patch.object(resources, "_get_live_doc", return_value=None),
+    ):
+        output = read_resource(uri, max_chars=0)
+    assert output == _compact(output), f"{uri} carries whitespace"
+
+
+def test_resources_serialize_only_through_the_compact_helper():
+    """The per-route check sees the branch a stub reaches; this one covers every branch of resources.py."""
+    import inspect
+
+    assert "json.dumps(" not in inspect.getsource(resources)
+
+
+def test_the_truncation_marker_is_compact():
+    from odoo_mcp.server import read_resource
+
+    output = read_resource("odoo://domain-syntax", max_chars=200)
+    marker = output.rsplit("\n\n", 1)[1]
+    assert json.loads(marker)["_truncated"] is True
+    assert marker == _compact(marker)
+
+
 # ----- P3: odoo://model/{m} goes through the shared, validated fetch -----
 
 

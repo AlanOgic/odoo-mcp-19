@@ -142,7 +142,7 @@ This server is unusually well suited to result caching. It exposes **27 discover
 serving near-static schema data — `quick-schema`, `fields`, `schema`, `workflow`, `bundle`,
 `session-bootstrap`, plus the reference docs (`domain-syntax`, `aggregation`, `pagination`,
 `hierarchical`) which are effectively immutable between releases. The server already runs a
-`_DOC_CACHE` (5-min TTL, 100-entry LRU) internally; `ttlMs` extends that saving to the client
+`_DOC_CACHE` (5-min TTL, 100 entries) internally; `ttlMs` extends that saving to the client
 and removes the round-trip entirely rather than just the Odoo call.
 
 Suggested tiering when this is implemented:

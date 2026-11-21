@@ -59,6 +59,7 @@ from .safety import (
 from .safety_profile import get_profile
 from .user_clients import current_role
 from .utils import (
+    _dumps,
     _get_live_doc,
     _track_model_issue,
     get_error_suggestion,
@@ -1002,7 +1003,7 @@ def read_resource(uri: str, max_chars: int = _READ_RESOURCE_MAX_CHARS) -> str:
         max_chars: Max output length in characters (default: 15000). Set to 0 for unlimited.
     """
     if not uri.startswith("odoo://"):
-        return json.dumps({"error": "Invalid URI: must start with odoo://", "uri": uri})
+        return _dumps({"error": "Invalid URI: must start with odoo://", "uri": uri})
 
     for pattern, handler, param_names in _RESOURCE_ROUTES:
         match = pattern.match(uri)
@@ -1011,7 +1012,7 @@ def read_resource(uri: str, max_chars: int = _READ_RESOURCE_MAX_CHARS) -> str:
             result = handler(**args)
             if max_chars and len(result) > max_chars:
                 truncated = result[:max_chars]
-                warning = json.dumps(
+                warning = _dumps(
                     {
                         "_truncated": True,
                         "_total_chars": len(result),
@@ -1024,7 +1025,7 @@ def read_resource(uri: str, max_chars: int = _READ_RESOURCE_MAX_CHARS) -> str:
                 return truncated + "\n\n" + warning
             return result
 
-    return json.dumps(
+    return _dumps(
         {
             "error": f"Unknown resource URI: {uri}",
             "hint": "Use odoo://templates to list all available resource URIs",
@@ -1035,6 +1036,5 @@ def read_resource(uri: str, max_chars: int = _READ_RESOURCE_MAX_CHARS) -> str:
                 "odoo://find-model/invoice",
                 "odoo://domain-syntax",
             ],
-        },
-        indent=2,
+        }
     )

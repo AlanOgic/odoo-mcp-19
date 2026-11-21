@@ -14,14 +14,18 @@ from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, cast
 
+from .api_reference import build_api_index
 from .constants import (
     _API_INDEX_CACHE,
     _API_INDEX_CACHE_LOCK,
     _API_INDEX_CACHE_MAX_ENTRIES,
+    _API_INDEX_REFUSALS,
     _DOC_CACHE,
     _DOC_CACHE_LOCK,
     _DOC_CACHE_MAX_ENTRIES,
     _DOC_CACHE_TTL,
+    _DOC_NEGATIVE_TTL,
+    _DOC_REFUSALS,
     _RUNTIME_ISSUES_LOCK,
     ERROR_CATEGORIES,
     MODULE_KNOWLEDGE,
@@ -80,13 +84,66 @@ def _client_identity(client: Any) -> tuple[Any, Any]:
     return (getattr(client, "url", None), getattr(client, "username", None))
 
 
+def _dumps(payload: Any) -> str:
+    """Serialize a resource payload without whitespace.
+
+    The reader is an agent: indentation costs it tokens and eats into the
+    15 000-char ``read_resource`` budget (a 150-field ``/fields`` went from
+    truncated to whole). ``tests/test_resource_payloads.py`` checks every route.
+    """
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def _cached_doc_answer(
+    cache: Dict[Any, tuple[float, dict]], refusals: Dict[Any, float], key: Any, now: float
+) -> tuple[bool, Optional[dict]]:
+    """``(True, doc)`` for a fresh document, ``(True, None)`` for a recent refusal, else ``(False, None)``.
+
+    The caller holds the lock guarding both dicts.
+    """
+    entry = cache.get(key)
+    if entry is not None and now - entry[0] < _DOC_CACHE_TTL:
+        return True, entry[1]
+    refused_at = refusals.get(key)
+    if refused_at is not None and now - refused_at < _DOC_NEGATIVE_TTL:
+        return True, None
+    return False, None
+
+
+def _store_doc_answer(
+    cache: Dict[Any, tuple[float, dict]],
+    refusals: Dict[Any, float],
+    key: Any,
+    now: float,
+    doc: Optional[dict],
+    cap: int,
+) -> None:
+    """Record a document, or a refusal when ``doc`` is None, each dict under its own ``cap`` (oldest evicted).
+
+    The caller holds the lock guarding both dicts.
+    """
+    if doc is None:
+        refusals[key] = now
+        while len(refusals) > cap:
+            del refusals[min(refusals, key=refusals.__getitem__)]
+        return
+    cache[key] = (now, doc)
+    refusals.pop(key, None)
+    while len(cache) > cap:
+        del cache[min(cache, key=lambda k: cache[k][0])]
+
+
 def _get_live_doc(model_name: str) -> Optional[Dict[str, Any]]:
     """Fetch live model docs from /doc-bearer/ with in-memory caching.
 
     Cached per caller identity: Odoo builds the document for the requesting user.
     Returns the doc dict if available, or None when the endpoint fails -- the
-    caller then falls back to static data. A caller whose identity cannot be
-    resolved (``PermissionError``) is refused, not answered from static data.
+    caller then falls back to static data. Odoo's refusal (403/404), or a 200 that
+    carries no document, is cached for ``_DOC_NEGATIVE_TTL``, so an API user without
+    ``api_doc.group_allow_doc`` does not pay a failing request per call; a transient
+    failure is not, the next call retries.
+    A caller whose identity cannot be resolved (``PermissionError``) is refused, not
+    answered from static data.
     """
     try:
         odoo = get_odoo_client()
@@ -99,55 +156,53 @@ def _get_live_doc(model_name: str) -> Optional[Dict[str, Any]]:
     key = (*_client_identity(odoo), model_name)
     now = time.time()
     with _DOC_CACHE_LOCK:
-        cached = _DOC_CACHE.get(key)
-        if cached and now - cached[0] < _DOC_CACHE_TTL:
-            return cast(Dict[str, Any], cached[1])
+        hit, cached = _cached_doc_answer(_DOC_CACHE, _DOC_REFUSALS, key, now)
+    if hit:
+        return cached
 
     try:
-        doc = odoo.get_model_doc(model_name)
-        if doc and isinstance(doc, dict) and "methods" in doc:
-            with _DOC_CACHE_LOCK:
-                _DOC_CACHE[key] = (now, doc)
-                if len(_DOC_CACHE) > _DOC_CACHE_MAX_ENTRIES:
-                    oldest = min(_DOC_CACHE, key=lambda k: _DOC_CACHE[k][0])
-                    del _DOC_CACHE[oldest]
-            return doc
+        fetched = odoo.get_model_doc(model_name)
     except Exception as e:
         logger.warning("/doc-bearer/ unavailable for %s: %s", model_name, e)
+        return None
+    doc = fetched if isinstance(fetched, dict) and "methods" in fetched else None
+    with _DOC_CACHE_LOCK:
+        _store_doc_answer(_DOC_CACHE, _DOC_REFUSALS, key, now, doc, _DOC_CACHE_MAX_ENTRIES)
+    return doc
 
-    return None
 
-
-def get_live_api_index() -> Optional[Dict[str, Any]]:
-    """Cached ``/doc-bearer/index.json`` for the current client identity.
+def get_compact_api_index() -> Optional[Dict[str, Any]]:
+    """``build_api_index`` of the current identity's ``/doc-bearer/index.json``, cached.
 
     Keyed by (url, username) because the index is filtered by the caller's
-    groups — in multi-user mode two registry users must not share it. TTL is
-    ``_DOC_CACHE_TTL``, at most ``_API_INDEX_CACHE_MAX_ENTRIES`` identities
-    (oldest evicted). Returns None when the endpoint is unavailable.
+    groups — in multi-user mode two registry users must not share it. Only the
+    compact form is cached: nothing serves the raw ~2 MB index. Same TTLs and
+    refusal handling as ``_get_live_doc``; at most ``_API_INDEX_CACHE_MAX_ENTRIES``
+    identities (oldest evicted).
     """
     client = get_odoo_client()
     key = _client_identity(client)
     now = time.time()
     with _API_INDEX_CACHE_LOCK:
-        cached = _API_INDEX_CACHE.get(key)
-        if cached and now - cached[0] < _DOC_CACHE_TTL:
-            return cast(Dict[str, Any], cached[1])
-    index = client.get_api_index()
-    if not index or not isinstance(index, dict) or "models" not in index:
+        hit, cached = _cached_doc_answer(_API_INDEX_CACHE, _API_INDEX_REFUSALS, key, now)
+    if hit:
+        return cached
+    try:
+        raw = client.get_api_index()
+    except Exception as e:
+        logger.warning("/doc-bearer/index.json unavailable: %s: %s", type(e).__name__, e)
         return None
+    index = build_api_index(raw) if isinstance(raw, dict) and "models" in raw else None
     with _API_INDEX_CACHE_LOCK:
-        _API_INDEX_CACHE[key] = (now, index)
-        while len(_API_INDEX_CACHE) > _API_INDEX_CACHE_MAX_ENTRIES:
-            oldest = min(_API_INDEX_CACHE, key=lambda k: _API_INDEX_CACHE[k][0])
-            del _API_INDEX_CACHE[oldest]
+        _store_doc_answer(_API_INDEX_CACHE, _API_INDEX_REFUSALS, key, now, index, _API_INDEX_CACHE_MAX_ENTRIES)
     return index
 
 
 def clear_api_index_cache() -> None:
-    """Drop every cached index (tests, credential rotation)."""
+    """Drop every cached index and refusal (tests, credential rotation)."""
     with _API_INDEX_CACHE_LOCK:
         _API_INDEX_CACHE.clear()
+        _API_INDEX_REFUSALS.clear()
 
 
 def _categorize_error(error_msg: str) -> str:
@@ -380,19 +435,17 @@ def get_error_suggestion(error_msg: str, model: Optional[str] = None, method: Op
 
 def _get_module_knowledge() -> str:
     """Get the full module knowledge base with special methods and error patterns"""
-    return json.dumps(MODULE_KNOWLEDGE, indent=2)
+    return _dumps(MODULE_KNOWLEDGE)
 
 
 def _get_module_knowledge_by_name(module_name: str) -> str:
     """Get specific module knowledge"""
     modules = MODULE_KNOWLEDGE.get("modules", {})
     if module_name in modules:
-        return json.dumps({"module": module_name, **modules[module_name]}, indent=2)
+        return _dumps({"module": module_name, **modules[module_name]})
     else:
         available = list(modules.keys())
-        return json.dumps(
-            {"error": f"Module '{module_name}' not found in knowledge base", "available_modules": available}, indent=2
-        )
+        return _dumps({"error": f"Module '{module_name}' not found in knowledge base", "available_modules": available})
 
 
 def _get_documentation_urls(target: str) -> str:
@@ -477,7 +530,7 @@ def _get_documentation_urls(target: str) -> str:
                 result["notes"] = mod_data["notes"]
             break
 
-    return json.dumps(result, indent=2)
+    return _dumps(result)
 
 
 # ----- Live fields_get cache (shared by the schema resources and the payload pre-flight) -----

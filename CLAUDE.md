@@ -66,7 +66,7 @@ Everything else in `tests/` runs without Odoo. `test_tool_execution_paths.py` is
 Run `black . && isort .` before pushing — CI enforces formatting.
 
 **Lint and typecheck are not clean gates.** Judge a change by *no new errors against this baseline* (v2.2.0), not by a zero exit code:
-- `pytest --ignore=tests/live` → **955 passed** with fastmcp 4.1.5 (unit coverage 81 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency).
+- `pytest --ignore=tests/live` → **1021 passed** with fastmcp 4.1.5 (unit coverage 84 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency).
 - `black --check .` and `isort --check-only .` → **clean**.
 - `ruff check .` → **26 errors** (20 E501, 6 E402). All 6 E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
 - `mypy src/odoo_mcp` → **36 errors** in 5 files (mostly `resources.py` and `server.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.3.1 here).
@@ -147,7 +147,9 @@ src/odoo_mcp/
 
 **Schema fetch rule.** Compact views (quick-schema, /fields, bundle, session-bootstrap, dynamic /workflow) and the payload pre-flight must request `fields_get(attributes=COMPACT_FIELD_ATTRIBUTES)` through `_fetch_model_fields(..., attributes=…)` / `get_fields_for_model(..., attributes=…)` so they share one cache entry per model; only `/schema` and `odoo://model/{model}` fetch the full definition.
 
-**3. Live doc enrichment** — `odoo://methods/{model}` and `@api.private` detection both consult `/doc-bearer/<model>.json` (provided by Odoo's `api_doc` module, requires `api_doc.group_allow_doc` on the API user). Cached in `_DOC_CACHE`: 5-min TTL, 100-entry LRU, `threading.Lock`. Falls back to static data if unavailable, logged as a warning; a `PermissionError` from identity resolution propagates.
+**Serialization rule.** Every `odoo://` payload goes through `utils._dumps` (no whitespace): indentation costs the agent tokens and eats the 15 000-char `read_resource` budget. `tests/test_resource_payloads.py::test_every_resource_emits_compact_json` reads one URI per bridge route, and `test_compact_check_covers_every_bridge_route` fails until a new route gets its sample URI there.
+
+**3. Live doc enrichment** — `odoo://methods/{model}` and `@api.private` detection both consult `/doc-bearer/<model>.json` (provided by Odoo's `api_doc` module, requires `api_doc.group_allow_doc` on the API user). Cached in `_DOC_CACHE`: 5-min TTL, 100 entries (oldest fetch evicted), `threading.Lock`. Falls back to static data if unavailable, logged as a warning. Odoo's refusal (403 without the group or read access, 404 for an unknown model) — or a 200 that carries no document — is kept apart in `_DOC_REFUSALS` for `_DOC_NEGATIVE_TTL` (60s), so an API user without the group does not pay a failing request per call and refusals never evict documents; a transient failure (network, 429, 5xx) is not cached — `OdooClient.get_model_doc` / `get_api_index` raise for it rather than return None. `odoo://api-index` works the same way; a `PermissionError` from identity resolution propagates.
 
 **4. Background tasks** — `batch_execute` is a `task=True` tool. Since FastMCP 4 background tasks are an extension (`io.modelcontextprotocol/tasks`, package `fastmcp-tasks`, still on Docket): `app.py` registers it with `mcp.add_extension(TasksExtension())` right after creating the server, and without that line the server refuses to start. A client may call it inline or as a task (`fastmcp_tasks.call_tool_task`); both paths are pinned in `tests/test_protocol_eras.py`. The caller's access token is available inside a task-enabled tool in both eras (verified end to end with a seeded registry: a `readonly` key is refused by `batch_execute`).
 
@@ -231,13 +233,13 @@ Every env var with its default is in the `## Configuration` table of `README.md`
 ## Security hardening (v1.13.0 — keep this enforced)
 
 - **Input validation**: model `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$` (max 128); method `^[a-zA-Z_][a-zA-Z0-9_]*$` (max 64); URIs must be `odoo://`.
-- **Thread safety**: `OdooClient` is a singleton with double-checked locking. `_DOC_CACHE` (100-entry LRU), `_FIELDS_CACHE` (100-entry LRU), and `RUNTIME_MODEL_ISSUES` each use their own `threading.Lock`.
+- **Thread safety**: `OdooClient` is a singleton with double-checked locking. `_DOC_CACHE` (100 entries), `_FIELDS_CACHE` (100-entry LRU), and `RUNTIME_MODEL_ISSUES` each use their own `threading.Lock`.
 - **Error sanitization**: never include Odoo `debug` tracebacks in MCP responses.
 - **Docker**: non-root user (UID 1001); `run-docker.sh` uses `--env-file`; `docker-compose.yml` passes `${MCP_API_KEY:-}` (the multi-user overlay does not need it), so the HTTP startup preflight is what refuses an unauthenticated server.
 - **The Docker stub step must remove `build/` as well as `src/`.** Otherwise setuptools keeps the stub's empty `__init__.py` (newer than the COPY'd source) and the image ships without `__version__` or the `odoo_mcp` log handler — fixed in v1.19.1, pinned by `TestDockerfileUsesDeclaredDependencies::test_dockerfile_discards_the_stub_build_tree`.
 - **Docker must not restate dependency constraints.** The Dockerfile installs a stub package to resolve `pyproject.toml`'s dependency set into its own cached layer, then installs the real source with `--no-deps`. A hand-copied list drifts silently — it had already lost the `fastmcp<4` ceiling and never listed `cryptography>=42`. `tests/test_dependency_pins.py::TestDockerfileUsesDeclaredDependencies` fails if a restated pin reappears.
 - **HTTP**: `sys.exit(1)` unless `MCP_API_KEY` or `USERS_DB_PATH` is set. Wizard auto-generates keys with `secrets.token_urlsafe(32)`. Multi-user token compare uses `hmac.compare_digest` (static key) / sha256 hash lookup (registry keys — plaintext keys are never stored).
-- **Resource limits**: `MCP_DEFAULT_CONTEXT` ≤ 4KB; `MCP_BOOTSTRAP_MODELS` ≤ 20 models; `_DOC_CACHE` and `_FIELDS_CACHE` ≤ 100 entries each; `_API_INDEX_CACHE` ≤ 20 identities (each entry is the raw ~2 MB index).
+- **Resource limits**: `MCP_DEFAULT_CONTEXT` ≤ 4KB; `MCP_BOOTSTRAP_MODELS` ≤ 20 models; `_DOC_CACHE` and `_FIELDS_CACHE` ≤ 100 entries each; `_API_INDEX_CACHE` ≤ 20 identities (each entry is the compact `build_api_index` output, ~80 bytes per model — the raw ~2 MB index is never kept).
 - **Gitignored**: `.env`, `.env.local`, `.mcp.json`, `odoo_config.json`.
 
 ## Release process
