@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-21
+
 ### Changed
 - **Python 3.11+ and `fastmcp[tasks]>=4.2.3,<5`** (were 3.10+ and `>=4.0.10`). FastMCP 4.2.0
   requires Python 3.11, so a 3.10 install silently resolved the 4.1.x line while 3.11+ resolved
