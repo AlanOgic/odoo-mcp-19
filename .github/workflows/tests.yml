@@ -19,7 +19,7 @@ jobs:
       matrix:
         # Mirrors the classifiers in pyproject.toml — if a version is claimed
         # as supported it gets exercised here.
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v7

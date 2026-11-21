@@ -1,6 +1,6 @@
 # Migrating to MCP 2026-07-28 / FastMCP 4.x
 
-**Status**: done on 2026-09-30 against `4.0.10` — the server now runs on `fastmcp[tasks]>=4.1.5,<5`
+**Status**: done on 2026-09-30 against `4.0.10` — the server now runs on `fastmcp[tasks]>=4.2.3,<5` (Python 3.11+)
 and answers both MCP `2026-07-28` and `2025-11-25`, negotiated per connection.
 **Written**: 2026-08-07, against FastMCP `4.0.0b2` and MCP spec `2026-07-28` (final).
 

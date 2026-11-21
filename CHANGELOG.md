@@ -8,8 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **FastMCP floor raised to `fastmcp[tasks]>=4.1.5,<5`** (was `>=4.0.10`), the version a fresh
-  install resolves to and the suite is run against.
+- **Python 3.11+ and `fastmcp[tasks]>=4.2.3,<5`** (were 3.10+ and `>=4.0.10`). FastMCP 4.2.0
+  requires Python 3.11, so a 3.10 install silently resolved the 4.1.x line while 3.11+ resolved
+  4.2.x: CI was testing two FastMCP lines. 4.2.3 brings the 4.1.7 and 4.2.1 security fixes
+  (Authlib and joserfc floors, `required_scopes` kept with a custom token verifier) and
+  `pydocket>=0.29.1` for the tasks extension. `test_dependency_pins.py` now also fails if
+  `requires-python` admits a Python the FastMCP floor cannot install, or if the CI matrix and
+  the classifiers drift apart.
 - **Every `odoo://` resource is served as compact JSON** (`utils._dumps`). 48 serializer calls
   were still indented: 26 % fewer characters across the static guides, 37 % on
   `odoo://model/{m}/fields`. A 150-field `/fields` (20 204 → 12 829 chars) now fits under the
