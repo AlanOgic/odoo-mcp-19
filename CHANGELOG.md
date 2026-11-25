@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`docker-compose.yml` has a healthcheck.** Every 60 s a Python one-liner requests `/mcp`
+  inside the container: any answer below 500 is healthy (an unauthenticated probe gets 401), a
+  5xx, a refused connection or a 5 s timeout is not, so a hung event loop shows as `unhealthy`
+  in `docker ps`. It is in the compose file and not the Dockerfile, whose default command is
+  STDIO. Docker reports the state only; it does not restart the container.
+
 ## [2.3.0] - 2026-11-21
 
 ### Changed

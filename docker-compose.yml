@@ -4,6 +4,20 @@ services:
     container_name: odoo-mcp-19
     ports:
       - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-8080}:${MCP_PORT:-8080}"
+    # Liveness of the HTTP event loop: any answer below 500 counts (an
+    # unauthenticated probe gets 401), a refused connection or a timeout fails.
+    # It lives here, not in the Dockerfile, whose default command is STDIO.
+    # Docker only reports `unhealthy`; it does not restart the container.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import http.client, os; c = http.client.HTTPConnection('127.0.0.1', int(os.environ.get('MCP_PORT', '8080')), timeout=5); c.request('GET', '/mcp'); raise SystemExit(c.getresponse().status >= 500)"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     environment:
       # Odoo connection (global instance; in multi-user mode the per-user
       # credentials come from the shared registry instead of env)
