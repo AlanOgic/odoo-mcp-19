@@ -528,6 +528,14 @@ COMPACT_FIELD_ATTRIBUTES: tuple[str, ...] = ("type", "string", "required", "read
 
 _DEFAULT_BOOTSTRAP_MODELS = "res.partner,sale.order,account.move,product.product,stock.picking"
 
+# odoo://session-bootstrap lists up to _BOOTSTRAP_MAX_FIELDS writable fields per model, then lowers
+# that cap until the payload is under _BOOTSTRAP_TARGET_CHARS — below the read_resource default
+# (_READ_RESOURCE_MAX_CHARS), so the bridge returns it whole. At _BOOTSTRAP_MIN_FIELDS it stops:
+# a long MCP_BOOTSTRAP_MODELS list can still exceed the target.
+_BOOTSTRAP_MAX_FIELDS = 120
+_BOOTSTRAP_MIN_FIELDS = 5
+_BOOTSTRAP_TARGET_CHARS = 14000
+
 
 # ----- Tool Registry for Code-First Pattern -----
 

@@ -14,7 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `docker ps`. It is in the compose file and not the Dockerfile, whose default command is
   STDIO. Docker reports the state only; it does not restart the container.
 
+### Changed
+- **`odoo://session-bootstrap` is a digest that fits one default `read_resource`.** It was five
+  full quick-schemas, 60 KB against a 15 000-char budget: a bridge client received a quarter of
+  it. Each model now gets `required`, `writable` (writable fields grouped by type, relational
+  ones with their comodel, required first then Odoo's definition order), `state_values`,
+  `field_count`, `writable_total` and `writable_shown`. Readonly fields and the chatter / activity / portal mixin
+  fields are left to `odoo://model/{model}/quick-schema`. The per-model cap starts at 120 fields
+  and is lowered until the payload is under 14 000 chars (just under it on Odoo 19.3 with the default
+  five models, 36 to 83 fields each). **The `schemas.{model}.fields` map is gone**; a client that
+  read it should read `odoo://bundle/{models}`.
+
 ### Fixed
+- **A truncated `read_resource` answer is valid JSON.** A payload over `max_chars` was cut at a
+  character offset, followed by a second JSON document: no parser accepted it, and ten of the 38
+  resources are over the default on a real instance. Trailing items of the collection that
+  stands out are now dropped instead (the field map of a schema, the model list of a catalogue), and a leading
+  `_truncated` / `_total_chars` / `_dropped` marker names each trimmed path with `kept` and `of`.
+  `_returned_chars` is gone. `max_chars=0` still returns everything.
 - **The handshake reports this server's version.** `serverInfo.version` was FastMCP's (`4.2.6`);
   it is now `odoo_mcp.__version__`.
 - **`execute_method` and `batch_execute` are declared destructive.** Both run `unlink` yet carried

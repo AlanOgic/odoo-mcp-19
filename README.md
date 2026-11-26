@@ -286,7 +286,7 @@ token issued for `unlink([1])` and reuse it on `unlink([1, 2, …, 1000])`.
 | `odoo://model/{name}/workflow` | State machine transitions and side effects |
 | `odoo://model/{name}/docs` | Rich docs: labels, help text, selections |
 | `odoo://bundle/{models}` | Batch quick-schema for N models (max 10) |
-| `odoo://session-bootstrap` | Bootstrap: schemas + workflows for common models |
+| `odoo://session-bootstrap` | Bootstrap: writable fields by type + workflows for common models (fits one default `read_resource`) |
 | `odoo://record/{model}/{id}` | Get a specific record by ID |
 | `odoo://methods/{model}` | Available methods (enriched with live signatures) |
 | `odoo://docs/{model}` | Documentation URLs |
@@ -430,7 +430,7 @@ MCP_SAFETY_MODE=strict
 
 ### Session bootstrap
 
-`odoo://session-bootstrap` — One call to bootstrap a conversation with schemas + workflows for common models. Configure via `MCP_BOOTSTRAP_MODELS` env var.
+`odoo://session-bootstrap` — One call to bootstrap a conversation: for each common model, its writable fields grouped by type (relational ones with their comodel), the `state` values and the workflow. It is a digest sized to fit one default `read_resource` (15 000 chars); readonly fields and the rest are in `odoo://model/{model}/quick-schema`. Configure via `MCP_BOOTSTRAP_MODELS` env var — the more models, the fewer fields each one gets.
 
 ### Workflow
 

@@ -62,6 +62,7 @@ from .utils import (
     _dumps,
     _get_live_doc,
     _track_model_issue,
+    fit_json_to_budget,
     get_error_suggestion,
     get_fields_for_model,
 )
@@ -633,7 +634,7 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
     - odoo://model/{model}/fields - Lightweight field list (e.g. odoo://model/res.partner/fields)
     - odoo://model/{model}/workflow - State machine transitions (e.g. odoo://model/sale.order/workflow)
     - odoo://bundle/{models} - Batch quick-schema for N models (e.g. odoo://bundle/res.partner,sale.order)
-    - odoo://session-bootstrap - Bootstrap conversation with schemas + workflows
+    - odoo://session-bootstrap - Bootstrap conversation: writable fields + workflows
     - odoo://methods/{model} - Available methods (e.g. odoo://methods/crm.lead)
     - odoo://actions/{model} - Discover actions (e.g. odoo://actions/sale.order)
     - odoo://model/{model}/docs - Rich docs with help text
@@ -1051,6 +1052,13 @@ _RESOURCE_ROUTES: list[tuple[re.Pattern[str], Any, list[str]]] = [
 ]
 
 
+_TRUNCATION_HINT = (
+    "Items were dropped to fit max_chars; _dropped lists where (kept / of). Read a narrower resource: "
+    "odoo://find-model/{concept} for the model lists, odoo://model/{model}/quick-schema for fields, "
+    "odoo://module-knowledge/{name} for one module. max_chars=0 returns everything."
+)
+
+
 @mcp.tool(
     description="""Read any odoo:// resource by URI. Use this for schema discovery, method lookup, guides, etc.
 
@@ -1064,7 +1072,7 @@ _RESOURCE_ROUTES: list[tuple[re.Pattern[str], Any, list[str]]] = [
 
     Batch operations:
     - odoo://bundle/{models} - Quick-schema for N models in one call (e.g. odoo://bundle/res.partner,sale.order)
-    - odoo://session-bootstrap - Bootstrap conversation with schemas + workflows for common models
+    - odoo://session-bootstrap - Bootstrap conversation: writable fields + workflows for common models
 
     Other useful resources:
     - odoo://model/{model}/workflow - State machine transitions
@@ -1086,6 +1094,8 @@ def read_resource(uri: str, max_chars: int = _READ_RESOURCE_MAX_CHARS) -> str:
     Parameters:
         uri: Resource URI (e.g. 'odoo://model/res.partner/fields')
         max_chars: Max output length in characters (default: 15000). Set to 0 for unlimited.
+            A longer payload stays valid JSON: trailing items of its largest collection are
+            dropped and a leading `_truncated` / `_dropped` marker says which and how many.
     """
     if not uri.startswith("odoo://"):
         return _dumps({"error": "Invalid URI: must start with odoo://", "uri": uri})
@@ -1096,18 +1106,12 @@ def read_resource(uri: str, max_chars: int = _READ_RESOURCE_MAX_CHARS) -> str:
             args = dict(zip(param_names, match.groups()))
             result = handler(**args)
             if max_chars and len(result) > max_chars:
-                truncated = result[:max_chars]
-                warning = _dumps(
-                    {
-                        "_truncated": True,
-                        "_total_chars": len(result),
-                        "_returned_chars": max_chars,
-                        "_hint": f"Output truncated from {len(result):,} to {max_chars:,} chars. "
-                        f"Use max_chars=0 for full output, or use narrower queries "
-                        f"(e.g. odoo://model/{{model}}/fields instead of /schema).",
-                    }
-                )
-                return truncated + "\n\n" + warning
+                fitted = fit_json_to_budget(result, max_chars, _TRUNCATION_HINT)
+                if fitted is not None:
+                    return fitted
+                # Not JSON (no resource does this today): a plain cut, with the marker after it.
+                marker = _dumps({"_truncated": True, "_total_chars": len(result), "_hint": _TRUNCATION_HINT})
+                return result[:max_chars] + "\n\n" + marker
             return result
 
     return _dumps(
