@@ -601,8 +601,8 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
 
     RELATIONAL FIELD WRITES (critical -- wrong syntax = silent failure):
     - Many2one: ALWAYS numeric ID, never name. Use resolve_json to auto-resolve.
-    - Many2many: (4, id) link, (3, id) unlink, (6, 0, [ids]) replace all, (5, 0, 0) clear
-    - One2many: (0, 0, {vals}) create child, (1, id, {vals}) update, (2, id, 0) delete
+    - Many2many: [4, id] link, [3, id] unlink, [6, 0, [ids]] replace all, [5, 0, 0] clear
+    - One2many: [0, 0, {vals}] create child, [1, id, {vals}] update, [2, id, 0] delete
 
     DATE/DATETIME FORMATS (wrong format = 500 or silent failure):
     - date fields: "YYYY-MM-DD" (e.g. "2026-04-10")

@@ -37,10 +37,12 @@ python -m odoo_mcp --setup
 uv run pytest tests/ --ignore=tests/live
 uv run pytest tests/test_safety.py::TestSafeMethods::test_safe_methods_on_regular_model   # single test
 
-# Tests — live (requires .env with real Odoo creds; script-style runners)
+# Tests — live (script-style runners doing real reads AND writes; they load_dotenv() the cwd .env)
 python tests/live/test_safety_live.py
 python tests/live/test_v1110_live.py
 python tests/live/test_locked_mode_live.py
+# Against another instance (a test database): the process environment wins over .env
+uv run --env-file <env-file> python tests/live/test_safety_live.py
 
 # Format + lint + typecheck
 black . && isort .   # both clean, line length 120 (ruff too); isort has skip_gitignore=true so it skips venvs like black does
@@ -54,6 +56,7 @@ docker compose up -d           # uses .env; without MCP_API_KEY the startup pref
 docker compose -f docker-compose.yml -f docker-compose.multiuser.yml up -d
 ```
 
+- **Live runners write to whatever Odoo the environment names.** The runners call `load_dotenv()` without override, so `uv run --env-file <file>` (or exported `ODOO_*` variables) takes precedence over the `.env` in cwd. Check the URL the runner prints before letting it write, and do not point them at a production database.
 - **Always pass `--ignore=tests/live`.** `tests/live/` holds **script-style runners** that need `.env` and mutate environment state — invoke them with `python <file>`. A bare `pytest tests/` imports all three, whose module-level `load_dotenv()` pushes real `.env` credentials into `os.environ` for the whole session, and runs the 5 `test_*` functions in `test_locked_mode_live.py` (real reads against the configured Odoo, `MCP_*` env left mutated; the other two files are `__main__`-guarded).
 - **`ModuleNotFoundError: No module named 'odoo_mcp'` during collection** means the dev extras are not installed — run `uv sync --extra dev`. uv ignores a `VIRTUAL_ENV` pointing anywhere other than `./.venv` (it warns and uses `.venv` regardless), so an activated sibling venv silently gives you a system pytest/ruff/mypy or none at all.
 
@@ -66,10 +69,10 @@ Everything else in `tests/` runs without Odoo. `test_tool_execution_paths.py` is
 Run `black . && isort .` before pushing — CI enforces formatting.
 
 **Lint and typecheck are not clean gates.** Judge a change by *no new errors against this baseline* (v2.3.0), not by a zero exit code:
-- `pytest --ignore=tests/live` → **1195 passed** with fastmcp 4.2.3 (unit coverage 84 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency).
+- `pytest --ignore=tests/live` → **1217 passed** with fastmcp 4.2.3 (unit coverage 84 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency).
 - `black --check .` and `isort --check-only .` → **clean**.
 - `ruff check .` → **25 errors** (20 E501, 5 E402). All 5 E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
-- `mypy src/odoo_mcp` → **36 errors** in 5 files (mostly `resources.py` and `server.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.3.1 here).
+- `mypy src/odoo_mcp` → **36 errors** in 5 files (mostly `resources.py` and `server.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.4.1 here).
 - radon: no function worse than C except `find_model_resource` (D, 21) and `get_error_suggestion` (D, 22).
 
 **Moving the FastMCP floor.** The floor is the oldest version the full suite was verified on. `tests/test_dependency_pins.py` holds it with the fixed `FASTMCP_LAST_UNVERIFIED`, never the installed version: with no lockfile, CI and a new checkout resolve the latest FastMCP, so a test tied to the installed version fails on upstream releases with nothing changed here. To raise the floor, run the suite on the new version, then move `pyproject.toml`, `FASTMCP_LAST_UNVERIFIED`, this file, the README and the status line of `docs/mcp-2026-07-28-migration.md` together.
@@ -235,7 +238,7 @@ Every env var with its default is in the `## Configuration` table of `README.md`
 - **Input validation**: model `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$` (max 128); method `^[a-zA-Z_][a-zA-Z0-9_]*$` (max 64); URIs must be `odoo://`.
 - **Thread safety**: `OdooClient` is a singleton with double-checked locking. `_DOC_CACHE` (100 entries), `_FIELDS_CACHE` (100-entry LRU), and `RUNTIME_MODEL_ISSUES` each use their own `threading.Lock`.
 - **Error sanitization**: never include Odoo `debug` tracebacks in MCP responses.
-- **Docker**: non-root user (UID 1001); `run-docker.sh` uses `--env-file`; `docker-compose.yml` passes `${MCP_API_KEY:-}` (the multi-user overlay does not need it), so the HTTP startup preflight is what refuses an unauthenticated server.
+- **Docker**: non-root user (UID 1001); `run-docker.sh` uses `--env-file`; `docker-compose.yml` passes `${MCP_API_KEY:-}` (the multi-user overlay does not need it), so the HTTP startup preflight is what refuses an unauthenticated server. The healthcheck lives in `docker-compose.yml`, not the Dockerfile (whose default command is STDIO): it requests `/mcp` and counts any status below 500 as healthy, so the 401 an unauthenticated probe gets is the expected answer — `tests/test_compose_healthcheck.py`.
 - **The Docker stub step must remove `build/` as well as `src/`.** Otherwise setuptools keeps the stub's empty `__init__.py` (newer than the COPY'd source) and the image ships without `__version__` or the `odoo_mcp` log handler — fixed in v1.19.1, pinned by `TestDockerfileUsesDeclaredDependencies::test_dockerfile_discards_the_stub_build_tree`.
 - **Docker must not restate dependency constraints.** The Dockerfile installs a stub package to resolve `pyproject.toml`'s dependency set into its own cached layer, then installs the real source with `--no-deps`. A hand-copied list drifts silently — it had already lost the `fastmcp<4` ceiling and never listed `cryptography>=42`. `tests/test_dependency_pins.py::TestDockerfileUsesDeclaredDependencies` fails if a restated pin reappears.
 - **HTTP**: `sys.exit(1)` unless `MCP_API_KEY` or `USERS_DB_PATH` is set. Wizard auto-generates keys with `secrets.token_urlsafe(32)`. Multi-user token compare uses `hmac.compare_digest` (static key) / sha256 hash lookup (registry keys — plaintext keys are never stored).

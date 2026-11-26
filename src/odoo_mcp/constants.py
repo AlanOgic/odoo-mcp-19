@@ -297,10 +297,11 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
         "flags": [{"field": "locked", "set": "button_lock", "unset": "button_unlock", "label": "Lock"}],
     },
     "hr.leave": {
+        # Odoo 19.0 source (hr_holidays/models/hr_leave.py), same states and methods on Odoo Online 19.3.
+        # There is no 'draft' state and no action_confirm: a request is created in 'confirm'.
         "state_field": "state",
-        "states": ["draft", "confirm", "validate1", "validate", "refuse"],
+        "states": ["confirm", "validate1", "validate", "refuse", "cancel"],
         "transitions": [
-            {"from": "draft", "to": "confirm", "method": "action_confirm", "label": "Confirm", "irreversible": False},
             {
                 "from": "confirm",
                 "to": "validate",
@@ -308,14 +309,48 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
                 "label": "Approve",
                 "side_effects": ["Deducts leave allocation"],
                 "irreversible": False,
+                "note": (
+                    "When the time off type needs two approvals (validation_type 'both') and the caller is the "
+                    "employee's approver but not a Time Off officer, it stops at 'validate1'; an officer goes "
+                    "straight to 'validate'. Read the state back. Raises when the caller may not approve."
+                ),
             },
             {
-                "from": ["confirm", "validate"],
+                "from": "validate1",
+                "to": "validate",
+                "method": "action_approve",
+                "label": "Second Approval",
+                "side_effects": ["Deducts leave allocation"],
+                "irreversible": False,
+            },
+            {
+                "from": "refuse",
+                "to": "validate",
+                "method": "action_approve",
+                "label": "Approve a Refused Request",
+                "side_effects": ["Deducts leave allocation"],
+                "irreversible": False,
+                "note": "Time Off officers, and the approver on types validated by the manager only.",
+            },
+            {
+                "from": ["confirm", "validate1", "validate"],
                 "to": "refuse",
                 "method": "action_refuse",
                 "label": "Refuse",
                 "irreversible": False,
             },
+            {
+                "from": "validate",
+                "to": "confirm",
+                "method": "action_back_to_approval",
+                "label": "Back to Approval",
+                "irreversible": False,
+                "note": "Silently skips a request the caller may not send back: read the state back.",
+            },
+        ],
+        "notes": [
+            "action_cancel changes no state: it returns the hr.holidays.cancel.leave wizard action, "
+            "and the wizard sets 'cancel'.",
         ],
     },
 }
@@ -501,7 +536,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "description": "Create a new sales quotation",
         "model": "sale.order",
         "workflow": ["find customer", "add products", "create order"],
-        "params": {"partner_id": "int", "order_line": "list of (0,0,{product_id, qty})"},
+        "params": {"partner_id": "int", "order_line": "list of [0, 0, {product_id, qty}]"},
     },
     "confirm_order": {
         "description": "Confirm a quotation to sales order",

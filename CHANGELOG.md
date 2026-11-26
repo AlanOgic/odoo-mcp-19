@@ -15,6 +15,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   STDIO. Docker reports the state only; it does not restart the container.
 
 ### Fixed
+- **Prompts recommend calls that run and answer the question.** Each recipe was executed on Odoo
+  Online 19.3. `inventory-check` filters `location_id.usage = internal` (it summed real stock with
+  customer, supplier, production and inventory-adjustment locations) and reads `reserved_quantity`.
+  `ar-aging-report` filters `state = posted` (cancelled invoices were counted), sums
+  `amount_residual_signed` (`amount_residual` mixes invoice currencies) and adds the `search_read`
+  that fetches `invoice_date_due`, without which no aging bucket can be computed.
+  `aggregation-report` says its examples are sale.order's instead of presenting them as the
+  requested model's. `hierarchical-query` no longer reads `child_id`, which res.partner lacks.
+  `search-records` and `odoo-api-reference` point at `quick-schema` instead of the ~190 KB
+  `/schema`, write x2many commands and domains as JSON lists, and mention `resolve_json`;
+  `paginated-search` replaces an invalid Python loop with steps.
+- **Time off state machine matches Odoo 19.** `hr.leave` listed a `draft` state and an
+  `action_confirm` transition; neither exists (19.0 source and Odoo Online 19.3). It now has
+  `confirm`, `validate1`, `validate`, `refuse`, `cancel`, says when `action_approve` stops at
+  `validate1` (two approvals, caller not a Time Off officer), adds approving a refused request and
+  `action_back_to_approval`, and notes that `action_cancel` only returns the cancel wizard.
+- **Two knowledge entries named the wrong model.** `action_view_invoice` is removed from
+  `account.move` (it exists on `sale.order` and `purchase.order`), and the hierarchical model
+  `documents.folder`, which does not exist, becomes `documents.document` with `folder_id`; the
+  account hierarchy is `account.group`, not `account.account`. x2many commands are written as JSON
+  lists everywhere (`[0, 0, {...}]`), no longer as Python tuples.
 - **Chatter recipes post with `message_post`.** `send_message`, the `mail` and `discuss` module
   knowledge said to create `mail.message` directly because `message_post` "fails via JSON-2",
   with `subtype_id` 1 / 2 hard-coded. That path notifies nobody. They now give `message_post` with
