@@ -297,10 +297,11 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
         "flags": [{"field": "locked", "set": "button_lock", "unset": "button_unlock", "label": "Lock"}],
     },
     "hr.leave": {
+        # Odoo 19.0 source (hr_holidays/models/hr_leave.py), same states and methods on Odoo Online 19.3.
+        # There is no 'draft' state and no action_confirm: a request is created in 'confirm'.
         "state_field": "state",
-        "states": ["draft", "confirm", "validate1", "validate", "refuse"],
+        "states": ["confirm", "validate1", "validate", "refuse", "cancel"],
         "transitions": [
-            {"from": "draft", "to": "confirm", "method": "action_confirm", "label": "Confirm", "irreversible": False},
             {
                 "from": "confirm",
                 "to": "validate",
@@ -308,14 +309,38 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
                 "label": "Approve",
                 "side_effects": ["Deducts leave allocation"],
                 "irreversible": False,
+                "note": (
+                    "When the time off type needs two approvals (validation_type 'both'), the first approval "
+                    "sets 'validate1' instead: read the state back. Raises when the caller may not approve."
+                ),
             },
             {
-                "from": ["confirm", "validate"],
+                "from": "validate1",
+                "to": "validate",
+                "method": "action_approve",
+                "label": "Second Approval",
+                "side_effects": ["Deducts leave allocation"],
+                "irreversible": False,
+            },
+            {
+                "from": ["confirm", "validate1", "validate"],
                 "to": "refuse",
                 "method": "action_refuse",
                 "label": "Refuse",
                 "irreversible": False,
             },
+            {
+                "from": "validate",
+                "to": "confirm",
+                "method": "action_back_to_approval",
+                "label": "Back to Approval",
+                "irreversible": False,
+                "note": "Silently skips a request the caller may not send back: read the state back.",
+            },
+        ],
+        "notes": [
+            "action_cancel changes no state: it returns the hr.holidays.cancel.leave wizard action, "
+            "and the wizard sets 'cancel'.",
         ],
     },
 }

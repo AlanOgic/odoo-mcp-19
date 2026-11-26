@@ -30,7 +30,7 @@ def search_records_prompt(model: str = "res.partner") -> list[Message]:
     """Search for records in a model"""
     return [Message(f"""Search for records in {model}.
 
-First read odoo://model/{model}/schema to understand the fields.
+First read odoo://model/{model}/quick-schema to understand the fields.
 
 Then use execute_method with:
 - model='{model}'
@@ -54,13 +54,15 @@ def api_reference_prompt() -> list[Message]:
 **One2many/Many2many Commands:**
 | Code | Meaning | Syntax |
 |------|---------|--------|
-| 0 | Create | `(0, 0, {values})` |
-| 1 | Update | `(1, id, {values})` |
-| 2 | Delete | `(2, id, 0)` |
-| 3 | Unlink (M2M) | `(3, id, 0)` |
-| 4 | Link (M2M) | `(4, id, 0)` |
-| 5 | Unlink all (M2M) | `(5, 0, 0)` |
-| 6 | Replace all (M2M) | `(6, 0, [ids])` |
+| 0 | Create | `[0, 0, {values}]` |
+| 1 | Update | `[1, id, {values}]` |
+| 2 | Delete | `[2, id, 0]` |
+| 3 | Unlink (M2M) | `[3, id, 0]` |
+| 4 | Link (M2M) | `[4, id, 0]` |
+| 5 | Unlink all (M2M) | `[5, 0, 0]` |
+| 6 | Replace all (M2M) | `[6, 0, [ids]]` |
+
+Commands are JSON lists, not Python tuples. Details: odoo://api/x2many-commands.
 
 **Domain Operators:**
 - Comparison: `=`, `!=`, `>`, `<`, `>=`, `<=`
@@ -69,25 +71,26 @@ def api_reference_prompt() -> list[Message]:
 - Logic: `&` (AND), `|` (OR), `!` (NOT)
 
 **Domain Examples:**
-```python
-[("state", "=", "draft")]                    # Simple
-[("amount", ">", 1000)]                      # Comparison
-[("name", "ilike", "%test%")]                # Text search
-["&", ("state", "=", "sale"), ("amount", ">", 500)]  # AND
-["|", ("state", "=", "draft"), ("state", "=", "sent")]  # OR
-[("partner_id.name", "=", "Company")]        # Dot notation for related fields
+```
+[["state", "=", "draft"]]                    Simple
+[["amount_total", ">", 1000]]                Comparison
+[["name", "ilike", "test"]]                  Text search
+["&", ["state", "=", "sale"], ["amount_total", ">", 500]]  AND
+["|", ["state", "=", "draft"], ["state", "=", "sent"]]     OR
+[["partner_id.name", "=", "Company"]]        Dot notation for related fields
 ```
 
 **CRITICAL WARNINGS:**
-- Many2one fields = ALWAYS use numeric ID, never the name string!
+- Many2one fields take the numeric ID, never the name string. To start from a name, let execute_method
+  look it up: `resolve_json='{"partner_id": {"model": "res.partner", "search": "Acme"}}'` (errors on 0 or >1 matches).
 - Read odoo://actions/{model} BEFORE calling unfamiliar models
 - Check odoo://docs/{model} for documentation URLs
 
 **Pre-execution Checklist:**
 1. Model identified? (use odoo://find-model/{concept})
 2. Actions verified? (read odoo://actions/{model})
-3. Required fields known? (read odoo://model/{model}/schema)
-4. Types correct? (Many2one = ID, not name)
+3. Required fields known? (read odoo://model/{model}/quick-schema)
+4. Types correct? (Many2one = ID, or a name through resolve_json)
 """)]
 
 
@@ -159,8 +162,10 @@ execute_method('{model}', 'search_read',
 4. **Get root records (no parent):**
 ```
 execute_method('{model}', 'search_read',
-  kwargs_json='{{"domain": [["parent_id", "=", false]], "fields": ["name", "child_id"]}}')
+  kwargs_json='{{"domain": [["parent_id", "=", false]], "fields": ["name"]}}')
 ```
+The children field has no fixed name (child_id on product.category, child_ids on res.partner):
+take it, and the parent field, from odoo://model/{model}/quick-schema.
 
 5. **Get tree path (if model has _parent_store):**
 ```
@@ -175,6 +180,7 @@ The parent_path field contains ancestor IDs separated by '/'.
 - hr.department (parent_id)
 - stock.location (location_id)
 - knowledge.article (parent_id)
+- documents.document (folder_id; folders have type = folder)
 """)]
 
 
@@ -211,16 +217,9 @@ execute_method('{model}', 'search_read',
 - Page N: offset=(N-1)*limit, limit=50
 
 **Iterate all records:**
-```python
-offset = 0
-limit = 100
-while True:
-    results = execute_method('{model}', 'search_read',
-      kwargs_json=f'{{"domain": [], "limit": {{limit}}, "offset": {{offset}}}}')
-    if len(results) < limit:
-        break  # Last page
-    offset += limit
-```
+1. Call search_read with `"limit": 100, "offset": 0` and a stable `"order": "id"`.
+2. The records are in the `result` list of the response.
+3. If `result` holds fewer than 100 records, that was the last page. Otherwise add 100 to `offset` and call again.
 
 **Default limits:**
 - MCP default: 100 records
@@ -263,7 +262,8 @@ execute_method('{model}', 'formatted_read_group',
 - `:day`, `:week`, `:month`, `:quarter`, `:year`
 - Example: `"groupby": ["create_date:month"]`
 
-**Examples for {model}:**
+**Examples (written for sale.order; for another model take the field names from
+odoo://model/{model}/quick-schema):**
 
 1. Total by partner:
 ```
@@ -295,19 +295,27 @@ def ar_aging_report_prompt() -> list[Message]:
     """Generate accounts receivable aging report"""
     return [Message("""Generate an AR aging report:
 
-1. Use execute_method with formatted_read_group (see odoo://aggregation):
+1. Open amount per customer, posted invoices only (see odoo://aggregation):
    execute_method("account.move", "formatted_read_group",
-     kwargs_json='{"domain": [["move_type", "=", "out_invoice"], ["payment_state", "in", ["not_paid", "partial"]]],
+     kwargs_json='{"domain": [["move_type", "=", "out_invoice"], ["state", "=", "posted"],
+                              ["payment_state", "in", ["not_paid", "partial"]]],
                    "groupby": ["partner_id"], "aggregates": ["amount_residual:sum"]}')
 
-2. Then categorize by aging buckets:
+2. Due date of each open invoice, same domain (page with offset when 1000 records come back):
+   execute_method("account.move", "search_read",
+     kwargs_json='{"domain": [["move_type", "=", "out_invoice"], ["state", "=", "posted"],
+                              ["payment_state", "in", ["not_paid", "partial"]]],
+                   "fields": ["partner_id", "name", "invoice_date_due", "amount_residual"],
+                   "order": "invoice_date_due", "limit": 1000}')
+
+3. Compare invoice_date_due with today and put each amount_residual in a bucket:
    - Current (not yet due)
    - 1-30 days overdue
    - 31-60 days overdue
    - 61-90 days overdue
    - 90+ days overdue
 
-3. Present as a formatted table with customer totals and recommendations.
+4. Present as a formatted table with customer totals and recommendations.
 """)]
 
 
@@ -320,17 +328,22 @@ def inventory_check_prompt(product: str = None) -> list[Message]:
 1. Find the product: read odoo://find-model/product, then search product.product
 2. Use execute_method with formatted_read_group (see odoo://aggregation):
    execute_method("stock.quant", "formatted_read_group",
-     kwargs_json='{{"domain": [["product_id", "=", PRODUCT_ID]],
-                   "groupby": ["location_id"], "aggregates": ["quantity:sum"]}}')
+     kwargs_json='{{"domain": [["product_id", "=", PRODUCT_ID], ["location_id.usage", "=", "internal"]],
+                   "groupby": ["location_id"], "aggregates": ["quantity:sum", "reserved_quantity:sum"]}}')
+   Keep the location_id.usage filter: without it customer, supplier, production and
+   inventory-adjustment locations are summed with real stock.
 
-3. Show available quantity by warehouse/location
+3. Show on-hand and available (quantity minus reserved_quantity) by warehouse/location
 """)]
     else:
         return [Message("""Check overall inventory status:
 
 1. Use execute_method with formatted_read_group (see odoo://aggregation):
    execute_method("stock.quant", "formatted_read_group",
-     kwargs_json='{"domain": [], "groupby": ["product_id"], "aggregates": ["quantity:sum", "value:sum"]}')
+     kwargs_json='{"domain": [["location_id.usage", "=", "internal"]],
+                   "groupby": ["product_id"], "aggregates": ["quantity:sum", "value:sum"]}')
+   Keep the location_id.usage filter: without it customer, supplier, production and
+   inventory-adjustment locations are summed with real stock.
 
 2. Identify low stock items (quantity < reorder point)
 3. Show top products by value

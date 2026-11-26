@@ -1,8 +1,8 @@
 {
   "_description": "Module-specific methods and patterns for Odoo 19+",
-  "_version": "1.7.0",
+  "_version": "1.7.1",
   "_updated": "2026-11-26",
-  "_validated_against": "Odoo 19.0 source code and official documentation; method removals and module special methods re-checked against Odoo Online 19.3 (live /doc-bearer) on 2026-09-30; sale/purchase states and transitions, hr.version and the JSON-2 controller re-read in the 19.0 source, then states, method names, message_post (mail.mt_note) and the invoicing wizard run on Odoo Online 19.3 on 2026-11-26",
+  "_validated_against": "Odoo 19.0 source code and official documentation; method removals and module special methods re-checked against Odoo Online 19.3 (live /doc-bearer) on 2026-09-30; sale/purchase states and transitions, hr.version and the JSON-2 controller re-read in the 19.0 source, then states, method names, message_post (mail.mt_note) and the invoicing wizard run on Odoo Online 19.3 on 2026-11-26; hr.leave states and transitions and the documents folder model re-checked the same day",
   "model_limitations": {
     "_note": "Known model-specific limitations and workarounds for the JSON-2 API. This list is enriched automatically when 500 errors trigger the fallback mechanism.",
     "stock.move.line": {
@@ -640,9 +640,10 @@
         "parent_field": "location_id",
         "has_parent_store": true
       },
-      "documents.folder": {
-        "parent_field": "parent_folder_id",
-        "has_parent_store": true
+      "documents.document": {
+        "parent_field": "folder_id",
+        "has_parent_store": true,
+        "note": "Folders are documents.document records with type 'folder' (checked on Odoo Online 19.3); there is no documents.folder model."
       },
       "project.task": {
         "parent_field": "parent_id",
@@ -2119,12 +2120,6 @@
         "action_switch_move_type": {
           "params": {},
           "description": "Switch between invoice types (customer/vendor)"
-        },
-        "action_view_invoice": {
-          "params": {
-            "invoices": "recordset|false"
-          },
-          "description": "Open invoice view"
         }
       },
       "move_types": {
@@ -2356,9 +2351,16 @@
         },
         "action_refuse": {
           "params": {},
-          "description": "Refuse leave request"
+          "description": "Refuse leave request",
+          "requires_ids": true
+        },
+        "action_back_to_approval": {
+          "params": {},
+          "description": "Send an approved request back to 'confirm'",
+          "requires_ids": true
         }
-      }
+      },
+      "notes": "States (19.0 source and Odoo Online 19.3): confirm, validate1, validate, refuse, cancel. No 'draft' state and no action_confirm: a request is created in 'confirm'. action_approve sets validate1 first when the time off type needs two approvals. action_cancel only returns the hr.holidays.cancel.leave wizard action."
     },
     "project": {
       "model": "project.task",
