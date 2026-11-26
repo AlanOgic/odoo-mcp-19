@@ -67,6 +67,54 @@ def _build_compact_schema(fields: Dict[str, Any]) -> Dict[str, Any]:
     return {"fields": compact, "required_fields": required}
 
 
+# Chatter, activity, rating and portal mixin fields: writable on paper, on ~every
+# business model, and never what a create/write payload is about.
+_BOOTSTRAP_MIXIN_PREFIXES = ("message_", "activity_", "rating_", "website_message_", "access_")
+_RELATIONAL_TYPES = ("many2one", "one2many", "many2many")
+
+
+def _build_bootstrap_schema(fields: Dict[str, Any], max_fields: int) -> Dict[str, Any]:
+    """Digest of a model for ``odoo://session-bootstrap``: its writable fields, grouped by type.
+
+    Five quick-schemas are ~60 KB, four times what ``read_resource`` returns by
+    default, and no selection of ``{name: {t, rel, ...}}`` entries holds enough
+    fields in a fifth of 15 000 chars. Grouping names under their type costs a
+    third of that per field, so a model's first ``max_fields`` writable fields
+    fit: required ones, then Odoo's own definition order (base fields before
+    the ones added by extensions). Readonly fields and the chatter / activity /
+    portal mixins are left to ``odoo://model/{model}/quick-schema``; ``state``
+    is readonly on most models, so its values get their own key.
+
+    - required: names a ``create`` must provide
+    - writable: {type: [names]} — {type: {name: comodel}} for relational types
+    - state_values: the ``state`` selection, when the model has one
+    - field_count / writable_shown: the model's real field count and how many are listed
+    """
+    required = [name for name, meta in fields.items() if meta.get("required")]
+    candidates = [
+        name
+        for name, meta in fields.items()
+        if not meta.get("required") and not meta.get("readonly") and not name.startswith(_BOOTSTRAP_MIXIN_PREFIXES)
+    ]
+    shown = (required + candidates)[:max_fields]
+
+    writable: Dict[str, Any] = {}
+    for name in shown:
+        ftype = fields[name].get("type", "")
+        if ftype in _RELATIONAL_TYPES:
+            writable.setdefault(ftype, {})[name] = fields[name].get("relation", "")
+        else:
+            writable.setdefault(ftype, []).append(name)
+
+    schema: Dict[str, Any] = {"required": required, "writable": writable}
+    state = fields.get("state") or {}
+    if state.get("type") == "selection" and state.get("selection"):
+        schema["state_values"] = state["selection"]
+    schema["field_count"] = len(fields)
+    schema["writable_shown"] = len(shown)
+    return schema
+
+
 def _strip_html(html_str: str) -> str:
     """Strip HTML tags and normalize whitespace for plain text display."""
     if not html_str:
@@ -92,6 +140,70 @@ def _dumps(payload: Any) -> str:
     truncated to whole). ``tests/test_resource_payloads.py`` checks every route.
     """
     return json.dumps(payload, separators=(",", ":"))
+
+
+def _trim_json(node: Any, need: int, path: List[str], dropped: Dict[str, Dict[str, int]]) -> int:
+    """Remove at least ``need`` serialized chars from ``node`` in place; return the chars removed.
+
+    Follows the child that holds more than half of the node (the field map of a
+    schema, the model list of a catalogue) and drops trailing items there, so
+    the head of every other key survives. ``dropped`` records, per path, how
+    many items are left out of how many.
+    """
+    is_dict = isinstance(node, dict)
+    entries = list(node.items()) if is_dict else list(enumerate(node))
+    if not entries:
+        return 0
+    sizes = [(key, len(_dumps(value))) for key, value in entries]
+    big_key, big_size = max(sizes, key=lambda pair: pair[1])
+    child = node[big_key]
+    if isinstance(child, (dict, list)) and child and big_size * 2 > sum(size for _, size in sizes):
+        return _trim_json(child, need, path + [str(big_key)], dropped)
+
+    removed = 0
+    for key, size in reversed(sizes):
+        if removed >= need:
+            break
+        # +1 for the separating comma; a dict item also carries its quoted key and the colon.
+        removed += size + 1 + (len(_dumps(str(key))) + 1 if is_dict else 0)
+        if is_dict:
+            del node[key]
+        else:
+            node.pop()
+    label = "/".join(path) or "(root)"
+    dropped[label] = {"kept": len(node), "of": dropped.get(label, {}).get("of", len(entries))}
+    return removed
+
+
+def fit_json_to_budget(text: str, max_chars: int, hint: str) -> Optional[str]:
+    """Shrink a JSON payload to ``max_chars`` and keep it valid JSON; ``None`` when ``text`` is not JSON.
+
+    A cut at a character offset hands the agent a fragment no parser accepts.
+    This drops trailing items of the largest collection instead, and says so in
+    a leading ``_truncated`` / ``_dropped`` marker. A budget too small for the
+    marker itself returns the marker alone.
+    """
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    if isinstance(data, list):
+        data = {"items": data}
+    if not isinstance(data, dict):
+        return None
+
+    dropped: Dict[str, Dict[str, int]] = {}
+    while True:
+        marker = {
+            "_truncated": True,
+            "_total_chars": len(text),
+            "_dropped": [{"path": path, **counts} for path, counts in dropped.items()],
+            "_hint": hint,
+        }
+        out = _dumps({**marker, **data})
+        over = len(out) - max_chars
+        if over <= 0 or not _trim_json(data, over, [], dropped):
+            return out
 
 
 def _cached_doc_answer(

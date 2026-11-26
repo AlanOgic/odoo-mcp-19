@@ -231,10 +231,9 @@ def test_resources_serialize_only_through_the_compact_helper():
 def test_the_truncation_marker_is_compact():
     from odoo_mcp.server import read_resource
 
-    output = read_resource("odoo://domain-syntax", max_chars=200)
-    marker = output.rsplit("\n\n", 1)[1]
-    assert json.loads(marker)["_truncated"] is True
-    assert marker == _compact(marker)
+    output = read_resource("odoo://domain-syntax", max_chars=2000)
+    assert json.loads(output)["_truncated"] is True
+    assert output == _compact(output)
 
 
 # ----- P3: odoo://model/{m} goes through the shared, validated fetch -----

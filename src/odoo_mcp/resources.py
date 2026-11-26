@@ -27,6 +27,9 @@ from .api_reference import (
 )
 from .app import mcp
 from .constants import (
+    _BOOTSTRAP_MAX_FIELDS,
+    _BOOTSTRAP_MIN_FIELDS,
+    _BOOTSTRAP_TARGET_CHARS,
     _DEFAULT_BOOTSTRAP_MODELS,
     _RUNTIME_ISSUES_LOCK,
     COMPACT_FIELD_ATTRIBUTES,
@@ -48,6 +51,7 @@ from .orm_guides import (
     xmlids_reference,
 )
 from .utils import (
+    _build_bootstrap_schema,
     _build_compact_schema,
     _dumps,
     _get_documentation_urls,
@@ -416,12 +420,16 @@ def get_bundle(models_csv: str) -> str:
 
 @mcp.resource(
     "odoo://session-bootstrap",
-    description="Bootstrap a conversation: quick-schemas + workflows for common models (configurable via MCP_BOOTSTRAP_MODELS)",
+    description="Bootstrap a conversation: writable fields by type + workflows for common models "
+    "(configurable via MCP_BOOTSTRAP_MODELS)",
 )
 def get_session_bootstrap() -> str:
-    """Single call to bootstrap a conversation with schemas and workflows.
+    """Single call to bootstrap a conversation with field digests and workflows.
 
-    Includes compact schemas and workflow state machines for the most common models.
+    Each model gets its writable fields grouped by type (required first, then Odoo's
+    definition order), not its whole schema: the per-model cap is lowered until the
+    payload fits one default ``read_resource``. Readonly fields and the full detail
+    are in ``odoo://model/{model}/quick-schema``.
     Configure via MCP_BOOTSTRAP_MODELS env var (comma-separated model names).
     Default: res.partner,sale.order,account.move,product.product,stock.picking
     """
@@ -430,15 +438,14 @@ def get_session_bootstrap() -> str:
     model_names = [m.strip() for m in models_csv.split(",") if m.strip()][:20]
 
     result: Dict[str, Any] = {"schemas": {}, "workflows": {}, "errors": {}}
+    fetched: Dict[str, Dict[str, Any]] = {}
 
     def _fetch(name: str) -> tuple[str, Any]:
         try:
             fields, error = _fetch_model_fields(name, attributes=COMPACT_FIELD_ATTRIBUTES)
             if fields is None:
                 return name, RuntimeError(str((error or {}).get("error", "unknown error")))
-            schema = _build_compact_schema(fields)
-            schema["field_count"] = len(schema["fields"])
-            return name, schema
+            return name, fields
         except PermissionError:
             raise  # no caller identity: refuse the request, not one model
         except Exception as exc:
@@ -451,15 +458,30 @@ def get_session_bootstrap() -> str:
             if isinstance(payload, Exception):
                 result["errors"][name] = str(payload)
             else:
-                result["schemas"][name] = payload
+                fetched[name] = payload
 
     for model_name in model_names:
         if model_name in MODEL_STATE_MACHINES:
             result["workflows"][model_name] = MODEL_STATE_MACHINES[model_name]
 
-    result["models_loaded"] = len(result["schemas"])
+    result["models_loaded"] = len(fetched)
     result["workflows_loaded"] = len(result["workflows"])
-    return _dumps(result)
+    result["note"] = (
+        "Each schema lists writable fields only, grouped by type (relational ones with their comodel); "
+        "writable_shown of field_count. Readonly and remaining fields: odoo://model/{model}/quick-schema, "
+        "or odoo://bundle/{model,model} for several models."
+    )
+
+    max_fields = _BOOTSTRAP_MAX_FIELDS
+    while True:
+        result["schemas"] = {name: _build_bootstrap_schema(fields, max_fields) for name, fields in fetched.items()}
+        payload = _dumps(result)
+        if len(payload) <= _BOOTSTRAP_TARGET_CHARS or max_fields <= _BOOTSTRAP_MIN_FIELDS:
+            return payload
+        # Proportional step; the fixed part (workflows, required lists) does not shrink, hence the loop.
+        max_fields = max(
+            _BOOTSTRAP_MIN_FIELDS, min(max_fields - 1, max_fields * _BOOTSTRAP_TARGET_CHARS // len(payload))
+        )
 
 
 @_threaded_resource(
@@ -774,7 +796,7 @@ def get_resource_templates() -> str:
                 "example": "odoo://bundle/res.partner,sale.order,stock.picking",
             },
             "odoo://session-bootstrap": {
-                "description": "Bootstrap a conversation: quick-schemas + workflows for common models",
+                "description": "Bootstrap a conversation: writable fields by type + workflows " "for common models",
                 "example": "odoo://session-bootstrap",
             },
             "odoo://model/{model_name}": {
