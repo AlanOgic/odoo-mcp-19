@@ -2790,6 +2790,10 @@
           "suggestion": "Method not found on {model}: it does not exist in this Odoo version. read_group, check_access_rights, check_access_rule, toggle_active and name_get are gone since Odoo Online 19.1. Read odoo://methods/{model} for the methods that exist and odoo://api/version-drift for replacements."
         },
         {
+          "match": "record does not exist",
+          "suggestion": "The record id is unknown or was deleted. Search {model} again for current ids."
+        },
+        {
           "match": "json/2",
           "suggestion": "API endpoint not found. Verify the model name '{model}' is correct (use odoo://find-model to search)"
         },

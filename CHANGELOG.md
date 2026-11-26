@@ -15,6 +15,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   STDIO. Docker reports the state only; it does not restart the container.
 
 ### Fixed
+- **The handshake reports this server's version.** `serverInfo.version` was FastMCP's (`4.2.6`);
+  it is now `odoo_mcp.__version__`.
+- **`execute_method` and `batch_execute` are declared destructive.** Both run `unlink` yet carried
+  `destructiveHint: false`. The confirmation gate does not depend on the annotation.
+- **A batched search has the limit of a single one.** `batch_execute` skipped the default (100) and
+  the cap (1000): one `search_read` without a limit returned 6 989 partners, 300 KB. Each operation
+  now goes through `_apply_search_defaults`, and a full page says so in the new `note` field of its
+  result.
+- **An empty batch is refused with its own message** instead of Docket's "Total must be at least 1".
+- **Error hints match the error.** "Field name error detected" was attached to version refusals
+  (`read_group`, `toggle_active`), to an unknown model and to "Record does not exist", because the
+  pattern list held a bare "does not exist". An unknown model now points at `odoo://find-model`.
+  A `search_read` that fails on `Invalid field` is no longer retried as `search` + `read` (same
+  failure, twice the time, no field hint): it is reported once with the hint.
+- **A blocked call is not pending.** A refused write on a blocked model returned
+  `pending_confirmation: true` although no token will ever exist; it is now `false` for
+  `execute_method` and `batch_execute`.
+- **`confirmation_token` is described** in both tool schemas.
 - **Prompts recommend calls that run and answer the question.** Each recipe was executed on Odoo
   Online 19.3. `inventory-check` filters `location_id.usage = internal` (it summed real stock with
   customer, supplier, production and inventory-adjustment locations) and reads `reserved_quantity`.
