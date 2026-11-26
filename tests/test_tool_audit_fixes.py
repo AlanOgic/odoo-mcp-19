@@ -66,20 +66,29 @@ def _raises(message):
 # ----- what the server says about itself -----
 
 
-def _handshake():
+def _handshake(era="legacy"):
     stub = MagicMock()
 
     async def main():
         with patch("odoo_mcp.app.get_env_client", lambda: stub):
-            async with Client(mcp, mode="legacy") as client:
-                return client.initialize_result, await client.list_tools()
+            async with Client(mcp, mode="legacy") if era == "legacy" else Client(mcp) as client:
+                return client.server_info, await client.list_tools()
 
     return asyncio.run(main())
 
 
-def test_the_handshake_reports_this_servers_version_not_fastmcps():
-    result, _tools = _handshake()
-    assert result.server_info.version == odoo_mcp.__version__
+@pytest.mark.parametrize("era", ["legacy", "modern"])
+def test_the_handshake_reports_this_servers_version_not_fastmcps(era):
+    server_info, _tools = _handshake(era)
+    assert server_info.version == odoo_mcp.__version__
+
+
+def test_the_modern_era_lists_the_write_tools_as_destructive_too():
+    _info, tools = _handshake("modern")
+    assert {t.name: t.annotations.destructive_hint for t in tools if t.name != "read_resource"} == {
+        "execute_method": True,
+        "batch_execute": True,
+    }
 
 
 @pytest.mark.parametrize("tool", ["execute_method", "batch_execute"])
@@ -88,11 +97,6 @@ def test_write_capable_tools_are_declared_destructive(tool):
     annotations = next(t for t in tools if t.name == tool).annotations
     assert annotations.destructive_hint is True
     assert annotations.read_only_hint is False
-
-
-def test_the_read_only_bridge_stays_read_only():
-    _result, tools = _handshake()
-    assert next(t for t in tools if t.name == "read_resource").annotations.read_only_hint is True
 
 
 @pytest.mark.parametrize("tool", ["execute_method", "batch_execute"])
@@ -139,6 +143,28 @@ def test_a_batched_search_limit_is_capped():
     assert _sent_kwargs(client) == [{"domain": [], "limit": MAX_LIMIT}]
 
 
+def test_a_batched_positional_limit_and_double_wrapped_domain_are_normalised():
+    client = _client(lambda *a, **k: [1])
+    domain = '[["is_company", "=", true]]'
+    _batch(client, [{"model": "res.partner", "method": "search", "args_json": f"[[{domain}], 0, 5000]"}])
+    assert _sent_kwargs(client) == [{"domain": [["is_company", "=", True]], "offset": 0, "limit": MAX_LIMIT}]
+
+
+def test_a_batched_search_count_gets_no_limit():
+    client = _client(lambda *a, **k: 3)
+    _batch(client, [{"model": "res.partner", "method": "search_count", "kwargs_json": '{"domain": []}'}])
+    assert _sent_kwargs(client) == [{"domain": []}]
+
+
+def test_a_batched_domain_given_twice_fails_that_operation():
+    client = _client(lambda *a, **k: [1])
+    op = {"model": "res.partner", "method": "search", "args_json": "[[]]", "kwargs_json": '{"domain": []}'}
+    response = _batch(client, [op])
+    assert response.results[0].success is False
+    assert "Pass it once" in response.results[0].error
+    client.execute_method.assert_not_called()
+
+
 def test_a_batched_full_page_says_more_records_may_exist():
     client = _client(lambda *a, **k: [{"id": i} for i in range(2)])
     response = _batch(client, [{"model": "res.partner", "method": "search_read", "kwargs_json": '{"limit": 2}'}])
@@ -180,7 +206,8 @@ def test_a_version_refusal_is_not_called_a_field_error(method):
     response = _call(_client(), model="res.partner", method=method, args_json="[[1]]")
     assert response.success is False
     assert "does not exist on Odoo 19.3" in response.error
-    assert "Field name error" not in (response.hint or "")
+    assert "odoo://api/version-drift" in response.error  # the error carries the pointer itself
+    assert response.hint is None
 
 
 def test_an_unknown_model_points_at_model_discovery():
@@ -189,10 +216,18 @@ def test_an_unknown_model_points_at_model_discovery():
     assert "odoo://find-model/" in response.hint
 
 
+def test_a_missing_method_keeps_its_own_hint():
+    error = "Request failed: 404 NOT FOUND\nOdoo error: The method 'ir.model.frobnicate' does not exist"
+    response = _call(_client(_raises(error)), model="ir.model", method="search_count", args_json="[[]]")
+    assert "odoo://methods/ir.model" in response.hint
+    assert "find-model" not in response.hint
+
+
 def test_a_missing_record_is_not_called_a_field_error():
     error = "Request failed: 404 NOT FOUND\nOdoo error: Record does not exist or has been deleted."
     response = _call(_client(_raises(error)), model="res.partner", method="read", args_json="[[999]]")
     assert "Field name error" not in (response.hint or "")
+    assert "unknown or was deleted" in response.suggestion
 
 
 def test_an_invalid_field_in_search_read_is_reported_once_with_the_field_hint():

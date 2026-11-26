@@ -374,7 +374,8 @@ ERROR_CATEGORIES = {
         ],
     },
     "relational_filter": {
-        "patterns": ["relation", "join", "does not exist", "invalid field"],
+        # No "invalid field": execute_method reports that error directly, without the fallback.
+        "patterns": ["relation", "join", "does not exist"],
         "cause": "Relational/dot notation filter issue",
         "solutions": [
             "Avoid dot notation in domain (e.g., partner_id.name)",

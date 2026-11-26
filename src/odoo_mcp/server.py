@@ -542,7 +542,8 @@ def _search_read_fallback(
 _MISSING_METHOD_PATTERNS = ("the method", "does not exist")
 # Local refusal of a method removed after 19.0 (arg_mapping): it already names the replacement.
 _VERSION_REFUSAL_PATTERN = "does not exist on odoo"
-_MISSING_MODEL_PATTERNS = ("the model", "does not exist")
+# Odoo's JSON-2 controller: "the model 'x.y' does not exist".
+_MISSING_MODEL_RE = re.compile(r"the model '[^']+' does not exist")
 # No bare "does not exist": it is also in "the model ... does not exist", in version refusals
 # and in "Record does not exist or has been deleted", none of which is about a field name.
 _FIELD_ERROR_PATTERNS = ("invalid field", "unknown field", "field_get", "keyerror", "no field")
@@ -560,7 +561,7 @@ def _failure_response(model: str, method: str, error_msg: str, start_time: float
     lowered = error_msg.lower()
     if _VERSION_REFUSAL_PATTERN in lowered:
         hint = None  # the error itself names the replacement and odoo://api/version-drift
-    elif all(p in lowered for p in _MISSING_MODEL_PATTERNS):
+    elif _MISSING_MODEL_RE.search(lowered):
         hint = "Read odoo://find-model/{concept} to find the model by what it holds, or odoo://models for the list."
     elif all(p in lowered for p in _MISSING_METHOD_PATTERNS):
         hint = (
