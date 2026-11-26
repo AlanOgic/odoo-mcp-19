@@ -661,7 +661,7 @@ def execute_method(
         method: Method name (e.g., 'search_read', 'create')
         args_json: JSON array of positional arguments
         kwargs_json: JSON object of keyword arguments
-        confirmed: Set to true to bypass safety confirmation
+        confirmed: Set to true together with confirmation_token to confirm a gated call; alone it is refused
         resolve_json: JSON object to auto-resolve Many2one names to IDs.
             Format: '{"field_name": {"model": "target.model", "search": "name to find"}}'
             Resolves via name_search before execution. Errors if 0 or >1 matches.
@@ -921,7 +921,7 @@ async def batch_execute(
             - args_json: str (optional)
             - kwargs_json: str (optional)
         atomic: If True, fail fast on first error
-        confirmed: Set to true to bypass safety confirmation
+        confirmed: Set to true together with confirmation_token to confirm a gated call; alone it is refused
     """
     start_time = time.time()
 

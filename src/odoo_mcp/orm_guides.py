@@ -73,7 +73,8 @@ def mail_thread_reference() -> Dict[str, Any]:
             "attachment_ids=None, body_is_html=False, **kwargs)",
             "params": {
                 "body": "Escaped as plain text unless body_is_html=true.",
-                "body_is_html": "Set true to post HTML — documented 'to be used only for RPC calls'.",
+                "body_is_html": "Set true to post HTML — documented 'to be used only for RPC calls'. Honoured for an "
+                "internal API user only; otherwise the body is still escaped.",
                 "message_type": "'comment' for a real note/message, 'notification' (default) for system lines.",
                 "subtype_xmlid": "'mail.mt_comment' to send to followers, 'mail.mt_note' for an internal note.",
                 "partner_ids": "List of res.partner ids to notify explicitly.",
@@ -86,11 +87,41 @@ def mail_thread_reference() -> Dict[str, Any]:
                 "model": "sale.order",
                 "method": "message_post",
                 "ids": [15],
-                "body": "Shipped today",
+                "body": "<p>Shipped today</p>",
+                "body_is_html": True,
                 "message_type": "comment",
                 "subtype_xmlid": "mail.mt_note",
             },
             "access": "Posting requires write access on the record by default (_mail_post_access = 'write').",
+        },
+        "who_is_notified": {
+            "rule": "The subtype and the partner_ids passed decide who is notified. message_type does not "
+            "change the recipients: it changes how the line is displayed.",
+            "internal_note": {
+                "message_type": "comment",
+                "subtype_xmlid": "mail.mt_note",
+                "notifies": "The partner_ids passed (like @mentions) and the followers subscribed to Note. "
+                "Followers are not subscribed to it by default, and it never reaches customers.",
+            },
+            "system_line": {
+                "message_type": "notification",
+                "subtype_xmlid": "mail.mt_note",
+                "notifies": "Same recipients as an internal note, so nobody unless partner_ids are passed. "
+                "Grey system line, meant to trace an automated event.",
+            },
+            "message_to_followers": {
+                "message_type": "comment",
+                "subtype_xmlid": "mail.mt_comment",
+                "notifies": "Every follower subscribed to Discussions (the default subscription), customers "
+                "included, plus the partner_ids passed: by e-mail, or in the Odoo inbox for users who chose "
+                "it. Also subscribes the author. Get the user's explicit approval first.",
+            },
+            "subtype_xmlid_not_subtype_id": "The numeric ids of mail.mt_comment and mail.mt_note are not guaranteed "
+            "to be the same in every database; the xmlid is.",
+            "verify": "Read the returned mail.message (fields subtype_id, notified_partner_ids) to confirm who "
+            "was notified.",
+            "never_create_mail_message": "create() on mail.message stores a line and notifies nobody; "
+            "it is not a way to post.",
         },
         "context_kill_switches": {
             "mail_notrack": "Skip field-change tracking messages for this write.",
