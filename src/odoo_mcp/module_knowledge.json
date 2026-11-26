@@ -1,8 +1,8 @@
 {
   "_description": "Module-specific methods and patterns for Odoo 19+",
-  "_version": "1.6.0",
-  "_updated": "2026-09-30",
-  "_validated_against": "Odoo 19.0 source code and official documentation; method removals and module special methods re-checked against Odoo Online 19.3 (live /doc-bearer) on 2026-09-30",
+  "_version": "1.7.0",
+  "_updated": "2026-11-26",
+  "_validated_against": "Odoo 19.0 source code and official documentation; method removals and module special methods re-checked against Odoo Online 19.3 (live /doc-bearer) on 2026-09-30; sale/purchase states and transitions, hr.version and the JSON-2 controller re-read in the 19.0 source, then states, method names, message_post (mail.mt_note) and the invoicing wizard run on Odoo Online 19.3 on 2026-11-26",
   "model_limitations": {
     "_note": "Known model-specific limitations and workarounds for the JSON-2 API. This list is enriched automatically when 500 errors trigger the fallback mechanism.",
     "stock.move.line": {
@@ -1800,7 +1800,7 @@
     "project.task": "project",
     "hr.employee": "hr",
     "hr.department": "hr",
-    "hr.contract": "hr",
+    "hr.version": "hr",
     "product.template": "product",
     "product.product": "product",
     "product.category": "product",
@@ -1974,8 +1974,8 @@
       "Selection": "Use the key string, not the label"
     },
     "message_types": {
-      "_note": "mail.message.message_type - REQUIRED field for creating messages",
-      "comment": "User comment (chatter, discuss) - USE THIS FOR POSTING MESSAGES",
+      "_note": "mail.message.message_type: how the line is displayed. Post with message_post (odoo://api/mail-thread), not by creating mail.message",
+      "comment": "Comment written by a person (chatter, discuss)",
       "email": "Incoming email (mailgateway)",
       "email_outgoing": "Outgoing email (mailing)",
       "notification": "System notification (tracking)",
@@ -2031,7 +2031,7 @@
         },
         "action_lock": {
           "params": {},
-          "description": "Lock the sales order (prevent modifications)",
+          "description": "Lock the sales order: sets the 'locked' boolean, the state stays 'sale' (Odoo 19 has no 'done' state)",
           "requires_ids": true
         },
         "action_unlock": {
@@ -2056,22 +2056,15 @@
             "invoices": "recordset|false"
           },
           "description": "Open linked invoices view"
-        },
-        "_create_invoices": {
-          "params": {
-            "grouped": "boolean",
-            "final": "boolean",
-            "date": "date|null"
-          },
-          "description": "Create invoices from confirmed orders"
         }
       },
       "workflows": {
         "quotation_to_invoice": [
           "action_confirm",
-          "_create_invoices"
+          "sale.advance.payment.inv.create_invoices"
         ]
-      }
+      },
+      "notes": "Invoicing goes through the wizard: create sale.advance.payment.inv with {'sale_order_ids': [[6, 0, [order_ids]]], 'advance_payment_method': 'delivered'}, then call create_invoices with the wizard id in 'ids'. sale.order._create_invoices is private (not callable over JSON-2)."
     },
     "account": {
       "model": "account.move",
@@ -2301,7 +2294,7 @@
         },
         "button_lock": {
           "params": {},
-          "description": "Lock the purchase order"
+          "description": "Lock the purchase order: sets the 'locked' boolean, the state stays 'purchase' (Odoo 19 has no 'done' state)"
         },
         "button_unlock": {
           "params": {},
@@ -2392,7 +2385,7 @@
           "requires_ids": true
         }
       },
-      "notes": "Use create() with kwargs_json={'vals_list': [{...}]}. For posting messages, create mail.message directly instead of message_post (which fails via JSON-2 API)."
+      "notes": "Use create() with kwargs_json={'vals_list': [{...}]} to create a channel. To post, call message_post with the channel id in 'ids' (see odoo://api/mail-thread); never create mail.message directly."
     },
     "ai": {
       "_note": "Odoo 19 Enterprise AI module - Agents, Topics, RAG Sources",
@@ -2619,42 +2612,65 @@
     "mail": {
       "model": "mail.message",
       "special_methods": {},
-      "required_fields": [
-        "message_type"
-      ],
       "field_values": {
         "message_type": {
-          "_note": "REQUIRED field - categorizes how the message was generated",
+          "_note": "How the line is displayed. It does not decide who is notified: the subtype and partner_ids do",
           "email": "Incoming Email (via mailgateway)",
-          "comment": "Comment (user input via discuss/composer) - USE THIS FOR CHATTER",
+          "comment": "Comment written by a person (discuss/composer)",
           "email_outgoing": "Outgoing Email (via mailing)",
           "notification": "System notification (tracking messages)",
           "auto_comment": "Automated notification (acknowledgment)",
           "user_notification": "Generated for a specific recipient"
         },
-        "subtype_id": {
-          "_note": "Controls visibility and notification behavior",
-          "1": "Discussions (mail.mt_comment) - visible to followers",
-          "2": "Note (mail.mt_note) - internal note, less visible"
+        "subtype_xmlid": {
+          "_note": "Decides who is notified. Pass the xmlid to message_post: numeric ids are not guaranteed across databases",
+          "mail.mt_note": "Note: internal, never reaches customers; followers are not subscribed by default, so only the partner_ids passed are notified",
+          "mail.mt_comment": "Discussions: notifies every subscribed follower, customers included (e-mail or Odoo inbox)"
         }
       },
-      "create_example": {
-        "chatter_comment": {
-          "model": "res.partner",
-          "res_id": 123,
-          "body": "<p>Hello!</p>",
-          "message_type": "comment",
-          "subtype_id": 1
-        },
+      "notes": "mail.message is for reading the chatter. To post, call message_post on the record's own model with body_is_html=true (internal API user; see odoo://api/mail-thread). Creating mail.message directly notifies nobody.",
+      "post_example": {
         "internal_note": {
           "model": "sale.order",
-          "res_id": 456,
-          "body": "<p>Internal note</p>",
-          "message_type": "comment",
-          "subtype_id": 2
+          "method": "message_post",
+          "ids": [
+            456
+          ],
+          "kwargs": {
+            "body": "<p>Internal note</p>",
+            "body_is_html": true,
+            "message_type": "comment",
+            "subtype_xmlid": "mail.mt_note"
+          }
+        },
+        "system_line": {
+          "model": "sale.order",
+          "method": "message_post",
+          "ids": [
+            456
+          ],
+          "kwargs": {
+            "body": "<p>Synchronised by the integration</p>",
+            "body_is_html": true,
+            "message_type": "notification",
+            "subtype_xmlid": "mail.mt_note"
+          }
+        },
+        "message_to_followers": {
+          "model": "res.partner",
+          "method": "message_post",
+          "ids": [
+            123
+          ],
+          "kwargs": {
+            "body": "<p>Hello!</p>",
+            "body_is_html": true,
+            "message_type": "comment",
+            "subtype_xmlid": "mail.mt_comment"
+          },
+          "_warning": "Notifies the followers, customers included: get the user's explicit approval first"
         }
-      },
-      "notes": "message_post() does not work via JSON-2 API. Create mail.message directly. REQUIRED: message_type field. Use 'comment' for user messages, 'notification' for system messages."
+      }
     }
   },
   "error_patterns": {

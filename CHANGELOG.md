@@ -14,6 +14,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `docker ps`. It is in the compose file and not the Dockerfile, whose default command is
   STDIO. Docker reports the state only; it does not restart the container.
 
+### Fixed
+- **Chatter recipes post with `message_post`.** `send_message`, the `mail` and `discuss` module
+  knowledge said to create `mail.message` directly because `message_post` "fails via JSON-2",
+  with `subtype_id` 1 / 2 hard-coded. That path notifies nobody. They now give `message_post` with
+  `body_is_html: true` and `subtype_xmlid`, and `odoo://api/mail-thread` gains `who_is_notified`:
+  the subtype and the `partner_ids` decide who is notified (`mail.mt_note` reaches only the
+  `partner_ids` passed by default, `mail.mt_comment` notifies every follower, customers included),
+  `message_type` does not change the recipients, and the created `mail.message` is to be read back
+  to confirm. Both `mail.mt_note` forms were posted and read back on Odoo Online 19.3.
+- **Invoicing recipe uses the wizard.** `create_invoice_from_order`, `odoo://workflows` and the
+  `sale` module knowledge pointed at `sale.order._create_invoices`, a private method JSON-2
+  refuses. They now give `sale.advance.payment.inv`: create it with `sale_order_ids`, then call
+  `create_invoices` on the wizard id. Run on Odoo Online 19.3: it returns a window action and
+  leaves a draft invoice in `sale.order.invoice_ids`; the private call answers 403.
+  Both rewritten recipes are `steps` lists, which `odoo://actions/{model}` now shows.
+- **`sale.order` and `purchase.order` workflows no longer list a `done` state.** Odoo 19 has
+  none: locking sets the `locked` boolean, now listed under `flags`, and a locked order refuses
+  cancellation. `purchase.order` gains `to approve`, `button_approve` and `button_draft`, and
+  loses its `draft → sent` transition by `action_rfq_send`, which only opens the e-mail composer.
+  `sale.order` gains `action_draft`.
+- **`hr.contract` → `hr.version`** in `model_to_module`: the model does not exist in Odoo 19.
+- **`odoo://session-bootstrap` was empty under docker-compose.** Compose forwards an unset
+  `MCP_BOOTSTRAP_MODELS` as an empty string, which was read instead of the default list.
+- **`confirmed` is no longer described as a bypass** in `execute_method` and `batch_execute`: it
+  is refused without the `confirmation_token`.
+
 ## [2.3.0] - 2026-11-21
 
 ### Changed

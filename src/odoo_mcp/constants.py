@@ -122,7 +122,7 @@ PRIVATE_METHOD_HINTS = {
 MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
     "sale.order": {
         "state_field": "state",
-        "states": ["draft", "sent", "sale", "done", "cancel"],
+        "states": ["draft", "sent", "sale", "cancel"],
         "transitions": [
             {"from": "draft", "to": "sent", "method": "action_quotation_sent", "label": "Mark as Sent"},
             {
@@ -141,14 +141,31 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
                 "side_effects": ["Creates delivery orders (stock.picking)", "Reserves stock"],
                 "irreversible": False,
             },
-            {"from": "sale", "to": "done", "method": "action_lock", "label": "Lock Order", "irreversible": False},
             {
                 "from": ["draft", "sent", "sale"],
                 "to": "cancel",
                 "method": "action_cancel",
                 "label": "Cancel",
                 "irreversible": False,
+                "note": "Refused on a locked order: action_unlock first.",
             },
+            {
+                "from": ["sent", "cancel"],
+                "to": "draft",
+                "method": "action_draft",
+                "label": "Set to Quotation",
+                "irreversible": False,
+            },
+        ],
+        # No 'done' state in Odoo 19: locking is the boolean below, the state stays 'sale'.
+        "flags": [
+            {
+                "field": "locked",
+                "set": "action_lock",
+                "unset": "action_unlock",
+                "label": "Lock Order",
+                "note": "action_confirm locks the order by itself when the 'Lock Confirmed Sales' setting is on.",
+            }
         ],
     },
     "account.move": {
@@ -237,9 +254,8 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
     },
     "purchase.order": {
         "state_field": "state",
-        "states": ["draft", "sent", "purchase", "done", "cancel"],
+        "states": ["draft", "sent", "to approve", "purchase", "cancel"],
         "transitions": [
-            {"from": "draft", "to": "sent", "method": "action_rfq_send", "label": "Send RFQ", "irreversible": False},
             {
                 "from": ["draft", "sent"],
                 "to": "purchase",
@@ -247,16 +263,38 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
                 "label": "Confirm Order",
                 "side_effects": ["Creates incoming receipt (stock.picking)"],
                 "irreversible": False,
+                "note": "With two-step approval (company setting), an order at or above the company's "
+                "approval amount confirmed by a non-manager goes to 'to approve' instead.",
             },
-            {"from": "purchase", "to": "done", "method": "button_lock", "label": "Lock", "irreversible": False},
             {
-                "from": ["draft", "sent", "purchase"],
+                "from": "to approve",
+                "to": "purchase",
+                "method": "button_approve",
+                "label": "Approve Order",
+                "side_effects": [
+                    "Creates incoming receipt (stock.picking)",
+                    "Locks the order when the company locks confirmed orders",
+                ],
+                "irreversible": False,
+                "note": "Does nothing and still returns {} when the caller may not approve: read the state back.",
+            },
+            {
+                "from": ["draft", "sent", "to approve", "purchase"],
                 "to": "cancel",
                 "method": "button_cancel",
                 "label": "Cancel",
                 "irreversible": False,
+                "note": "Refused on a locked order: button_unlock first.",
             },
+            {"from": "cancel", "to": "draft", "method": "button_draft", "label": "Set to Draft", "irreversible": False},
         ],
+        "notes": [
+            "No method only marks an RFQ as sent. action_rfq_send opens the e-mail composer and changes no "
+            "state; the order becomes 'sent' when that e-mail is posted or the quotation is printed "
+            "(print_quotation)."
+        ],
+        # No 'done' state in Odoo 19: locking is the boolean below, the state stays 'purchase'.
+        "flags": [{"field": "locked", "set": "button_lock", "unset": "button_unlock", "label": "Lock"}],
     },
     "hr.leave": {
         "state_field": "state",
@@ -472,10 +510,25 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "params": {"order_ids": "list of int"},
     },
     "create_invoice_from_order": {
-        "description": "Create invoice from confirmed sales order",
+        "description": "Create invoice from confirmed sales order (invoicing wizard, two calls)",
         "model": "sale.order",
-        "method": "_create_invoices",
-        "params": {"order_ids": "list of int"},
+        "params": {
+            "order_ids": "list of int",
+            "advance_payment_method": "'delivered' (regular invoice) | 'percentage' | 'fixed' (down payments)",
+            "amount": "float > 0, required for 'percentage'",
+            "fixed_amount": "float > 0, required for 'fixed'",
+        },
+        "steps": [
+            {
+                "model": "sale.advance.payment.inv",
+                "method": "create",
+                "vals_list": [{"sale_order_ids": [[6, 0, ["<order ids>"]]], "advance_payment_method": "delivered"}],
+            },
+            {"model": "sale.advance.payment.inv", "method": "create_invoices", "ids": ["<wizard id>"]},
+        ],
+        "note": "sale.order._create_invoices is private and cannot be called over JSON-2. A down payment takes "
+        "exactly one order. create_invoices returns a window action, not the invoices: read "
+        "sale.order.invoice_ids afterwards.",
     },
     # Accounting Operations
     "post_invoice": {
@@ -542,23 +595,40 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     # Communication
     "send_message": {
-        "description": "Post a message on a record (chatter)",
-        "model": "mail.message",
+        "description": "Post a message, internal note or system line on a record (chatter)",
+        "model": "mail.thread",
         "params": {
-            "model": "str (target model, e.g. 'res.partner')",
-            "res_id": "int (target record ID)",
+            "ids": "list of int (the record to post on)",
             "body": "html (message content)",
-            "message_type": "str REQUIRED: 'comment'|'notification'|'email'",
-            "subtype_id": "int (1=visible to followers, 2=internal note)",
+            "body_is_html": "true, otherwise the body is escaped as plain text (internal API user only)",
+            "message_type": "'comment' (written by a person) | 'notification' (grey system line): "
+            "does not change who is notified",
+            "subtype_xmlid": "'mail.mt_note' (internal note) | 'mail.mt_comment' (notifies followers)",
+            "partner_ids": "list of int (res.partner ids to notify explicitly, like @mentions)",
         },
-        "note": "Create mail.message directly. message_type is REQUIRED!",
-        "example": {
-            "model": "res.partner",
-            "res_id": 123,
-            "body": "<p>Hello!</p>",
-            "message_type": "comment",
-            "subtype_id": 1,
-        },
+        "steps": [
+            {
+                "model": "<the record's own model, e.g. res.partner>",
+                "method": "message_post",
+                "ids": [123],
+                "kwargs": {
+                    "body": "<p>Hello!</p>",
+                    "body_is_html": True,
+                    "message_type": "comment",
+                    "subtype_xmlid": "mail.mt_note",
+                },
+            },
+            {
+                "model": "mail.message",
+                "method": "read",
+                "ids": ["<id returned by message_post>"],
+                "fields": ["subtype_id", "notified_partner_ids"],
+            },
+        ],
+        "note": "mail.thread is the mixin: call message_post on the record's own model. The subtype and "
+        "partner_ids decide who is notified. mail.mt_comment notifies every follower subscribed to "
+        "Discussions, customers included: get the user's explicit approval first. Never create "
+        "mail.message directly: it notifies nobody. See odoo://api/mail-thread.",
     },
     "create_channel": {
         "description": "Create a discuss channel",

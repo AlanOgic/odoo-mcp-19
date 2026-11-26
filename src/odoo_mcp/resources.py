@@ -425,7 +425,8 @@ def get_session_bootstrap() -> str:
     Configure via MCP_BOOTSTRAP_MODELS env var (comma-separated model names).
     Default: res.partner,sale.order,account.move,product.product,stock.picking
     """
-    models_csv = os.environ.get("MCP_BOOTSTRAP_MODELS", _DEFAULT_BOOTSTRAP_MODELS)
+    # `or`, not a .get() default: docker-compose forwards an unset variable as an empty string.
+    models_csv = os.environ.get("MCP_BOOTSTRAP_MODELS") or _DEFAULT_BOOTSTRAP_MODELS
     model_names = [m.strip() for m in models_csv.split(",") if m.strip()][:20]
 
     result: Dict[str, Any] = {"schemas": {}, "workflows": {}, "errors": {}}
@@ -918,7 +919,8 @@ def get_workflows() -> str:
                         "steps": [
                             "Create quotation (sale.order with state='draft')",
                             "Confirm order (method: action_confirm)",
-                            "Create invoice (method: _create_invoices)",
+                            "Create invoice (wizard sale.advance.payment.inv: create it with sale_order_ids, "
+                            "then call create_invoices on the wizard id)",
                         ],
                         "model": "sale.order",
                     }
@@ -1422,14 +1424,15 @@ def discover_actions_resource(model: str) -> str:
     # 1. Find workflows in registry for this model
     for tool_name, tool_def in TOOL_REGISTRY.items():
         if tool_def.get("model") == model:
-            result["workflows"].append(
-                {
-                    "name": tool_name,
-                    "description": tool_def.get("description"),
-                    "params": tool_def.get("params", {}),
-                    "method": tool_def.get("method"),
-                }
-            )
+            workflow: Dict[str, Any] = {
+                "name": tool_name,
+                "description": tool_def.get("description"),
+                "params": tool_def.get("params", {}),
+                "method": tool_def.get("method"),
+            }
+            # A recipe has no single method: its steps and note are the instructions.
+            workflow.update({key: tool_def[key] for key in ("steps", "note") if key in tool_def})
+            result["workflows"].append(workflow)
 
     # 2. Check module knowledge
     for module_name, module_info in MODULE_KNOWLEDGE.get("modules", {}).items():
