@@ -634,7 +634,7 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
     - odoo://model/{model}/fields - Lightweight field list (e.g. odoo://model/res.partner/fields)
     - odoo://model/{model}/workflow - State machine transitions (e.g. odoo://model/sale.order/workflow)
     - odoo://bundle/{models} - Batch quick-schema for N models (e.g. odoo://bundle/res.partner,sale.order)
-    - odoo://session-bootstrap - Bootstrap conversation with schemas + workflows
+    - odoo://session-bootstrap - Bootstrap conversation: writable fields + workflows
     - odoo://methods/{model} - Available methods (e.g. odoo://methods/crm.lead)
     - odoo://actions/{model} - Discover actions (e.g. odoo://actions/sale.order)
     - odoo://model/{model}/docs - Rich docs with help text

@@ -468,7 +468,7 @@ def get_session_bootstrap() -> str:
     result["workflows_loaded"] = len(result["workflows"])
     result["note"] = (
         "Each schema lists writable fields only, grouped by type (relational ones with their comodel); "
-        "writable_shown of field_count. Readonly and remaining fields: odoo://model/{model}/quick-schema, "
+        "writable_shown of writable_total. Readonly and remaining fields: odoo://model/{model}/quick-schema, "
         "or odoo://bundle/{model,model} for several models."
     )
 

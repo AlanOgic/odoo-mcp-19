@@ -88,19 +88,22 @@ def _build_bootstrap_schema(fields: Dict[str, Any], max_fields: int) -> Dict[str
     - required: names a ``create`` must provide
     - writable: {type: [names]} — {type: {name: comodel}} for relational types
     - state_values: the ``state`` selection, when the model has one
-    - field_count / writable_shown: the model's real field count and how many are listed
+    - field_count: every field of the model, readonly ones included
+    - writable_total / writable_shown: how many fields qualify, and how many are listed
     """
     required = [name for name, meta in fields.items() if meta.get("required")]
     candidates = [
         name
         for name, meta in fields.items()
-        if not meta.get("required") and not meta.get("readonly") and not name.startswith(_BOOTSTRAP_MIXIN_PREFIXES)
+        if not meta.get("readonly") and not name.startswith(_BOOTSTRAP_MIXIN_PREFIXES)
     ]
-    shown = (required + candidates)[:max_fields]
+    # Stable sort: required first, Odoo's definition order inside each group.
+    candidates.sort(key=lambda name: not fields[name].get("required"))
+    shown = candidates[:max_fields]
 
     writable: Dict[str, Any] = {}
     for name in shown:
-        ftype = fields[name].get("type", "")
+        ftype = fields[name].get("type") or "unknown"
         if ftype in _RELATIONAL_TYPES:
             writable.setdefault(ftype, {})[name] = fields[name].get("relation", "")
         else:
@@ -111,6 +114,7 @@ def _build_bootstrap_schema(fields: Dict[str, Any], max_fields: int) -> Dict[str
     if state.get("type") == "selection" and state.get("selection"):
         schema["state_values"] = state["selection"]
     schema["field_count"] = len(fields)
+    schema["writable_total"] = len(candidates)
     schema["writable_shown"] = len(shown)
     return schema
 
@@ -145,10 +149,12 @@ def _dumps(payload: Any) -> str:
 def _trim_json(node: Any, need: int, path: List[str], dropped: Dict[str, Dict[str, int]]) -> int:
     """Remove at least ``need`` serialized chars from ``node`` in place; return the chars removed.
 
-    Follows the child that holds more than half of the node (the field map of a
-    schema, the model list of a catalogue) and drops trailing items there, so
-    the head of every other key survives. ``dropped`` records, per path, how
-    many items are left out of how many.
+    Descends into the largest child when it is a collection that stands out (the
+    field map of a schema, the model list of a catalogue, one section far bigger
+    than its siblings) and drops trailing items there, so the other keys keep
+    their place. Among items of similar size it drops trailing ones, or the one
+    scalar that covers the need. ``dropped`` records, per path, how many items
+    are left out of how many.
     """
     is_dict = isinstance(node, dict)
     entries = list(node.items()) if is_dict else list(enumerate(node))
@@ -157,12 +163,24 @@ def _trim_json(node: Any, need: int, path: List[str], dropped: Dict[str, Dict[st
     sizes = [(key, len(_dumps(value))) for key, value in entries]
     big_key, big_size = max(sizes, key=lambda pair: pair[1])
     child = node[big_key]
-    if isinstance(child, (dict, list)) and child and big_size * 2 > sum(size for _, size in sizes):
+    total = sum(size for _, size in sizes)
+    stands_out = big_size * 2 > total or (
+        big_size * 8 > total and (big_size >= need or big_size * len(sizes) > 2 * total)
+    )
+    if isinstance(child, (dict, list)) and child and stands_out:
         return _trim_json(child, need, path + [str(big_key)], dropped)
 
+    label = "/".join(path) or "(root)"
+    # A scalar that outweighs all its siblings (one huge string) goes alone; otherwise trailing items do.
+    victims = [(big_key, big_size)] if is_dict and big_size * 2 > total and big_size >= need else list(reversed(sizes))
     removed = 0
-    for key, size in reversed(sizes):
+    for key, size in victims:
         if removed >= need:
+            break
+        value = node[key]
+        if isinstance(value, (dict, list)) and value and size > need - removed and size * 8 > total:
+            # Removing this sizeable collection whole would overshoot: shorten it instead.
+            removed += _trim_json(value, need - removed, path + [str(key)], dropped)
             break
         # +1 for the separating comma; a dict item also carries its quoted key and the colon.
         removed += size + 1 + (len(_dumps(str(key))) + 1 if is_dict else 0)
@@ -170,7 +188,10 @@ def _trim_json(node: Any, need: int, path: List[str], dropped: Dict[str, Dict[st
             del node[key]
         else:
             node.pop()
-    label = "/".join(path) or "(root)"
+        # A collection emptied earlier and now removed whole is covered by this node's own count.
+        gone = "/".join(path + [str(key)])
+        for stale in [p for p in dropped if p == gone or p.startswith(gone + "/")]:
+            del dropped[stale]
     dropped[label] = {"kept": len(node), "of": dropped.get(label, {}).get("of", len(entries))}
     return removed
 
@@ -200,7 +221,8 @@ def fit_json_to_budget(text: str, max_chars: int, hint: str) -> Optional[str]:
             "_dropped": [{"path": path, **counts} for path, counts in dropped.items()],
             "_hint": hint,
         }
-        out = _dumps({**marker, **data})
+        # The marker wins over a payload key of the same name.
+        out = _dumps({**marker, **{key: value for key, value in data.items() if key not in marker}})
         over = len(out) - max_chars
         if over <= 0 or not _trim_json(data, over, [], dropped):
             return out

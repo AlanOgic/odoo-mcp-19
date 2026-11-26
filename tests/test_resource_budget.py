@@ -74,6 +74,55 @@ class TestFitJsonToBudget:
         assert dropped["model_names"]["of"] == 1000
         assert data["model_names"] == names[: dropped["model_names"]["kept"]]
 
+    def test_a_small_overflow_costs_a_few_items_not_a_whole_sibling(self):
+        payload = {"a": ["x" * 20] * 700, "b": ["y" * 20] * 700, "count": 3, "hint": "h"}
+        budget = len(_dumps(payload)) - 100
+
+        out, data = _fit(payload, budget)
+
+        assert len(out) > budget * 0.95
+        assert data["count"] == 3 and data["hint"] == "h"
+        assert 1380 < len(data["a"]) + len(data["b"]) < 1400
+
+    def test_sections_far_bigger_than_their_siblings_are_trimmed_before_any_key_is_lost(self):
+        # odoo://module-knowledge: two heavy sections among many light ones.
+        payload = {f"section_{i}": "x" * 300 for i in range(10)}
+        payload["orm_methods"] = {f"method_{i}": "d" * 80 for i in range(200)}
+        payload["tail"] = "kept"
+
+        out, data = _fit(payload, 6000)
+
+        assert len(out) > 6000 * 0.9
+        assert set(payload) <= set(data)
+        assert [d["path"] for d in data["_dropped"]] == ["orm_methods"]
+
+    def test_similar_models_lose_the_last_one_then_part_of_the_next(self):
+        model = {"fields": {f"field_{i}": {"t": "char"} for i in range(200)}}
+        payload = {"schemas": {name: json.loads(_dumps(model)) for name in ("a", "b", "c")}}
+        budget = len(_dumps(payload)) // 2
+
+        out, data = _fit(payload, budget)
+
+        assert len(out) > budget * 0.9
+        assert list(data["schemas"]) == ["a", "b"]
+        # The marker grows by one entry on the last pass, which costs "a" a handful of fields.
+        assert len(data["schemas"]["a"]["fields"]) > 190
+        assert 0 < len(data["schemas"]["b"]["fields"]) < 200
+
+    def test_a_trimmed_collection_later_removed_whole_is_not_reported_twice(self):
+        payload = {"schemas": {"a": {"f": ["x" * 9] * 60}, "b": {"f": ["x" * 9] * 100}}, "z": "q" * 900}
+
+        _, data = _fit(payload, 700)
+
+        paths = [d["path"] for d in data["_dropped"]]
+        present = {"(root)"} | {p for p in paths if p.split("/")[0] in data}
+        assert set(paths) <= present
+
+    def test_a_payload_key_cannot_overwrite_the_marker(self):
+        _, data = _fit({"_truncated": "no", "_hint": "mine", "rows": list(range(5000))}, 800)
+
+        assert data["_truncated"] is True and data["_hint"] == HINT
+
     def test_no_dominant_child_drops_trailing_top_level_keys(self):
         payload = {f"section_{i}": "x" * 400 for i in range(20)}
 
@@ -111,7 +160,9 @@ class TestFitJsonToBudget:
         out, data = _fit({"note": "n" * 40000, "rows": list(range(3000))}, max_chars)
 
         assert data["_truncated"] is True
-        assert len(out) <= max(max_chars, len(_dumps({k: v for k, v in data.items() if k.startswith("_")})))
+        assert len(out) <= max_chars
+        assert "note" not in data  # the string alone is over every budget here
+        assert len(data.get("rows", [])) == 3000 or max_chars < 15000
 
 
 class TestReadResourceBudget:
@@ -201,10 +252,21 @@ class TestBootstrapSchema:
 
         assert schema["writable"] == {"many2one": {"partner_id": "res.partner"}, "char": ["street"]}
 
-    def test_field_count_is_the_model_real_count(self):
+    def test_counts_say_whether_the_writable_list_is_complete(self):
         schema = _build_bootstrap_schema(self.FIELDS, 2)
 
-        assert (schema["field_count"], schema["writable_shown"]) == (len(self.FIELDS), 2)
+        assert (schema["field_count"], schema["writable_total"], schema["writable_shown"]) == (len(self.FIELDS), 4, 2)
+
+    def test_a_required_readonly_field_is_required_but_not_writable(self):
+        fields = {"state": {"type": "selection", "required": True, "readonly": True}, "name": {"type": "char"}}
+
+        schema = _build_bootstrap_schema(fields, 10)
+
+        assert schema["required"] == ["state"]
+        assert schema["writable"] == {"char": ["name"]}
+
+    def test_a_field_without_a_type_is_grouped_as_unknown(self):
+        assert _build_bootstrap_schema({"odd": {}}, 10)["writable"] == {"unknown": ["odd"]}
 
 
 class TestSessionBootstrapBudget:
@@ -234,6 +296,23 @@ class TestSessionBootstrapBudget:
         )
 
         assert two["schemas"]["sale.order"]["writable_shown"] > five["schemas"]["sale.order"]["writable_shown"]
+
+    def test_a_model_that_cannot_be_read_is_reported_beside_the_others(self, monkeypatch):
+        monkeypatch.setenv("MCP_BOOTSTRAP_MODELS", "res.partner,x_missing.model")
+        client = MagicMock()
+        client.url, client.username = "https://budget.test", "budget-partial"
+
+        def fields(model, attributes=None):
+            if model == "x_missing.model":
+                raise RuntimeError("no such model")
+            return _BIG_MODEL
+
+        client.get_model_fields.side_effect = fields
+        with patch.object(resources, "get_odoo_client", return_value=client):
+            data = json.loads(read_resource("odoo://session-bootstrap"))
+
+        assert list(data["schemas"]) == ["res.partner"]
+        assert list(data["errors"]) == ["x_missing.model"]
 
     def test_twenty_models_still_come_back_as_valid_json(self, monkeypatch):
         models = ",".join(f"x_custom.model_{i:02d}" for i in range(20))
