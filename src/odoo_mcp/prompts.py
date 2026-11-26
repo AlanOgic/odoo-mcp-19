@@ -139,7 +139,8 @@ def hierarchical_query_prompt(model: str = "product.category") -> list[Message]:
 
 **Read odoo://hierarchical for complete patterns.**
 
-**Query Patterns with execute_method:**
+**Query Patterns with execute_method** (written with `parent_id`; use the model's own parent
+field, e.g. `location_id` on stock.location, `folder_id` on documents.document):
 
 1. **Get all descendants (children + grandchildren):**
 ```
@@ -176,7 +177,7 @@ The parent_path field contains ancestor IDs separated by '/'.
 
 **Common hierarchical models:**
 - product.category (parent_id)
-- account.account (parent_id)
+- account.group (parent_id)
 - hr.department (parent_id)
 - stock.location (location_id)
 - knowledge.article (parent_id)
@@ -299,16 +300,18 @@ def ar_aging_report_prompt() -> list[Message]:
    execute_method("account.move", "formatted_read_group",
      kwargs_json='{"domain": [["move_type", "=", "out_invoice"], ["state", "=", "posted"],
                               ["payment_state", "in", ["not_paid", "partial"]]],
-                   "groupby": ["partner_id"], "aggregates": ["amount_residual:sum"]}')
+                   "groupby": ["partner_id"], "aggregates": ["amount_residual_signed:sum"]}')
+   amount_residual_signed is in the company currency; amount_residual is in each invoice's own
+   currency and must not be summed across currencies.
 
 2. Due date of each open invoice, same domain (page with offset when 1000 records come back):
    execute_method("account.move", "search_read",
      kwargs_json='{"domain": [["move_type", "=", "out_invoice"], ["state", "=", "posted"],
                               ["payment_state", "in", ["not_paid", "partial"]]],
-                   "fields": ["partner_id", "name", "invoice_date_due", "amount_residual"],
+                   "fields": ["partner_id", "name", "invoice_date_due", "amount_residual_signed"],
                    "order": "invoice_date_due", "limit": 1000}')
 
-3. Compare invoice_date_due with today and put each amount_residual in a bucket:
+3. Compare invoice_date_due with today and put each amount_residual_signed in a bucket:
    - Current (not yet due)
    - 1-30 days overdue
    - 31-60 days overdue
@@ -344,6 +347,8 @@ def inventory_check_prompt(product: str = None) -> list[Message]:
                    "groupby": ["product_id"], "aggregates": ["quantity:sum", "value:sum"]}')
    Keep the location_id.usage filter: without it customer, supplier, production and
    inventory-adjustment locations are summed with real stock.
+   `value` needs inventory valuation (stock_account) and inventory manager rights: drop
+   "value:sum" if the call is refused.
 
 2. Identify low stock items (quantity < reorder point)
 3. Show top products by value

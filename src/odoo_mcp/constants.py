@@ -310,8 +310,9 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
                 "side_effects": ["Deducts leave allocation"],
                 "irreversible": False,
                 "note": (
-                    "When the time off type needs two approvals (validation_type 'both'), the first approval "
-                    "sets 'validate1' instead: read the state back. Raises when the caller may not approve."
+                    "When the time off type needs two approvals (validation_type 'both') and the caller is the "
+                    "employee's approver but not a Time Off officer, it stops at 'validate1'; an officer goes "
+                    "straight to 'validate'. Read the state back. Raises when the caller may not approve."
                 ),
             },
             {
@@ -321,6 +322,15 @@ MODEL_STATE_MACHINES: Dict[str, Dict[str, Any]] = {
                 "label": "Second Approval",
                 "side_effects": ["Deducts leave allocation"],
                 "irreversible": False,
+            },
+            {
+                "from": "refuse",
+                "to": "validate",
+                "method": "action_approve",
+                "label": "Approve a Refused Request",
+                "side_effects": ["Deducts leave allocation"],
+                "irreversible": False,
+                "note": "Time Off officers, and the approver on types validated by the manager only.",
             },
             {
                 "from": ["confirm", "validate1", "validate"],
@@ -526,7 +536,7 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "description": "Create a new sales quotation",
         "model": "sale.order",
         "workflow": ["find customer", "add products", "create order"],
-        "params": {"partner_id": "int", "order_line": "list of (0,0,{product_id, qty})"},
+        "params": {"partner_id": "int", "order_line": "list of [0, 0, {product_id, qty}]"},
     },
     "confirm_order": {
         "description": "Confirm a quotation to sales order",

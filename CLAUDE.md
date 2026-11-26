@@ -66,7 +66,7 @@ Everything else in `tests/` runs without Odoo. `test_tool_execution_paths.py` is
 Run `black . && isort .` before pushing — CI enforces formatting.
 
 **Lint and typecheck are not clean gates.** Judge a change by *no new errors against this baseline* (v2.3.0), not by a zero exit code:
-- `pytest --ignore=tests/live` → **1212 passed** with fastmcp 4.2.3 (unit coverage 84 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency).
+- `pytest --ignore=tests/live` → **1217 passed** with fastmcp 4.2.3 (unit coverage 84 %, measured with `uv run --with pytest-cov pytest … --cov=odoo_mcp`; `pytest-cov` is not a dev dependency).
 - `black --check .` and `isort --check-only .` → **clean**.
 - `ruff check .` → **25 errors** (20 E501, 5 E402). All 5 E402s are in `tests/live/`, where `load_dotenv()` must run before the `odoo_mcp` imports — inherent to those script-style runners, not a defect. None come from the deliberate "import `app.py` first" ordering in `server.py`/`resources.py`, so do not reorder module imports to chase them.
 - `mypy src/odoo_mcp` → **36 errors** in 5 files (mostly `resources.py` and `server.py`, plus 1 `import-untyped` in `odoo_client.py` when `types-requests` is absent from the venv; counts drift slightly with the mypy version — 2.3.1 here).

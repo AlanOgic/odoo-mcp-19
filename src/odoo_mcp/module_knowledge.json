@@ -628,9 +628,10 @@
         "parent_field": "parent_id",
         "has_parent_store": true
       },
-      "account.account": {
+      "account.group": {
         "parent_field": "parent_id",
-        "has_parent_store": true
+        "has_parent_store": true,
+        "note": "In the 19.0 source the account hierarchy is account.group; account.account has no parent_id there."
       },
       "hr.department": {
         "parent_field": "parent_id",
@@ -923,9 +924,9 @@
       "v19_recommendation": "Always use batch creation (list of dicts) for better performance. Odoo 19 uses @api.model_create_multi internally.",
       "relational_field_commands": {
         "_note": "Commands for One2many and Many2many fields during create",
-        "(0, 0, {values})": "Create and link a new related record",
-        "(4, id, 0)": "Link an existing record by ID (Many2many only)",
-        "(6, 0, [ids])": "Replace all links with the given list of IDs (Many2many)"
+        "[0, 0, {values}]": "Create and link a new related record",
+        "[4, id, 0]": "Link an existing record by ID (Many2many only)",
+        "[6, 0, [ids]]": "Replace all links with the given list of IDs (Many2many)"
       },
       "exceptions": {
         "AccessError": "User lacks create permission on the model",
@@ -953,7 +954,7 @@
       "performance_tips": [
         "Use batch creation (list of dicts) instead of looping single creates",
         "Prepare all values before create() to minimize DB queries",
-        "Use (6, 0, [ids]) for Many2many instead of multiple (4, id, 0) commands"
+        "Use [6, 0, [ids]] for Many2many instead of multiple [4, id, 0] commands"
       ]
     },
     "write": {
@@ -969,13 +970,13 @@
       "note": "Operates on recordset - updates ALL records in self",
       "relational_field_commands": {
         "_note": "Commands for One2many and Many2many fields during write",
-        "(0, 0, {values})": "Create and link a new related record",
-        "(1, id, {values})": "Update an existing linked record",
-        "(2, id, 0)": "Delete the linked record from database",
-        "(3, id, 0)": "Unlink record without deleting (Many2many only)",
-        "(4, id, 0)": "Link an existing record (Many2many only)",
-        "(5, 0, 0)": "Unlink all records (Many2many only)",
-        "(6, 0, [ids])": "Replace all links with given IDs (Many2many)"
+        "[0, 0, {values}]": "Create and link a new related record",
+        "[1, id, {values}]": "Update an existing linked record",
+        "[2, id, 0]": "Delete the linked record from database",
+        "[3, id, 0]": "Unlink record without deleting (Many2many only)",
+        "[4, id, 0]": "Link an existing record (Many2many only)",
+        "[5, 0, 0]": "Unlink all records (Many2many only)",
+        "[6, 0, [ids]]": "Replace all links with given IDs (Many2many)"
       },
       "exceptions": {
         "AccessError": "User lacks write permission",
@@ -1590,7 +1591,7 @@
       "one2many": {
         "python": "recordset",
         "json_read": "[id, id, ...]",
-        "json_write": "commands: (0,0,{vals}), (1,id,{vals}), (2,id,0), etc.",
+        "json_write": "commands: [0, 0, {vals}], [1, id, {vals}], [2, id, 0], etc.",
         "params": [
           "comodel_name",
           "inverse_name"
@@ -1600,7 +1601,7 @@
       "many2many": {
         "python": "recordset",
         "json_read": "[id, id, ...]",
-        "json_write": "commands: (4,id,0) link, (3,id,0) unlink, (6,0,[ids]) replace",
+        "json_write": "commands: [4, id, 0] link, [3, id, 0] unlink, [6, 0, [ids]] replace",
         "params": [
           "comodel_name",
           "relation",
@@ -1938,38 +1939,38 @@
     "one2many_commands": {
       "_note": "Legacy format reference - use relational_commands above",
       "0": {
-        "syntax": "(0, 0, {values})",
+        "syntax": "[0, 0, {values}]",
         "description": "Create new linked record"
       },
       "1": {
-        "syntax": "(1, id, {values})",
+        "syntax": "[1, id, {values}]",
         "description": "Update existing record"
       },
       "2": {
-        "syntax": "(2, id, 0)",
+        "syntax": "[2, id, 0]",
         "description": "Delete record"
       },
       "3": {
-        "syntax": "(3, id, 0)",
+        "syntax": "[3, id, 0]",
         "description": "Unlink without delete (M2M only)"
       },
       "4": {
-        "syntax": "(4, id, 0)",
+        "syntax": "[4, id, 0]",
         "description": "Link existing record (M2M only)"
       },
       "5": {
-        "syntax": "(5, 0, 0)",
+        "syntax": "[5, 0, 0]",
         "description": "Unlink all (M2M only)"
       },
       "6": {
-        "syntax": "(6, 0, [ids])",
+        "syntax": "[6, 0, [ids]]",
         "description": "Replace all with list (M2M only)"
       }
     },
     "field_types": {
       "Many2one": "Always use numeric ID, never string name",
-      "One2many": "Use command tuples: (0,0,{}), (1,id,{}), (2,id,0)",
-      "Many2many": "Use command tuples: (4,id,0), (6,0,[ids])",
+      "One2many": "Use command lists: [0, 0, {}], [1, id, {}], [2, id, 0]",
+      "Many2many": "Use command lists: [4, id, 0], [6, 0, [ids]]",
       "Date": "String format: YYYY-MM-DD",
       "Datetime": "String format: YYYY-MM-DD HH:MM:SS",
       "Selection": "Use the key string, not the label"
@@ -2360,7 +2361,7 @@
           "requires_ids": true
         }
       },
-      "notes": "States (19.0 source and Odoo Online 19.3): confirm, validate1, validate, refuse, cancel. No 'draft' state and no action_confirm: a request is created in 'confirm'. action_approve sets validate1 first when the time off type needs two approvals. action_cancel only returns the hr.holidays.cancel.leave wizard action."
+      "notes": "States (19.0 source and Odoo Online 19.3): confirm, validate1, validate, refuse, cancel. No 'draft' state and no action_confirm: a request is created in 'confirm'. action_approve stops at validate1 when the time off type needs two approvals and the caller is the employee's approver but not a Time Off officer; an officer goes straight to validate. action_cancel only returns the hr.holidays.cancel.leave wizard action."
     },
     "project": {
       "model": "project.task",
@@ -2684,7 +2685,7 @@
         },
         {
           "match": "Missing required fields",
-          "suggestion": "Check odoo://model/{model}/schema for required fields"
+          "suggestion": "Check odoo://model/{model}/quick-schema for required fields"
         },
         {
           "match": "Access Denied",
@@ -2816,7 +2817,7 @@
         },
         {
           "match": "Command",
-          "suggestion": "Relational field write syntax error. Many2many: [(4, id)] to link, [(6, 0, [ids])] to replace. One2many: [(0, 0, {vals})] to create child, [(1, id, {vals})] to update"
+          "suggestion": "Relational field write syntax error. Many2many: [[4, id]] to link, [[6, 0, [ids]]] to replace. One2many: [[0, 0, {vals}]] to create child, [[1, id, {vals}]] to update"
         },
         {
           "match": "Invalid date",

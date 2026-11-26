@@ -43,6 +43,10 @@ def test_inventory_check_counts_internal_locations_only(arguments):
     assert INTERNAL_STOCK in text
 
 
+def test_inventory_check_for_a_product_reads_what_is_reserved():
+    assert '"reserved_quantity:sum"' in _render("inventory-check", product="RCP")
+
+
 # ----- receivables: posted invoices, with a due date to age them -----
 
 
@@ -52,6 +56,15 @@ def test_ar_aging_only_counts_posted_invoices():
     assert len(domains) == 2
     for domain in domains:
         assert ["state", "=", "posted"] in json.loads(domain)
+
+
+def test_ar_aging_sums_the_company_currency_amount():
+    """amount_residual is in each invoice's currency: on the test database USD invoices summed
+    286 490 where the company-currency total is 256 134."""
+    text = _render("ar-aging-report")
+    assert '"aggregates": ["amount_residual_signed:sum"]' in text
+    assert '"amount_residual:sum"' not in text
+    assert '"amount_residual"]' not in text
 
 
 def test_ar_aging_reads_the_due_date_it_buckets_on():
@@ -72,7 +85,8 @@ def test_aggregation_examples_are_not_presented_as_the_requested_model():
 
 def test_hierarchical_query_does_not_assume_a_children_field_name():
     text = _render("hierarchical-query", model="res.partner")
-    assert '"fields": ["name", "child_id"]' not in text
+    assert not re.search(r'"fields": \[[^\]]*"child_ids?"', text)
+    assert "location_id" in text.split("1. **Get all descendants")[0]  # parent field named before the patterns
     assert "odoo://model/res.partner/quick-schema" in text
 
 
@@ -135,7 +149,26 @@ def test_time_off_transitions_only_use_declared_states():
 def test_time_off_approval_says_it_may_stop_at_the_first_approval():
     approve = next(t for t in MODEL_STATE_MACHINES["hr.leave"]["transitions"] if t["from"] == "confirm")
     assert approve["method"] == "action_approve"
-    assert "validate1" in approve["note"]
+    assert approve["to"] == "validate"
+    assert "validate1" in approve["note"] and "officer" in approve["note"]
+
+
+def test_time_off_transitions_are_the_ones_the_source_allows():
+    """hr_holidays/models/hr_leave.py @ 19.0: action_refuse, action_back_to_approval, _check_approval_update."""
+    edges = {
+        (source, t["to"], t["method"])
+        for t in MODEL_STATE_MACHINES["hr.leave"]["transitions"]
+        for source in (t["from"] if isinstance(t["from"], list) else [t["from"]])
+    }
+    assert edges == {
+        ("confirm", "validate", "action_approve"),
+        ("validate1", "validate", "action_approve"),
+        ("refuse", "validate", "action_approve"),
+        ("confirm", "refuse", "action_refuse"),
+        ("validate1", "refuse", "action_refuse"),
+        ("validate", "refuse", "action_refuse"),
+        ("validate", "confirm", "action_back_to_approval"),
+    }
 
 
 def test_time_off_cancel_is_described_as_a_wizard_not_a_transition():
@@ -152,6 +185,20 @@ def test_action_view_invoice_is_listed_on_orders_not_on_invoices():
     assert "action_view_invoice" not in modules["account"]["special_methods"]
     assert "action_view_invoice" in modules["sale"]["special_methods"]
     assert "action_view_invoice" in modules["purchase"]["special_methods"]
+
+
+def test_the_account_hierarchy_is_account_group():
+    models = KNOWLEDGE["hierarchical_models"]["common_models"]
+    assert "account.account" not in models
+    assert models["account.group"]["parent_field"] == "parent_id"
+    assert "account.account (parent_id)" not in _render("hierarchical-query")
+
+
+def test_no_shipped_text_writes_x2many_commands_as_tuples():
+    package = Path(resources.__file__).resolve().parent
+    tuple_command = re.compile(r"\(\d, ?(?:0|id)[,)]")
+    for name in ("module_knowledge.json", "prompts.py", "server.py", "constants.py", "resources.py"):
+        assert tuple_command.findall((package / name).read_text()) == [], name
 
 
 def test_document_folders_are_documents():
