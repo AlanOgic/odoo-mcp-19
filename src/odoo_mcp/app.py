@@ -17,6 +17,7 @@ from fastmcp import FastMCP
 from fastmcp_tasks import TasksExtension
 from mcp.types import Icon
 
+from . import __version__
 from .odoo_client import OdooClient, get_env_client
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,8 @@ _icons = [ODOO_ICON] if ODOO_ICON else None
 
 mcp = FastMCP(
     "Odoo 19+ MCP Server",
+    # Without it serverInfo.version is FastMCP's own version.
+    version=__version__,
     lifespan=app_lifespan,
     auth=_auth,
     website_url="https://github.com/AlanOgic/odoo-mcp-19",

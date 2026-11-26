@@ -49,6 +49,7 @@ class BatchOperationResult(BaseModel):
     success: bool = Field(description="Whether this operation succeeded")
     result: Optional[Any] = Field(default=None, description="Result if successful")
     error: Optional[str] = Field(default=None, description="Error message if failed")
+    note: Optional[str] = Field(default=None, description="Notice about the result, e.g. a search that hit its limit")
 
 
 class BatchExecuteResponse(BaseModel):

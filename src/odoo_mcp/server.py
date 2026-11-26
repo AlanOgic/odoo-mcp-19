@@ -361,7 +361,8 @@ def _classify_and_gate(
         return (
             ExecuteMethodResponse(
                 success=False,
-                pending_confirmation=True,
+                # Blocked is final: no token exists, so the call is not pending.
+                pending_confirmation=False,
                 safety=classification,
                 error=classification.blocked_reason,
                 hint="Use the Odoo web interface instead.",
@@ -539,7 +540,17 @@ def _search_read_fallback(
 
 
 _MISSING_METHOD_PATTERNS = ("the method", "does not exist")
-_FIELD_ERROR_PATTERNS = ("invalid field", "unknown field", "field_get", "keyerror", "no field", "does not exist")
+# Local refusal of a method removed after 19.0 (arg_mapping): it already names the replacement.
+_VERSION_REFUSAL_PATTERN = "does not exist on odoo"
+_MISSING_MODEL_PATTERNS = ("the model", "does not exist")
+# No bare "does not exist": it is also in "the model ... does not exist", in version refusals
+# and in "Record does not exist or has been deleted", none of which is about a field name.
+_FIELD_ERROR_PATTERNS = ("invalid field", "unknown field", "field_get", "keyerror", "no field")
+
+
+def _is_field_error(error_msg: str) -> bool:
+    lowered = error_msg.lower()
+    return any(p in lowered for p in _FIELD_ERROR_PATTERNS)
 
 
 def _failure_response(model: str, method: str, error_msg: str, start_time: float) -> ExecuteMethodResponse:
@@ -547,17 +558,19 @@ def _failure_response(model: str, method: str, error_msg: str, start_time: float
     suggestion = get_error_suggestion(error_msg, model, method)
     hint = None
     lowered = error_msg.lower()
-    if all(p in lowered for p in _MISSING_METHOD_PATTERNS):
-        # "The method 'res.partner.read_group' does not exist" also contains a
-        # field-error pattern; it is about the method, not a field.
+    if _VERSION_REFUSAL_PATTERN in lowered:
+        hint = None  # the error itself names the replacement and odoo://api/version-drift
+    elif all(p in lowered for p in _MISSING_MODEL_PATTERNS):
+        hint = "Read odoo://find-model/{concept} to find the model by what it holds, or odoo://models for the list."
+    elif all(p in lowered for p in _MISSING_METHOD_PATTERNS):
         hint = (
             f"'{method}' does not exist on '{model}' in this Odoo version. Read odoo://methods/{model} for the "
             f"methods that exist, or odoo://api/version-drift for renamed and removed ones."
         )
-    elif any(p in lowered for p in _FIELD_ERROR_PATTERNS):
+    elif _is_field_error(error_msg):
         hint = (
-            f"Field name error detected. Read odoo://model/{model}/fields to get exact field names, "
-            f"or odoo://model/{model}/schema for full details."
+            f"Field name error detected. Read odoo://model/{model}/fields to get exact field names "
+            f"(odoo://model/{model}/quick-schema for the short list)."
         )
     elif suggestion:
         hint = f"Check odoo://methods/{model} or odoo://module-knowledge for special methods"
@@ -637,7 +650,7 @@ _tool_icons = [ODOO_ICON] if ODOO_ICON else None
     annotations={
         "title": "Execute Odoo Method",
         "readOnlyHint": False,
-        "destructiveHint": False,
+        "destructiveHint": True,
         "idempotentHint": False,
         "openWorldHint": True,
     },
@@ -662,6 +675,8 @@ def execute_method(
         args_json: JSON array of positional arguments
         kwargs_json: JSON object of keyword arguments
         confirmed: Set to true together with confirmation_token to confirm a gated call; alone it is refused
+        confirmation_token: Single-use token from the hint of the gated response (valid 120 s, bound to these
+            exact arguments)
         resolve_json: JSON object to auto-resolve Many2one names to IDs.
             Format: '{"field_name": {"model": "target.model", "search": "name to find"}}'
             Resolves via name_search before execution. Errors if 0 or >1 matches.
@@ -739,7 +754,10 @@ def execute_method(
             # Only an error from the Odoo call itself may start the fallback: a local
             # validation message can contain "500" too ('limit' ... got '1500').
             error_msg = str(e)
-            if method == "search_read" and ("500" in error_msg or "Internal Server Error" in error_msg):
+            # Odoo's "Invalid field ..." fails the same way in search + read: report it once, with the
+            # field hint. Other field-shaped 500s (a computed field's search) are what the fallback is for.
+            server_error = "500" in error_msg or "Internal Server Error" in error_msg
+            if method == "search_read" and server_error and "invalid field" not in error_msg.lower():
                 return _search_read_fallback(odoo, model, kwargs, error_msg, start_time)
             raise
         return ExecuteMethodResponse(
@@ -822,7 +840,7 @@ def _batch_safety_gate(
             start_time,
             success=False,
             error=f"Batch contains blocked operations on: {blocked_models}. Remove them and retry.",
-            pending_confirmation=True,
+            pending_confirmation=False,
             safety_preview=classifications,
             overall_risk=overall_risk.value,
         )
@@ -878,8 +896,13 @@ async def _run_batch_operation(odoo: Any, idx: int, op: Dict[str, Any]) -> Batch
     """Parse, then execute one operation off the loop thread; never raises."""
     try:
         model, method, args, kwargs = _parse_batch_operation(idx, op)
+        # Same default and cap as execute_method: a batched search_read without a limit
+        # used to return the whole table.
+        args, kwargs = _apply_search_defaults(method, args, kwargs)
         result = await _run_blocking(odoo.execute_method, model, method, *args, **kwargs)
-        return BatchOperationResult(operation_index=idx, success=True, result=result)
+        return BatchOperationResult(
+            operation_index=idx, success=True, result=result, note=_full_page_note(method, kwargs, result)
+        )
     except Exception as e:
         return BatchOperationResult(operation_index=idx, success=False, error=str(e))
 
@@ -897,7 +920,7 @@ async def _run_batch_operation(odoo: Any, idx: int, op: Dict[str, Any]) -> Batch
     annotations={
         "title": "Batch Execute",
         "readOnlyHint": False,
-        "destructiveHint": False,
+        "destructiveHint": True,
         "idempotentHint": False,
         "openWorldHint": True,
     },
@@ -922,8 +945,16 @@ async def batch_execute(
             - kwargs_json: str (optional)
         atomic: If True, fail fast on first error
         confirmed: Set to true together with confirmation_token to confirm a gated call; alone it is refused
+        confirmation_token: Single-use token from the error of the gated response (valid 120 s, bound to this
+            exact operations list)
     """
     start_time = time.time()
+
+    if not operations:
+        # Docket refuses a progress total below 1 with a bare ValueError.
+        return _batch_response(
+            operations, [], start_time, success=False, error="'operations' is empty: pass at least one operation."
+        )
 
     rejected = _batch_read_only_rejection(operations, start_time)
     if rejected:
